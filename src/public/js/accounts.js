@@ -83,7 +83,7 @@ async function deleteAccount(id) {
     const data = await response.json();
     if (data.success) {
         message.success('账号删除成功');
-        fetchAccounts();
+        fetchAccounts(true);
     } else {
         message.warning('账号删除失败: ' + data.error);
     }
@@ -216,7 +216,7 @@ async function createAccount() {
             validateCodeDom.value = ''
         }
         closeAddAccountModal();
-        fetchAccounts();
+        fetchAccounts(true);
     } else {
         loading.hide()
         // 如果返回的code是NEED_CAPTCHA, 则展示二维码和输入框, 允许用户输入验证码后重新提交

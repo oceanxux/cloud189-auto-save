@@ -48,6 +48,7 @@ function showEditTaskModal(id) {
 
     document.getElementsByClassName('cronExpression-box')[1].style.display = task.enableCron?'block':'none';
     document.getElementById('editEnableTaskScraper').checked = task?.enableTaskScraper;
+    document.getElementById('editEnableLazyStrm').checked = !!task?.enableLazyStrm;
     renderEditTaskTmdbSelection(task.tmdbId ? `当前已关联 TMDB ID: ${task.tmdbId}` : '当前未关联 TMDB');
 }
 
@@ -146,6 +147,7 @@ function initEditTaskForm() {
         const enableCron = document.getElementById('editEnableCron').checked;
         const cronExpression = document.getElementById('editCronExpression').value;
         const enableTaskScraper = document.getElementById('editEnableTaskScraper').checked;
+        const enableLazyStrm = document.getElementById('editEnableLazyStrm').checked;
 
         if (targetRegex && !sourceRegex) {
             message.warning('填了目标正则, 那么源正则就必须填');
@@ -176,7 +178,8 @@ function initEditTaskForm() {
                     tmdbId,
                     enableCron,
                     cronExpression,
-                    enableTaskScraper
+                    enableTaskScraper,
+                    enableLazyStrm
                 })
             });
             loading.hide()

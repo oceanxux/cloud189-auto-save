@@ -3,6 +3,7 @@ const { EmbyService } = require('./emby');
 const { logTaskEvent } = require('../utils/logUtils');
 const ConfigService = require('./ConfigService');
 const { ScrapeService } = require('./ScrapeService');
+const { LazyShareStrmService } = require('./lazyShareStrm');
 
 class TaskEventHandler {
     constructor(messageUtil) {
@@ -29,6 +30,9 @@ class TaskEventHandler {
     }
     async _handleAutoRename(taskCompleteEventDto) {
         try {
+            if (taskCompleteEventDto.task?.enableLazyStrm) {
+                return;
+            }
             const newFiles = await taskCompleteEventDto.taskService.autoRename(taskCompleteEventDto.cloud189, taskCompleteEventDto.task);
             if (newFiles.length > 0) {
                 taskCompleteEventDto.fileList = newFiles;
@@ -42,13 +46,20 @@ class TaskEventHandler {
     async _handleStrmGeneration(taskCompleteEventDto) {
         try {
             const {task,taskService, overwriteStrm} = taskCompleteEventDto;
-            const strmService = new StrmService();
-            if (ConfigService.getConfigValue('strm.enable')) {
-                // 获取文件列表
-                const fileList = await taskService.getFilesByTask(task)
-                const message = await strmService.generate(task, fileList, overwriteStrm);
-                this.messageUtil.sendMessage(message);
+            if (!ConfigService.getConfigValue('strm.enable')) {
+                return;
             }
+            if (task.enableLazyStrm) {
+                const lazyShareStrmService = new LazyShareStrmService(taskService.accountRepo, taskService);
+                const message = await lazyShareStrmService.generateFromTask(task, taskCompleteEventDto.fileList, overwriteStrm);
+                this.messageUtil.sendMessage(message);
+                return;
+            }
+            const strmService = new StrmService();
+            // 获取文件列表
+            const fileList = await taskService.getFilesByTask(task)
+            const message = await strmService.generate(task, fileList, overwriteStrm);
+            this.messageUtil.sendMessage(message);
         } catch (error) {
             console.error(error);
             logTaskEvent(`生成STRM文件失败: ${error.message}`);

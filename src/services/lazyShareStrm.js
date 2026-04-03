@@ -19,6 +19,9 @@ class LazyShareStrmService {
     }
 
     async generateFromShare(params) {
+        if (!ConfigService.getConfigValue('strm.enable')) {
+            throw new Error('STRM生成未启用, 请启用后执行');
+        }
         const accountId = Number(params.accountId);
         const targetFolderId = String(params.targetFolderId || '').trim();
         const shareLink = String(params.shareLink || '').trim();
@@ -81,6 +84,61 @@ class LazyShareStrmService {
             rootName: shareData.shareInfo.fileName,
             fileCount: mediaEntries.length
         };
+    }
+
+    async generateFromTask(task, files = [], overwriteExisting = false) {
+        if (!ConfigService.getConfigValue('strm.enable')) {
+            throw new Error('STRM生成未启用, 请启用后执行');
+        }
+        const accountId = Number(task.accountId || task.account?.id);
+        const targetFolderId = String(task.realFolderId || '').trim();
+        const shareId = String(task.shareId || '').trim();
+        const localPathPrefix = this._getTaskLocalPath(task);
+
+        if (!accountId) {
+            throw new Error('任务缺少账号信息');
+        }
+        if (!targetFolderId) {
+            throw new Error('任务缺少目标目录');
+        }
+        if (!shareId) {
+            throw new Error('任务缺少分享信息');
+        }
+        if (!localPathPrefix) {
+            throw new Error('任务缺少STRM目录');
+        }
+
+        const mediaEntries = this._filterMediaEntries(
+            (files || []).map((file) => ({
+                id: String(file.id),
+                name: file.name,
+                relativeDir: ''
+            }))
+        );
+        if (!mediaEntries.length) {
+            throw new Error('任务当前没有可生成懒转存STRM的媒体文件');
+        }
+
+        await this.strmService.generateCustom(
+            localPathPrefix,
+            mediaEntries,
+            async (file) => this.streamProxyService.buildStreamUrl({
+                type: 'lazyShare',
+                accountId,
+                shareId,
+                fileId: file.id,
+                fileName: file.name,
+                targetFolderId,
+                rootName: '',
+                relativeDir: ''
+            }),
+            overwriteExisting,
+            true
+        );
+
+        const message = `任务[${task.resourceName}]懒转存STRM生成完成，文件数: ${mediaEntries.length}`;
+        logTaskEvent(message);
+        return message;
     }
 
     async resolveLatestUrlByPayload(payload) {
@@ -239,6 +297,13 @@ class LazyShareStrmService {
             payload.rootName || '',
             payload.relativeDir || ''
         ].join(':');
+    }
+
+    _getTaskLocalPath(task) {
+        const realFolderName = String(task.realFolderName || '').replace(/\\/g, '/');
+        const index = realFolderName.indexOf('/');
+        const taskRelativePath = index >= 0 ? realFolderName.substring(index + 1) : realFolderName;
+        return this._normalizeRelativePath(path.join(task.account?.localStrmPrefix || '', taskRelativePath));
     }
 
     async _ensureTargetFolder(cloud189, baseFolderId, rootName, relativeDir) {

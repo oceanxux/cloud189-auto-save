@@ -4,7 +4,11 @@
 function initTheme() {
     const themeToggle = document.getElementById('themeToggle');
     const themeDropdown = document.getElementById('themeDropdown');
+    const themeSwitch = themeToggle?.closest('.theme-switch');
     const savedTheme = localStorage.getItem('theme') || 'auto';
+    if (!themeToggle || !themeDropdown || !themeSwitch) {
+        return;
+    }
     
     // 设置初始主题
     setTheme(savedTheme);
@@ -16,13 +20,22 @@ function initTheme() {
     });
     
     // 点击其他地方关闭下拉菜单
-    document.addEventListener('click', () => {
-        themeDropdown.classList.remove('show');
+    document.addEventListener('click', (e) => {
+        if (!themeSwitch.contains(e.target)) {
+            themeDropdown.classList.remove('show');
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            themeDropdown.classList.remove('show');
+        }
     });
     
     // 主题选项点击事件
     document.querySelectorAll('.theme-option').forEach(option => {
         option.addEventListener('click', (e) => {
+            e.stopPropagation();
             const theme = e.currentTarget.dataset.theme;
             setTheme(theme);
             localStorage.setItem('theme', theme);

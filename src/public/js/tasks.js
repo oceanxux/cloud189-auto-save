@@ -61,6 +61,7 @@ async function fetchTasks() {
             taskList.push(task)
             const progressRing = task.totalEpisodes ? createProgressRing(task.currentEpisodes || 0, task.totalEpisodes) : '';
             const taskName = task.shareFolderName?(task.resourceName + '/' + task.shareFolderName): task.resourceName || '未知'
+            const strmModeTag = task.enableLazyStrm ? '<span class="status-badge status-processing" style="margin-left: 8px;">懒STRM</span>' : '';
             const cronIcon = task.enableCron ? '<span class="cron-icon" title="已开启自定义定时任务">⏰</span>' : '';
             const accountLabel = `${task.account.username}${task.account.accountType === 'family' ? ' [家庭云]' : ' [个人云]'}`;
             tbody.innerHTML += `
@@ -70,7 +71,7 @@ async function fetchTasks() {
                         <button class="btn-warning" onclick="executeTask(${task.id})">执行</button>
                         <button onclick="showEditTaskModal(${task.id})">修改</button>
                     </td>
-                    <td data-label="资源名称">${cronIcon}<a href="${task.shareLink}" target="_blank" class='ellipsis' title="${taskName}">${taskName}</a></td>
+                    <td data-label="资源名称">${cronIcon}<a href="${task.shareLink}" target="_blank" class='ellipsis' title="${taskName}">${taskName}</a>${strmModeTag}</td>
                     <td data-label="账号">${accountLabel}</td>
                     <td data-label="分组">${task.taskGroup || '-'}</td>
                     <!--<td data-label="首次保存目录"><a href="https://cloud.189.cn/web/main/file/folder/${task.targetFolderId}" target="_blank">${task.targetFolderId}</a></td>-->
@@ -241,6 +242,7 @@ function initTaskForm() {
         const taskName = document.getElementById('taskName').value.trim();
         const tmdbId = document.getElementById('selectedTmdbId').value || null;
         const enableTaskScraper = document.getElementById('enableTaskScraper').checked;
+        const enableLazyStrm = document.getElementById('enableLazyStrm').checked;
         if (!taskName) {
             message.warning('任务名称不能为空');
             return;
@@ -266,7 +268,7 @@ function initTaskForm() {
             message.warning('至少选择一个分享目录');
             return;
         }
-        const body = { accountId, shareLink, totalEpisodes, targetFolderId, accessCode, matchPattern, matchOperator, matchValue, overwriteFolder: 0, remark, taskGroup, enableCron, cronExpression, targetFolder, selectedFolders, sourceRegex, targetRegex, taskName, tmdbId, enableTaskScraper };
+        const body = { accountId, shareLink, totalEpisodes, targetFolderId, accessCode, matchPattern, matchOperator, matchValue, overwriteFolder: 0, remark, taskGroup, enableCron, cronExpression, targetFolder, selectedFolders, sourceRegex, targetRegex, taskName, tmdbId, enableTaskScraper, enableLazyStrm };
         await createTask(e,body)
             
     });
@@ -596,6 +598,7 @@ async function submitBatchTasks(event) {
     const sourceRegex = document.getElementById('ctSourceRegex').value;
     const targetRegex = document.getElementById('ctTargetRegex').value;
     const enableTaskScraper = document.getElementById('enableTaskScraper').checked;
+    const enableLazyStrm = document.getElementById('enableLazyStrm').checked;
     const batchTaskBlocks = parseBatchShareBlocks(document.getElementById('batchShareLinks').value);
 
     if (!batchTaskBlocks.length) {
@@ -638,7 +641,8 @@ async function submitBatchTasks(event) {
             sourceRegex,
             targetRegex,
             taskName: item.taskName || '',
-            enableTaskScraper
+            enableTaskScraper,
+            enableLazyStrm
         }));
         const response = await fetch('/api/tasks/batch-create', {
             method: 'POST',

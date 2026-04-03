@@ -142,6 +142,38 @@ class CloudSaverSDK {
         return false;
     }
 
+    private normalizeResources(resources: CloudResource[]): CloudResource[] {
+        const uniqueResources = new Map<string, CloudResource>();
+        resources.forEach(resource => {
+            if (!uniqueResources.has(resource.messageId)) {
+                uniqueResources.set(resource.messageId, resource);
+            }
+        });
+
+        const result: CloudResource[] = [];
+        uniqueResources.forEach(resource => {
+            const cloudLinks = resource.cloudLinks.filter(link =>
+                link.link.includes('cloud.189.cn')
+            );
+            cloudLinks.forEach(cloudLink => {
+                result.push({
+                    messageId: resource.messageId,
+                    title: resource.title,
+                    cloudLinks: [cloudLink]
+                });
+            });
+        });
+
+        const uniqueLinks = new Map<string, CloudResource>();
+        result.forEach(resource => {
+            const link = resource.cloudLinks[0].link;
+            if (!uniqueLinks.has(link)) {
+                uniqueLinks.set(link, resource);
+            }
+        });
+        return Array.from(uniqueLinks.values());
+    }
+
     async search(keyword: string): Promise<CloudResource[]> {
         if (!this.token) {
             const loginSuccess = await this.autoLogin();
@@ -182,39 +214,7 @@ class CloudSaverSDK {
                         link.link.includes('cloud.189.cn')
                     )
                 );
-
-                // 先按资源去重
-                const uniqueResources = new Map<string, CloudResource>();
-                resources.forEach(resource => {
-                    if (!uniqueResources.has(resource.messageId)) {
-                        uniqueResources.set(resource.messageId, resource);
-                    }
-                });
-
-                // 将每个资源的多个链接拆分为独立资源
-                const result: CloudResource[] = [];
-                uniqueResources.forEach(resource => {
-                    const cloudLinks = resource.cloudLinks.filter(link => 
-                        link.link.includes('cloud.189.cn')
-                    );
-                    cloudLinks.forEach(cloudLink => {
-                        result.push({
-                            messageId: resource.messageId,
-                            title: resource.title,
-                            cloudLinks: [cloudLink]
-                        });
-                    });
-                });
-
-                // 最后按链接去重
-                const uniqueLinks = new Map<string, CloudResource>();
-                result.forEach(resource => {
-                    const link = resource.cloudLinks[0].link;
-                    if (!uniqueLinks.has(link)) {
-                        uniqueLinks.set(link, resource);
-                    }
-                });
-                const res = Array.from(uniqueLinks.values())
+                const res = this.normalizeResources(resources);
                 logTaskEvent(`CloudSaverSDK 清洗后的结果${JSON.stringify(res)}`)
                 return res;
             }

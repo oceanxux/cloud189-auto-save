@@ -407,6 +407,12 @@
                                     <label for="enableTaskScraper"><input type="checkbox" id="enableTaskScraper">启用刮削</label>
                                 </div>
                             </div>
+                            <div class="form-group">
+                                <div class="push-item">
+                                    <label for="enableLazyStrm"><input type="checkbox" id="enableLazyStrm">任务使用懒转存STRM</label>
+                                    <small class="form-text">开启后任务仍按原有定时检查分享目录，但不会提前转存文件，只会同步当前任务目录下的懒转存 STRM。</small>
+                                </div>
+                            </div>
                         </div>
                         <div class="form-actions">
                             <button type="submit">创建</button>
@@ -1017,6 +1023,12 @@
                 <div class="form-group">
                     <div class="push-item">
                         <label for="editEnableTaskScraper"><input type="checkbox" id="editEnableTaskScraper">启用刮削</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="push-item">
+                        <label for="editEnableLazyStrm"><input type="checkbox" id="editEnableLazyStrm">任务使用懒转存STRM</label>
+                        <small class="form-text">开启后该任务会按定时同步懒转存 STRM，不再走普通任务的 STRM 直链生成流程。</small>
                     </div>
                 </div>
             </div>

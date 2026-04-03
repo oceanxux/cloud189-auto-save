@@ -16,6 +16,7 @@ const AIService = require('./ai');
 const harmonizedFilter = require('../utils/BloomFilter');
 const cloud189Utils = require('../utils/Cloud189Utils');
 const alistService = require('./alistService');
+const { LazyShareStrmService } = require('./lazyShareStrm');
 
 class TaskService {
     constructor(taskRepo, accountRepo) {
@@ -74,6 +75,7 @@ class TaskService {
             sourceRegex: taskDto.sourceRegex,
             targetRegex: taskDto.targetRegex,
             enableTaskScraper: taskDto.enableTaskScraper,
+            enableLazyStrm: taskDto.enableLazyStrm,
             isFolder: taskDto.isFolder
         };
     }
@@ -449,6 +451,27 @@ class TaskService {
         return { fileNameList, fileCount };
     }
 
+    async _getLazyStrmFiles(task, shareFiles) {
+        let filteredFiles = [...shareFiles];
+        let aiFiltered = false;
+        const mediaSuffixs = ConfigService.getConfigValue('task.mediaSuffix').split(';').map(suffix => suffix.toLowerCase());
+
+        if (AIService.isEnabled() && task.matchPattern && task.matchOperator && task.matchValue) {
+            const aiResult = await this._filterFilesWithAI(task, filteredFiles);
+            if (aiResult != null) {
+                filteredFiles = aiResult;
+                aiFiltered = true;
+            }
+        }
+
+        return filteredFiles.filter(file =>
+            !file.isFolder
+            && this._checkFileSuffix(file, true, mediaSuffixs)
+            && (aiFiltered || this._handleMatchMode(task, file))
+            && !this.isHarmonized(file)
+        );
+    }
+
     // 使用 AI 过滤文件列表
     async _filterFilesWithAI(task, fileList) {
         logTaskEvent(`任务 ${task.id}: 尝试使用 AI 进行文件过滤...`);
@@ -530,11 +553,55 @@ class TaskService {
                 logTaskEvent("获取文件列表失败: " + JSON.stringify(shareDir));
                 throw new Error('获取文件列表失败');
             }
-            let shareFiles = [...shareDir.fileListAO.fileList];            
-            const folderFiles = await this.getAllFolderFiles(cloud189, task);
+            let shareFiles = [...shareDir.fileListAO.fileList];
             const enableOnlySaveMedia = ConfigService.getConfigValue('task.enableOnlySaveMedia');
             // mediaSuffixs转为小写
             const mediaSuffixs = ConfigService.getConfigValue('task.mediaSuffix').split(';').map(suffix => suffix.toLowerCase())
+            if (task.enableLazyStrm) {
+                const lazyFiles = await this._getLazyStrmFiles(task, shareFiles);
+                const previousEpisodes = task.currentEpisodes || 0;
+                const firstExecution = !task.lastFileUpdateTime;
+                const resourceName = task.shareFolderName ? `${task.resourceName}/${task.shareFolderName}` : task.resourceName;
+
+                if (lazyFiles.length > 0) {
+                    task.status = 'processing';
+                    task.retryCount = 0;
+                    task.currentEpisodes = lazyFiles.length;
+                    if (firstExecution || lazyFiles.length !== previousEpisodes) {
+                        task.lastFileUpdateTime = new Date();
+                        saveResults.push(`${resourceName}同步懒转存STRM ${lazyFiles.length} 个文件`);
+                    }
+                    process.nextTick(() => {
+                        this.eventService.emit('taskComplete', new TaskCompleteEventDto({
+                            task,
+                            cloud189,
+                            fileList: lazyFiles,
+                            overwriteStrm: false,
+                            firstExecution: firstExecution
+                        }));
+                    });
+                } else if (task.lastFileUpdateTime) {
+                    const now = new Date();
+                    const lastUpdate = new Date(task.lastFileUpdateTime);
+                    const daysDiff = (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24);
+                    if (daysDiff >= ConfigService.getConfigValue('task.taskExpireDays')) {
+                        task.status = 'completed';
+                    }
+                    task.currentEpisodes = 0;
+                    logTaskEvent(`${task.resourceName} 当前没有可生成懒转存STRM的媒体文件`);
+                }
+
+                if (task.totalEpisodes && task.currentEpisodes >= task.totalEpisodes) {
+                    task.status = 'completed';
+                    logTaskEvent(`${task.resourceName} 已完结`);
+                }
+
+                task.lastCheckTime = new Date();
+                await this.taskRepo.save(task);
+                return saveResults.join('\n');
+            }
+
+            const folderFiles = await this.getAllFolderFiles(cloud189, task);
             const { existingFiles, existingFileNames, existingMediaCount } = folderFiles.reduce((acc, file) => {
                 if (!file.isFolder) {
                     acc.existingFiles.add(file.md5);
@@ -681,7 +748,7 @@ class TaskService {
             new StrmService().deleteDir(path.join(task.account.localStrmPrefix, folderName))
         }
         // 只允许更新特定字段
-        const allowedFields = ['resourceName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'enableCron', 'cronExpression', 'enableTaskScraper'];
+        const allowedFields = ['resourceName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm'];
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
                 task[field] = updates[field];
@@ -1278,6 +1345,17 @@ class TaskService {
             logTaskEvent(`任务[${task.resourceName}]账号不存在, 跳过`)
             return
         }
+        task.account = account;
+        if (task.enableLazyStrm) {
+            const fileList = await this.getLazyStrmFilesByTask(task);
+            if (fileList.length == 0) {
+                throw new Error('分享目录中没有可生成懒转存STRM的媒体文件');
+            }
+            const lazyShareStrmService = new LazyShareStrmService(this.accountRepo, this);
+            const message = await lazyShareStrmService.generateFromTask(task, fileList, overwrite);
+            this.messageUtil.sendMessage(message);
+            return;
+        }
         const cloud189 = Cloud189Service.getInstance(account);
         // 获取文件列表
         const fileList = await this.getAllFolderFiles(cloud189, task)
@@ -1478,6 +1556,23 @@ class TaskService {
         }
         const cloud189 = Cloud189Service.getInstance(task.account);
         return await this.getAllFolderFiles(cloud189, task)
+    }
+
+    async getLazyStrmFilesByTask(task) {
+        const account = task.account || await this._getAccountById(task.accountId);
+        if (!account) {
+            throw new Error('账号不存在');
+        }
+        task.account = account;
+        const cloud189 = Cloud189Service.getInstance(account);
+        const shareDir = await cloud189.listShareDir(task.shareId, task.shareFolderId, task.shareMode, task.accessCode, task.isFolder);
+        if (shareDir?.res_code == 'ShareAuditWaiting') {
+            throw new Error('分享链接审核中, 请稍后重试');
+        }
+        if (!shareDir?.fileListAO?.fileList) {
+            throw new Error('获取分享目录失败');
+        }
+        return await this._getLazyStrmFiles(task, [...shareDir.fileListAO.fileList]);
     }
 }
 

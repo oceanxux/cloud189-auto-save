@@ -193,6 +193,9 @@ export class Task {
     @Column({ nullable: true })
     enableTaskScraper!: boolean; // 是否启用刮削
 
+    @Column('boolean', { nullable: true, default: false })
+    enableLazyStrm!: boolean; // 是否启用懒转存STRM
+
     @Column({ nullable: true })
     enableSystemProxy!: boolean; // 是否启用系统代理
     // tmdb内容 json格式

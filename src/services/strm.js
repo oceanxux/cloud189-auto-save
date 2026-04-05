@@ -69,14 +69,15 @@ class StrmService {
             let taskName = task.realFolderName.substring(task.realFolderName.indexOf('/') + 1)
             // 去掉头尾/
             taskName = taskName.replace(/^\/|\/$/g, '');
-            // 构建完整的目标目录路径
             const targetDir = path.join(this.baseDir,task.account.localStrmPrefix, taskName);
+            const mediaFiles = files.filter(file => this._checkFileSuffix(file, mediaSuffixs));
+            const expectedStrmPaths = new Set(
+                mediaFiles.map(file => this._buildRelativeStrmPath(file.relativeDir || '', file.name))
+            );
             if (compare) {
-                // 查询出所有目录下的.strm文件
-                const strmFiles = await this.listStrmFiles(path.join(task.account.localStrmPrefix, taskName));
-                // 将不在strmFiles中的文件删除
+                const strmFiles = await this._listStrmFilesRecursive(path.join(task.account.localStrmPrefix, taskName));
                 for (const file of strmFiles) {
-                    if (!files.some(f => path.parse(f.name).name === path.parse(file.name).name)) {
+                    if (!expectedStrmPaths.has(file.relativePath)) {
                         await this.delete(file.path);
                     }
                 }
@@ -93,9 +94,9 @@ class StrmService {
                 
                 try {
                     const fileName = file.name;
-                    const parsedPath = path.parse(fileName);
-                    const fileNameWithoutExt = parsedPath.name;
-                    const strmPath = path.join(targetDir, `${fileNameWithoutExt}.strm`);
+                    const strmRelativePath = this._buildRelativeStrmPath(file.relativeDir || '', fileName);
+                    const strmPath = path.join(targetDir, strmRelativePath);
+                    await this._ensureDirectoryExists(path.dirname(strmPath));
 
                     // 检查文件是否存在
                     try {
@@ -118,7 +119,7 @@ class StrmService {
                     await fs.chmod(strmPath, 0o777);
                     results.push({
                         originalFile: fileName,
-                        strmFile: `${fileNameWithoutExt}.strm`,
+                        strmFile: path.basename(strmPath),
                         path: strmPath
                     });
                     logTaskEvent(`生成STRM文件成功: ${strmPath}`);
@@ -152,7 +153,20 @@ class StrmService {
         if (ConfigService.getConfigValue('strm.useStreamProxy') && (!accountId || !file?.id)) {
             logTaskEvent(`STRM代理模式缺少必要参数，已回退普通路径: ${file?.name || 'unknown'}`);
         }
-        return this._joinUrl(this._joinUrl(task.account.cloudStrmPrefix, taskName), file.name);
+        const relativeDir = this._normalizeRelativePath(file.relativeDir || '');
+        const taskPath = relativeDir
+            ? path.join(taskName, relativeDir)
+            : taskName;
+        return this._joinUrl(this._joinUrl(task.account.cloudStrmPrefix, taskPath), file.name);
+    }
+
+    _buildRelativeStrmPath(relativeDir, fileName) {
+        const normalizedRelativeDir = this._normalizeRelativePath(relativeDir || '');
+        const parsedPath = path.parse(fileName);
+        const strmFileName = `${parsedPath.name}.strm`;
+        return normalizedRelativeDir
+            ? path.join(normalizedRelativeDir, strmFileName)
+            : strmFileName;
     }
 
     async generateCustom(targetRoot, files, contentResolver, overwrite = false, compare = false) {
@@ -507,6 +521,34 @@ class StrmService {
         }
     }
 
+    async _listStrmFilesRecursive(dirPath = '', baseDirPath = dirPath) {
+        const targetPath = path.join(this.baseDir, dirPath);
+        const results = [];
+        try {
+            await fs.access(targetPath);
+        } catch (error) {
+            return results;
+        }
+
+        const items = await fs.readdir(targetPath, { withFileTypes: true });
+        for (const item of items) {
+            const relativePath = path.join(dirPath, item.name);
+            if (item.isDirectory()) {
+                const childItems = await this._listStrmFilesRecursive(relativePath, baseDirPath);
+                results.push(...childItems);
+                continue;
+            }
+            if (item.isFile() && path.extname(item.name) === '.strm') {
+                results.push({
+                    name: item.name,
+                    path: relativePath,
+                    relativePath: path.relative(baseDirPath, relativePath)
+                });
+            }
+        }
+        return results;
+    }
+
     /**
      * 删除STRM文件
      * @param {string} fileName - 原始文件名
@@ -606,9 +648,13 @@ class StrmService {
             logTaskEvent(`STRM目录不存在，跳过删除: ${dirPath}`);
             return;
         }
-        const files = await fs.readdir(dirPath);
+        const files = await fs.readdir(dirPath, { withFileTypes: true });
         await Promise.all(files.map(async file => {
-            const filePath = path.join(dirPath, file);
+            const filePath = path.join(dirPath, file.name);
+            if (file.isDirectory()) {
+                await this._deleteDirAllStrm(filePath);
+                return;
+            }
             if (path.extname(filePath) === '.strm') {
                 try {
                     await fs.unlink(filePath);

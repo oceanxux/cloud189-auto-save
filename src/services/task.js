@@ -76,6 +76,7 @@ class TaskService {
             targetRegex: taskDto.targetRegex,
             enableTaskScraper: taskDto.enableTaskScraper,
             enableLazyStrm: taskDto.enableLazyStrm,
+            enableOrganizer: taskDto.enableOrganizer,
             isFolder: taskDto.isFolder
         };
     }
@@ -343,10 +344,10 @@ class TaskService {
         if (task.enableSystemProxy) {
             throw new Error('系统代理模式已移除');
         }
-        const folderId = task.realFolderId
+        const folderId = task.realFolderId;
         const folderInfo = await cloud189.listFiles(folderId);
         // 如果folderInfo.res_code == FileNotFound 需要重新创建目录
-        if (folderInfo.res_code == "FileNotFound") {
+        if (folderInfo?.res_code == "FileNotFound") {
             logTaskEvent('文件夹不存在!')
             if (!task) {
                 throw new Error('文件夹不存在!');
@@ -361,9 +362,28 @@ class TaskService {
         if (!folderInfo || !folderInfo.fileListAO) {
             return [];
         }
+        return await this._collectFolderFilesRecursive(cloud189, folderId, '');
+    }
 
-        let allFiles = [...(folderInfo.fileListAO.fileList || [])];
-        return allFiles;
+    async _collectFolderFilesRecursive(cloud189, folderId, relativeDir = '') {
+        const folderInfo = await cloud189.listFiles(folderId);
+        if (!folderInfo?.fileListAO) {
+            return [];
+        }
+        const currentRelativeDir = relativeDir ? relativeDir.replace(/^\/+|\/+$/g, '') : '';
+        const fileList = (folderInfo.fileListAO.fileList || []).map(file => ({
+            ...file,
+            parentFolderId: String(folderId),
+            relativeDir: currentRelativeDir,
+            relativePath: currentRelativeDir ? path.join(currentRelativeDir, file.name) : file.name
+        }));
+        const folderList = folderInfo.fileListAO.folderList || [];
+        for (const folder of folderList) {
+            const nextRelativeDir = currentRelativeDir ? path.join(currentRelativeDir, folder.name) : folder.name;
+            const childFiles = await this._collectFolderFilesRecursive(cloud189, folder.id, nextRelativeDir);
+            fileList.push(...childFiles);
+        }
+        return fileList;
     }
 
     // 自动创建目录
@@ -748,7 +768,7 @@ class TaskService {
             new StrmService().deleteDir(path.join(task.account.localStrmPrefix, folderName))
         }
         // 只允许更新特定字段
-        const allowedFields = ['resourceName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm'];
+        const allowedFields = ['resourceName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm', 'enableOrganizer'];
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
                 task[field] = updates[field];
@@ -796,9 +816,7 @@ class TaskService {
         if (task.enableSystemProxy) {
             throw new Error('系统代理模式已移除');
         } else {
-            const folderInfo = await cloud189.listFiles(task.realFolderId);
-            if (!folderInfo || !folderInfo.fileListAO) return [];
-            files = folderInfo.fileListAO.fileList;
+            files = await this.getFilesByTask(task);
         }
         if (!files || files.length === 0) return [];
         
@@ -870,6 +888,20 @@ class TaskService {
         }
         // 清理文件名中的非法字符
         return this._sanitizeFileName(newName);
+    }
+
+    buildOrganizerDirectoryName(aiFile, resourceInfo) {
+        if (!aiFile || resourceInfo?.type !== 'tv') {
+            return '';
+        }
+        const seasonValue = String(aiFile.season || '').trim();
+        if (!seasonValue) {
+            return '';
+        }
+        if (/^\d+$/.test(seasonValue)) {
+            return `Season ${seasonValue.padStart(2, '0')}`;
+        }
+        return seasonValue;
     }
     // 处理重命名过程
     async _processRename(cloud189, task, files, resourceInfo, message, newFiles) {
@@ -1504,7 +1536,7 @@ class TaskService {
         const strmService = new StrmService()
         const folderName = task.realFolderName.substring(task.realFolderName.indexOf('/') + 1);
         let strmList = []
-        strmList = files.map(file => path.join(folderName, file.name));
+        strmList = files.map(file => path.join(folderName, file.relativeDir || '', file.name));
         // 判断是否启用了系统代理
         if (task.enableSystemProxy) {
             // 代理文件

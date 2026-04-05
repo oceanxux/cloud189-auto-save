@@ -76,6 +76,9 @@ async function fetchAccounts(updateSelect = false) {
         if (typeof updateLazyShareStrmAccountOptions === 'function') {
             updateLazyShareStrmAccountOptions();
         }
+        if (typeof updateAutoSeriesAccountOptions === 'function') {
+            updateAutoSeriesAccountOptions();
+        }
     }
 }
 

@@ -4,6 +4,7 @@ const { logTaskEvent } = require('../utils/logUtils');
 const ConfigService = require('./ConfigService');
 const { ScrapeService } = require('./ScrapeService');
 const { LazyShareStrmService } = require('./lazyShareStrm');
+const { OrganizerService } = require('./organizer');
 
 class TaskEventHandler {
     constructor(messageUtil) {
@@ -33,13 +34,27 @@ class TaskEventHandler {
             if (taskCompleteEventDto.task?.enableLazyStrm) {
                 return;
             }
+            if (taskCompleteEventDto.task?.enableOrganizer) {
+                const organizerService = new OrganizerService(taskCompleteEventDto.taskService, taskCompleteEventDto.taskRepo);
+                const result = await organizerService.organizeTask(taskCompleteEventDto.task, {
+                    triggerStrm: false
+                });
+                if (Array.isArray(result?.files) && result.files.length > 0) {
+                    taskCompleteEventDto.fileList = result.files;
+                }
+                return;
+            }
             const newFiles = await taskCompleteEventDto.taskService.autoRename(taskCompleteEventDto.cloud189, taskCompleteEventDto.task);
             if (newFiles.length > 0) {
                 taskCompleteEventDto.fileList = newFiles;
             }
         } catch (error) {
             console.error(error);
-            logTaskEvent(`自动重命名失败: ${error.message}`);
+            if (taskCompleteEventDto.task?.enableOrganizer) {
+                const organizerService = new OrganizerService(taskCompleteEventDto.taskService, taskCompleteEventDto.taskRepo);
+                await organizerService.markError(taskCompleteEventDto.task.id, error);
+            }
+            logTaskEvent(`${taskCompleteEventDto.task?.enableOrganizer ? '整理器' : '自动重命名'}失败: ${error.message}`);
         }
     }
 

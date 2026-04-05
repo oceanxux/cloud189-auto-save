@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 初始化数据
     fetchAccounts(true);
     fetchTasks();
+    fetchOrganizerTasks();
     fetchSubscriptions();
     fetchStrmConfigs();
 

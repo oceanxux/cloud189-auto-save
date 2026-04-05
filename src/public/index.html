@@ -73,6 +73,8 @@
             <div class="tab" data-tab="account">账号</div>
             <div class="tab" data-tab="fileManager">文件</div>
             <div class="tab active" data-tab="task">任务</div>
+            <div class="tab" data-tab="autoSeries">自动追剧</div>
+            <div class="tab" data-tab="organizer">整理器</div>
             <div class="tab" data-tab="subscription">订阅</div>
             <div class="tab" data-tab="strmConfig">STRM</div>
             <div class="tab" data-tab="media">媒体</div>
@@ -413,6 +415,12 @@
                                     <small class="form-text">开启后任务仍按原有定时检查分享目录，但不会提前转存文件，只会同步当前任务目录下的懒转存 STRM。</small>
                                 </div>
                             </div>
+                            <div class="form-group">
+                                <div class="push-item">
+                                    <label for="enableOrganizer"><input type="checkbox" id="enableOrganizer">启用整理器</label>
+                                    <small class="form-text">开启后任务完成转存后会自动进行重命名、季目录整理，并触发当前任务的 STRM 增量同步。</small>
+                                </div>
+                            </div>
                         </div>
                         <div class="form-actions">
                             <button type="submit">创建</button>
@@ -438,6 +446,87 @@
                     </thead>
                     <tbody></tbody>
                 </table>
+            </div>
+        </div>
+
+        <div id="organizerTab" class="tab-content">
+            <div class="form-header">
+                <div class="task-operations">
+                    <div class="operation-group">
+                        <div class="button-group">
+                            <button type="button" onclick="fetchOrganizerTasks()" class="btn-default">刷新列表</button>
+                        </div>
+                        <div class="search-bar">
+                            <div class="search-input">
+                                <input type="text" id="organizerSearch" placeholder="搜索资源名称/账号/备注">
+                                <button type="button" onclick="fetchOrganizerTasks()" class="btn-icon" title="刷新整理器列表">
+                                    <img src="icons/refresh.svg" alt="刷新" class="refresh-icon">
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="table-container">
+                <table id="organizerTable">
+                    <thead>
+                        <tr>
+                            <th>操作</th>
+                            <th>资源名称</th>
+                            <th>账号</th>
+                            <th>自动整理</th>
+                            <th>最近整理</th>
+                            <th>最近错误</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="autoSeriesTab" class="tab-content">
+            <div class="form-header">
+                <div class="task-operations">
+                    <div class="operation-group">
+                        <div class="button-group">
+                            <button type="button" class="btn-default" onclick="showAutoSeriesDefaultsHint()">查看默认配置</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-content" style="max-width: 720px; margin: 0 auto;">
+                <div class="modal-header">
+                    <h3>只输入剧名</h3>
+                </div>
+                <form id="autoSeriesForm">
+                    <div class="form-body">
+                        <div class="form-group">
+                            <label for="autoSeriesTitle">剧名</label>
+                            <input type="text" id="autoSeriesTitle" required placeholder="例如：北上 / 苦尽柑来遇见你">
+                            <small class="form-text">系统会自动：TMDB识别 → CloudSaver找源 → 创建任务 → 首次执行 → 整理器 → STRM增量。</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="autoSeriesYear">年份（可选）</label>
+                            <input type="text" id="autoSeriesYear" placeholder="例如：2025">
+                        </div>
+                        <div class="form-group">
+                            <label for="autoSeriesMode">生成模式</label>
+                            <select id="autoSeriesMode">
+                                <option value="normal">正常任务</option>
+                                <option value="lazy">懒转存STRM</option>
+                            </select>
+                            <small class="form-text">正常任务：自动转存、整理、增量STRM。懒转存STRM：不提前转存，播放时再转存。</small>
+                        </div>
+                        <div class="form-group">
+                            <div id="autoSeriesDefaultsSummary" style="padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; color: #666;">
+                                尚未加载默认配置
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit">开始全自动</button>
+                    </div>
+                </form>
             </div>
         </div>
 
@@ -603,6 +692,20 @@
                                 云盘文件夹不存在时自动创建
                             </label>
                             <small class="form-text">当天翼云盘中任务更新目录不存在的时候, 自动创建文件夹, 仅会创建最后一级文件夹</small>
+                        </div>
+                        <div class="push-item">
+                            <label>自动追剧默认配置</label>
+                            <select id="autoSeriesDefaultAccountId">
+                                <option value="">请选择默认账号</option>
+                            </select>
+                            <div class="tree-select" style="display: flex; gap: 10px; margin-top: 10px;">
+                                <div style="flex: 1; position: relative;">
+                                    <input type="text" id="autoSeriesDefaultTargetFolder" readonly placeholder="请选择默认保存目录">
+                                    <input type="hidden" id="autoSeriesDefaultTargetFolderId">
+                                </div>
+                                <button type="button" class="btn-default" id="autoSeriesDefaultFolderBtn">选择目录</button>
+                            </div>
+                            <small class="form-text">“自动追剧”入口只输入剧名时，会直接使用这里配置的默认账号和保存目录。</small>
                         </div>
                     </div>
                 </div>
@@ -893,6 +996,8 @@
 <script src="js/accounts.js"></script>
 <script src="js/fileManager.js"></script>
 <script src="js/tasks.js"></script>
+<script src="js/autoSeries.js"></script>
+<script src="js/organizer.js"></script>
 <script src="js/subscriptions.js"></script>
 <script src="js/strmConfigs.js"></script>
 <script src="js/lazyShareStrm.js"></script>
@@ -1029,6 +1134,12 @@
                     <div class="push-item">
                         <label for="editEnableLazyStrm"><input type="checkbox" id="editEnableLazyStrm">任务使用懒转存STRM</label>
                         <small class="form-text">开启后该任务会按定时同步懒转存 STRM，不再走普通任务的 STRM 直链生成流程。</small>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="push-item">
+                        <label for="editEnableOrganizer"><input type="checkbox" id="editEnableOrganizer">启用整理器</label>
+                        <small class="form-text">开启后该任务在新增文件转存完成后会自动整理，并增量更新 STRM。</small>
                     </div>
                 </div>
             </div>

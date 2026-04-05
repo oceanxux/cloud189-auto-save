@@ -1,4 +1,6 @@
 let customPushConfigs = []
+let autoSeriesFolderSelector = null;
+
 async function loadSettings() {
     try {
         const response = await fetch('/api/settings');
@@ -18,6 +20,19 @@ async function loadSettings() {
             document.getElementById('mediaSuffix').value = settings.task?.mediaSuffix || '.mkv;.iso;.ts;.mp4;.avi;.rmvb;.wmv;.m2ts;.mpg;.flv;.rm;.mov';
             document.getElementById('enableOnlySaveMedia').checked = settings.task?.enableOnlySaveMedia || false;
             document.getElementById('enableAutoCreateFolder').checked = settings.task?.enableAutoCreateFolder || false;
+            autoSeriesDefaults.accountId = settings.task?.autoCreate?.accountId || '';
+            autoSeriesDefaults.targetFolderId = settings.task?.autoCreate?.targetFolderId || '';
+            autoSeriesDefaults.targetFolder = settings.task?.autoCreate?.targetFolder || '';
+            const autoSeriesFolderInput = document.getElementById('autoSeriesDefaultTargetFolder');
+            const autoSeriesFolderIdInput = document.getElementById('autoSeriesDefaultTargetFolderId');
+            if (autoSeriesFolderInput) {
+                autoSeriesFolderInput.value = autoSeriesDefaults.targetFolder;
+            }
+            if (autoSeriesFolderIdInput) {
+                autoSeriesFolderIdInput.value = autoSeriesDefaults.targetFolderId;
+            }
+            updateAutoSeriesAccountOptions(autoSeriesDefaults.accountId);
+            updateAutoSeriesDefaultsSummary();
 
             // 企业微信设置
             document.getElementById('enableWecom').checked = settings.wecom?.enable || false;
@@ -127,7 +142,12 @@ async function saveSettings() {
             enableAutoClearFamilyRecycle: document.getElementById('enableAutoClearFamilyRecycle').checked,
             mediaSuffix: document.getElementById('mediaSuffix').value,
             enableOnlySaveMedia: document.getElementById('enableOnlySaveMedia').checked,
-            enableAutoCreateFolder: document.getElementById('enableAutoCreateFolder').checked
+            enableAutoCreateFolder: document.getElementById('enableAutoCreateFolder').checked,
+            autoCreate: {
+                accountId: document.getElementById('autoSeriesDefaultAccountId').value,
+                targetFolderId: document.getElementById('autoSeriesDefaultTargetFolderId').value,
+                targetFolder: document.getElementById('autoSeriesDefaultTargetFolder').value
+            }
         },
         wecom: {
             enable: document.getElementById('enableWecom').checked,
@@ -207,6 +227,58 @@ async function saveSettings() {
 
 // 在页面加载时初始化设置
 document.addEventListener('DOMContentLoaded', loadSettings);
+
+function updateAutoSeriesAccountOptions(selectedId = '') {
+    const select = document.getElementById('autoSeriesDefaultAccountId');
+    if (!select) {
+        return;
+    }
+    const currentValue = selectedId || autoSeriesDefaults.accountId || select.value;
+    select.innerHTML = '<option value="">请选择默认账号</option>' + accountsList.map(account => (
+        `<option value="${account.id}">${getAccountDisplayName(account)}</option>`
+    )).join('');
+    if (currentValue) {
+        select.value = String(currentValue);
+    }
+    autoSeriesDefaults.accountId = select.value || '';
+    updateAutoSeriesDefaultsSummary();
+}
+
+function ensureAutoSeriesFolderSelector() {
+    if (autoSeriesFolderSelector) {
+        return;
+    }
+    autoSeriesFolderSelector = new FolderSelector({
+        enableFavorites: true,
+        favoritesKey: 'autoSeriesFavorites',
+        onSelect: ({ id, path }) => {
+            document.getElementById('autoSeriesDefaultTargetFolder').value = path;
+            document.getElementById('autoSeriesDefaultTargetFolderId').value = id;
+            autoSeriesDefaults.targetFolder = path;
+            autoSeriesDefaults.targetFolderId = id;
+            updateAutoSeriesDefaultsSummary();
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const accountSelect = document.getElementById('autoSeriesDefaultAccountId');
+    accountSelect?.addEventListener('change', () => {
+        autoSeriesDefaults.accountId = accountSelect.value || '';
+        updateAutoSeriesDefaultsSummary();
+    });
+
+    document.getElementById('autoSeriesDefaultFolderBtn')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        const accountId = document.getElementById('autoSeriesDefaultAccountId').value;
+        if (!accountId) {
+            message.warning('请先选择默认账号');
+            return;
+        }
+        ensureAutoSeriesFolderSelector();
+        autoSeriesFolderSelector.show(accountId);
+    });
+});
 
 function generateApiKey() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';

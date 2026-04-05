@@ -5,10 +5,12 @@ const { TaskService } = require('./task');
 const { EmbyService } = require('./emby');
 const { Cloud189Service } = require('./cloud189');
 const { TMDBService } = require('./tmdb');
+const { AutoSeriesService } = require('./autoSeries');
 const path = require('path');
 const { default: cloudSaverSDK } = require('../sdk/cloudsaver/sdk');
 const ProxyUtil = require('../utils/ProxyUtil');
 const cloud189Utils = require('../utils/Cloud189Utils');
+const { LazyShareStrmService } = require('./lazyShareStrm');
 
 class TelegramBotService {
     constructor(token, chatId) {
@@ -19,6 +21,8 @@ class TelegramBotService {
         this.commonFolderRepo = AppDataSource.getRepository(CommonFolder);
         this.taskRepo = AppDataSource.getRepository(Task);
         this.taskService = new TaskService(this.taskRepo, this.accountRepo);
+        this.lazyShareStrmService = new LazyShareStrmService(this.accountRepo, this.taskService);
+        this.autoSeriesService = new AutoSeriesService(this.taskService, this.accountRepo, this.lazyShareStrmService);
         this.currentAccountId = null;
         this.currentAccount = null;
         this.currentShareLink = null;
@@ -77,6 +81,8 @@ class TelegramBotService {
         await this.bot.setMyCommands([
             { command: 'help', description: '帮助信息' },
             { command: 'search_cs', description: '搜索CloudSaver资源' },
+            { command: 'series', description: '自动追剧(正常任务)' },
+            { command: 'lazy_series', description: '自动追剧(懒转存STRM)' },
             { command: 'accounts', description: '账号列表' },
             { command: 'tasks', description: '任务列表' },
             { command: 'execute_all', description: '执行所有任务' },
@@ -132,10 +138,16 @@ class TelegramBotService {
                 '/fl - 显示常用目录列表\n' +
                 '/fs - 添加常用目录\n' +
                 '/search_cs - 搜索CloudSaver资源\n' +
+                '/series 剧名 [年份] - 自动追剧(正常任务)\n' +
+                '/lazy_series 剧名 [年份] - 自动追剧(懒转存STRM)\n' +
                 '/cancel - 取消当前操作\n\n' +
                 '📥 创建任务：\n' +
                 '直接发送天翼云盘分享链接即可创建任务\n' +
                 '格式：链接（支持访问码的链接）\n\n' +
+                '🎬 自动追剧：\n' +
+                '1. /series 北上 2025\n' +
+                '2. /lazy_series 北上 2025\n' +
+                '3. 使用系统页里配置的默认账号与默认目录\n\n' +
                 '📝 任务操作：\n' +
                 '/execute_[ID] - 执行指定任务\n' +
                 '/execute_all - 执行所有任务\n' +
@@ -369,6 +381,14 @@ class TelegramBotService {
             // 设置3分钟超时
             this._resetSearchModeTimeout(chatId);
             await this.bot.sendMessage(chatId, '已进入搜索模式，请输入关键字搜索资源\n输入 /cancel 退出搜索模式\n3分钟内未搜索将自动退出搜索模式');
+        });
+
+        this.bot.onText(/^\/series(?:\s+(.+))?$/i, async (msg, match) => {
+            await this.handleAutoSeriesCommand(msg, match?.[1], 'normal');
+        });
+
+        this.bot.onText(/^\/lazy_series(?:\s+(.+))?$/i, async (msg, match) => {
+            await this.handleAutoSeriesCommand(msg, match?.[1], 'lazy');
         });
 
         this.bot.onText(/\/cancel/, async (msg) => {
@@ -1035,6 +1055,54 @@ class TelegramBotService {
         } catch (error) {
             await this.bot.sendMessage(chatId, `搜索失败: ${error.message}`);
         }
+    }
+
+    async handleAutoSeriesCommand(msg, input, mode = 'normal') {
+        const chatId = msg.chat.id;
+        if (!this._checkChatId(chatId)) return;
+        const normalizedInput = String(input || '').trim();
+        if (!normalizedInput) {
+            await this.bot.sendMessage(
+                chatId,
+                mode === 'lazy'
+                    ? '请输入剧名，格式：/lazy_series 剧名 [年份]'
+                    : '请输入剧名，格式：/series 剧名 [年份]'
+            );
+            return;
+        }
+
+        const { title, year } = this._parseTitleAndYear(normalizedInput);
+        const statusText = mode === 'lazy' ? '开始自动追剧(懒转存STRM)...' : '开始自动追剧(正常任务)...';
+        const message = await this.bot.sendMessage(chatId, statusText);
+        try {
+            const result = await this.autoSeriesService.createByTitle({ title, year, mode });
+            const resultText = mode === 'lazy'
+                ? `✅ 懒转存STRM已生成\n剧名：${result.taskName}\n资源：${result.resourceTitle}\n文件数：${result.fileCount || 0}`
+                : `✅ 自动追剧已完成\n剧名：${result.taskName}\n资源：${result.resourceTitle}\n任务数：${result.taskCount || 0}`;
+            await this.bot.editMessageText(resultText, {
+                chat_id: chatId,
+                message_id: message.message_id
+            });
+        } catch (error) {
+            await this.bot.editMessageText(`自动追剧失败: ${error.message}`, {
+                chat_id: chatId,
+                message_id: message.message_id
+            });
+        }
+    }
+
+    _parseTitleAndYear(input) {
+        const yearMatch = String(input || '').match(/^(.+?)(?:\s+(\d{4}))?$/);
+        if (!yearMatch) {
+            return {
+                title: String(input || '').trim(),
+                year: ''
+            };
+        }
+        return {
+            title: String(yearMatch[1] || '').trim(),
+            year: String(yearMatch[2] || '').trim()
+        };
     }
 
     // 校验任务id

@@ -62,6 +62,7 @@ async function fetchTasks() {
             const progressRing = task.totalEpisodes ? createProgressRing(task.currentEpisodes || 0, task.totalEpisodes) : '';
             const taskName = task.shareFolderName?(task.resourceName + '/' + task.shareFolderName): task.resourceName || '未知'
             const strmModeTag = task.enableLazyStrm ? '<span class="status-badge status-processing" style="margin-left: 8px;">懒STRM</span>' : '';
+            const organizerTag = task.enableOrganizer ? '<span class="status-badge status-pending" style="margin-left: 8px;">整理器</span>' : '';
             const cronIcon = task.enableCron ? '<span class="cron-icon" title="已开启自定义定时任务">⏰</span>' : '';
             const accountLabel = `${task.account.username}${task.account.accountType === 'family' ? ' [家庭云]' : ' [个人云]'}`;
             tbody.innerHTML += `
@@ -71,7 +72,7 @@ async function fetchTasks() {
                         <button class="btn-warning" onclick="executeTask(${task.id})">执行</button>
                         <button onclick="showEditTaskModal(${task.id})">修改</button>
                     </td>
-                    <td data-label="资源名称">${cronIcon}<a href="${task.shareLink}" target="_blank" class='ellipsis' title="${taskName}">${taskName}</a>${strmModeTag}</td>
+                    <td data-label="资源名称">${cronIcon}<a href="${task.shareLink}" target="_blank" class='ellipsis' title="${taskName}">${taskName}</a>${strmModeTag}${organizerTag}</td>
                     <td data-label="账号">${accountLabel}</td>
                     <td data-label="分组">${task.taskGroup || '-'}</td>
                     <!--<td data-label="首次保存目录"><a href="https://cloud.189.cn/web/main/file/folder/${task.targetFolderId}" target="_blank">${task.targetFolderId}</a></td>-->
@@ -243,6 +244,7 @@ function initTaskForm() {
         const tmdbId = document.getElementById('selectedTmdbId').value || null;
         const enableTaskScraper = document.getElementById('enableTaskScraper').checked;
         const enableLazyStrm = document.getElementById('enableLazyStrm').checked;
+        const enableOrganizer = document.getElementById('enableOrganizer').checked;
         if (!taskName) {
             message.warning('任务名称不能为空');
             return;
@@ -268,7 +270,7 @@ function initTaskForm() {
             message.warning('至少选择一个分享目录');
             return;
         }
-        const body = { accountId, shareLink, totalEpisodes, targetFolderId, accessCode, matchPattern, matchOperator, matchValue, overwriteFolder: 0, remark, taskGroup, enableCron, cronExpression, targetFolder, selectedFolders, sourceRegex, targetRegex, taskName, tmdbId, enableTaskScraper, enableLazyStrm };
+        const body = { accountId, shareLink, totalEpisodes, targetFolderId, accessCode, matchPattern, matchOperator, matchValue, overwriteFolder: 0, remark, taskGroup, enableCron, cronExpression, targetFolder, selectedFolders, sourceRegex, targetRegex, taskName, tmdbId, enableTaskScraper, enableLazyStrm, enableOrganizer };
         await createTask(e,body)
             
     });
@@ -599,6 +601,7 @@ async function submitBatchTasks(event) {
     const targetRegex = document.getElementById('ctTargetRegex').value;
     const enableTaskScraper = document.getElementById('enableTaskScraper').checked;
     const enableLazyStrm = document.getElementById('enableLazyStrm').checked;
+    const enableOrganizer = document.getElementById('enableOrganizer').checked;
     const batchTaskBlocks = parseBatchShareBlocks(document.getElementById('batchShareLinks').value);
 
     if (!batchTaskBlocks.length) {
@@ -642,7 +645,8 @@ async function submitBatchTasks(event) {
             targetRegex,
             taskName: item.taskName || '',
             enableTaskScraper,
-            enableLazyStrm
+            enableLazyStrm,
+            enableOrganizer
         }));
         const response = await fetch('/api/tasks/batch-create', {
             method: 'POST',
@@ -731,10 +735,11 @@ async function showFileListModal(taskId) {
         if (data.success) {
             const tbody = document.getElementById('fileListBody');
             data.data.forEach(file => {
+                const displayName = file.relativePath || file.name;
                 tbody.innerHTML += `
                     <tr>
-                        <td><input type="checkbox" class="file-checkbox" data-filename="${file.name}" data-id="${file.id}"></td>
-                        <td>${file.name}</td>
+                        <td><input type="checkbox" class="file-checkbox" data-filename="${file.name}" data-path="${displayName}" data-relative-dir="${file.relativeDir || ''}" data-id="${file.id}"></td>
+                        <td>${displayName}</td>
                         <td>${formatFileSize(file.size)}</td>
                         <td>${file.lastOpTime}</td>
                     </tr>
@@ -751,7 +756,10 @@ async function showFileListModal(taskId) {
 function showBatchRenameOptions() {
     const sourceRegex = escapeHtmlAttr(chooseTask.sourceRegex)?? ''
     const targetRegex = escapeHtmlAttr(chooseTask.targetRegex)?? ''
-    const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => cb.dataset.filename);
+    const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => ({
+        path: cb.dataset.path,
+        name: cb.dataset.filename
+    }));
     if (selectedFiles.length === 0) {
         message.warning('请选择要重命名的文件');
         return;
@@ -830,7 +838,10 @@ function showBatchRenameOptions() {
 
 // 预览重命名
 async function previewRename(autoUpdate = false) {
-    const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => cb.dataset.filename);
+    const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => ({
+        path: cb.dataset.path,
+        name: cb.dataset.filename
+    }));
     const renameType = document.querySelector('input[name="renameType"]:checked').value;
     let newNames = [];
 
@@ -838,14 +849,14 @@ async function previewRename(autoUpdate = false) {
         const sourceRegex = escapeRegExp(document.getElementById('sourceRegex').value);
         const targetRegex = escapeRegExp(document.getElementById('targetRegex').value);
         newNames = selectedFiles
-            .map(filename => {
-                const checkbox = document.querySelector(`.file-checkbox[data-filename="${filename}"]`);
+            .map(fileInfo => {
+                const checkbox = document.querySelector(`.file-checkbox[data-path="${fileInfo.path}"]`);
                 try {
-                    const destFileName = filename.replace(new RegExp(sourceRegex), targetRegex);
+                    const destFileName = fileInfo.name.replace(new RegExp(sourceRegex), targetRegex);
                     // 如果文件名没有变化，说明没有匹配成功
-                    return destFileName !== filename ? {
+                    return destFileName !== fileInfo.name ? {
                         fileId: checkbox.dataset.id,
-                        oldName: filename,
+                        oldName: fileInfo.path,
                         destFileName
                     } : null;
                 } catch (e) {
@@ -858,13 +869,13 @@ async function previewRename(autoUpdate = false) {
         const startNum = parseInt(document.getElementById('startNumber').value);
         const padLength = document.getElementById('startNumber').value.length;
         
-        newNames = selectedFiles.map((filename, index) => {
-            const checkbox = document.querySelector(`.file-checkbox[data-filename="${filename}"]`);
-            const ext = filename.split('.').pop();
+        newNames = selectedFiles.map((fileInfo, index) => {
+            const checkbox = document.querySelector(`.file-checkbox[data-path="${fileInfo.path}"]`);
+            const ext = fileInfo.name.split('.').pop();
             const num = (startNum + index).toString().padStart(padLength, '0');
             return {
                 fileId: checkbox.dataset.id,
-                oldName: filename,
+                oldName: fileInfo.path,
                 destFileName: `${nameFormat}${num}.${ext}`
             };
         });
@@ -964,7 +975,7 @@ async function submitRename(autoUpdate) {
 
 // 显示AI重命名选项
 async function showAIRenameOptions() {
-    const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => cb.dataset.filename);
+    const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => cb.dataset.path);
     if (selectedFiles.length === 0) {
         message.warning('请选择要重命名的文件');
         return;
@@ -1003,7 +1014,8 @@ async function executeAIRename() {
     const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked'));
     const fileIds = selectedFiles.map(cb => ({
         id: cb.dataset.id,
-        name: cb.dataset.filename
+        name: cb.dataset.filename,
+        relativeDir: cb.dataset.relativeDir || ''
     }));
 
     try {
@@ -1431,7 +1443,11 @@ function parseCloudShare(shareText) {
     };
 }
 async function deleteTaskFiles() {
-    const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => ({id: cb.dataset.id, name: cb.dataset.filename}));
+    const selectedFiles = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => ({
+        id: cb.dataset.id,
+        name: cb.dataset.filename,
+        relativeDir: cb.dataset.relativeDir || ''
+    }));
     if (selectedFiles.length === 0) {
         message.warning('请选择要删除的文件');
         return;

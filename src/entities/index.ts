@@ -196,6 +196,18 @@ export class Task {
     @Column('boolean', { nullable: true, default: false })
     enableLazyStrm!: boolean; // 是否启用懒转存STRM
 
+    @Column('boolean', { nullable: true, default: false })
+    enableOrganizer!: boolean; // 是否启用整理器
+
+    @Column('datetime', { nullable: true, transformer: {
+        from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+        to: (date: Date) => date
+    } })
+    lastOrganizedAt!: Date;
+
+    @Column('text', { nullable: true })
+    lastOrganizeError!: string;
+
     @Column({ nullable: true })
     enableSystemProxy!: boolean; // 是否启用系统代理
     // tmdb内容 json格式

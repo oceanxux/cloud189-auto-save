@@ -3,7 +3,7 @@ const ConfigService = require('./ConfigService');
 const ProxyUtil = require('../utils/ProxyUtil');
 class TMDBService {
     constructor() {
-        this.apiKey = ConfigService.getConfigValue('tmdb.tmdbApiKey');
+        this.apiKey = ConfigService.getConfigValue('tmdb.tmdbApiKey') || ConfigService.getConfigValue('tmdb.apiKey');
         this.baseURL = 'https://api.themoviedb.org/3';
         this.language = 'zh-CN';
     }
@@ -197,6 +197,7 @@ class TMDBService {
                 seasons: response.seasons,
                 lastEpisodeToAir: response.last_episode_to_air,
                 status: response.status,
+                genres: response.genres || []
             };
             
         } catch (error) {
@@ -227,6 +228,7 @@ class TMDBService {
                 logoPath: response.images?.logos?.[0]?.file_path ? `https://image.tmdb.org/t/p/w500${response.images.logos[0].file_path}` : null,
                 voteAverage: response.vote_average,
                 cast: response.credits?.cast || [],
+                genres: response.genres || [],
                 type: 'movie'
             };
         } catch (error) {

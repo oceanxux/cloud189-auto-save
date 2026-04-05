@@ -18,6 +18,11 @@ class ConfigService {
         enableOnlySaveMedia: false, // 只保存媒体文件
         // 文件夹不存在时重新创建
         enableAutoCreateFolder: false,
+        autoCreate: {
+          accountId: '',
+          targetFolderId: '',
+          targetFolder: ''
+        }
       },
       wecom: {
         enable: false,
@@ -85,7 +90,17 @@ class ConfigService {
       },
       tmdb: {
         enableScraper: false,
-        apiKey: ''
+        apiKey: '',
+        tmdbApiKey: ''
+      },
+      organizer: {
+        categories: {
+          tv: '电视剧',
+          anime: '动漫',
+          movie: '电影',
+          variety: '综艺',
+          documentary: '纪录片'
+        }
       },
       openai: {
         enable: false,

@@ -27,6 +27,8 @@ const { StrmConfigService } = require('./services/strmConfig');
 const { TMDBService } = require('./services/tmdb');
 const { StreamProxyService } = require('./services/streamProxy');
 const { LazyShareStrmService } = require('./services/lazyShareStrm');
+const { OrganizerService } = require('./services/organizer');
+const { AutoSeriesService } = require('./services/autoSeries');
 
 const app = express();
 app.use(cors({
@@ -141,10 +143,12 @@ AppDataSource.initialize().then(async () => {
     const subscriptionResourceRepo = AppDataSource.getRepository(SubscriptionResource);
     const strmConfigRepo = AppDataSource.getRepository(StrmConfig);
     const taskService = new TaskService(taskRepo, accountRepo);
+    const organizerService = new OrganizerService(taskService, taskRepo);
     const subscriptionService = new SubscriptionService(subscriptionRepo, subscriptionResourceRepo, accountRepo);
     const strmConfigService = new StrmConfigService(strmConfigRepo, accountRepo, subscriptionRepo, subscriptionResourceRepo);
     const streamProxyService = new StreamProxyService(accountRepo);
     const lazyShareStrmService = new LazyShareStrmService(accountRepo, taskService);
+    const autoSeriesService = new AutoSeriesService(taskService, accountRepo, lazyShareStrmService);
     const tmdbService = new TMDBService();
     const embyService = new EmbyService(taskService)
     const messageUtil = new MessageUtil();
@@ -346,6 +350,48 @@ AppDataSource.initialize().then(async () => {
         res.json({ success: true, data: tasks });
     });
 
+    app.get('/api/organizer/tasks', async (req, res) => {
+        try {
+            const search = String(req.query.search || '').trim();
+            let tasks = await taskRepo.find({
+                relations: {
+                    account: true
+                },
+                select: {
+                    account: {
+                        username: true,
+                        alias: true,
+                        accountType: true
+                    }
+                },
+                order: {
+                    id: 'DESC'
+                }
+            });
+
+            if (search) {
+                const normalizedSearch = search.toLowerCase();
+                tasks = tasks.filter(task => [
+                    task.resourceName,
+                    task.remark,
+                    task.taskGroup,
+                    task.account?.username,
+                    task.account?.alias
+                ].some(value => String(value || '').toLowerCase().includes(normalizedSearch)));
+            }
+
+            tasks.forEach(task => {
+                if (task.account?.username) {
+                    task.account.username = task.account.username.replace(/(.{3}).*(.{4})/, '$1****$2');
+                }
+                task.account && (task.account.accountType = task.account.accountType || 'personal');
+            });
+            res.json({ success: true, data: tasks });
+        } catch (error) {
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
+
     app.post('/api/tasks', async (req, res) => {
         try {
             const task = await taskService.createTask(req.body);
@@ -435,6 +481,32 @@ AppDataSource.initialize().then(async () => {
             if (result) {
                 messageUtil.sendMessage(result)
             }
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/organizer/tasks/:id/run', async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            const result = await organizerService.organizeTaskById(taskId, {
+                triggerStrm: true,
+                force: true
+            });
+            res.json({ success: true, data: result });
+        } catch (error) {
+            const taskId = parseInt(req.params.id);
+            if (!Number.isNaN(taskId)) {
+                await organizerService.markError(taskId, error);
+            }
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/auto-series', async (req, res) => {
+        try {
+            const result = await autoSeriesService.createByTitle(req.body || {});
             res.json({ success: true, data: result });
         } catch (error) {
             res.json({ success: false, error: error.message });

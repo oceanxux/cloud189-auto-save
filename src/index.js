@@ -172,14 +172,14 @@ app.get('/', (req, res) => {
     if (!req.session.authenticated) {
         res.redirect('./login');
     } else {
-        res.sendFile(__dirname + '/public/index.html');
+        res.sendFile(path.join(__dirname, 'public', 'index.html'));
     }
 });
 
 
 // 登录页面
 app.get('/login', (req, res) => {
-    res.sendFile(__dirname + '/public/login.html');
+    res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
 // 登录接口
@@ -199,12 +199,12 @@ app.use(express.static(path.join(__dirname,'public')));
 app.use((req, res, next) => {
     if (req.path === '/' || req.path === '/login' 
         || req.path === '/api/auth/login' 
-        || req.path === '/api/auth/login' 
         || req.path.startsWith('/api/stream/')
         || req.path === '/emby-proxy'
         || req.path.startsWith('/emby-proxy/')
         || req.path === '/emby/notify'
-        || req.path.match(/\.(css|js|png|jpg|jpeg|gif|ico)$/)) {
+        || req.path.startsWith('/assets/')
+        || req.path.match(/\.(css|js|png|jpg|jpeg|gif|ico|svg|woff2|woff|ttf)$/)) {
         return next();
     }
     authenticateSession(req, res, next);
@@ -1385,7 +1385,7 @@ AppDataSource.initialize().then(async () => {
     // 全局错误处理中间件
     app.use((err, req, res, next) => {
         console.error('捕获到全局异常:', err.message);
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: err.message });
     });
 
 
@@ -1394,8 +1394,8 @@ AppDataSource.initialize().then(async () => {
     // 初始化cloudsaver
     setupCloudSaverRoutes(app);
     // 启动服务器
-    const server = app.listen(appPort, async () => {
-        console.log(`服务器运行在 http://localhost:${appPort}`);
+    const server = app.listen(appPort, '0.0.0.0', async () => {
+        console.log(`服务器运行在 http://0.0.0.0:${appPort}`);
         try {
             await syncStandaloneEmbyProxyServer(embyService);
         } catch (error) {

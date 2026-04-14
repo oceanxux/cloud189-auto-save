@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Files, ChevronRight, Search, LayoutGrid, MoreVertical, RefreshCw, ArrowLeft, FolderPlus, Move, Trash2, ExternalLink, Copy, FileText, Folder } from 'lucide-react';
 import Modal from '../Modal';
+import FolderSelector from '../FolderSelector';
 
 interface Account {
   id: number;
@@ -44,6 +45,7 @@ const FileManagerTab: React.FC = () => {
   const [filterKeyword, setFilterKeyword] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [driveLabel, setDriveLabel] = useState('');
+  const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
 
   const fetchAccounts = async () => {
     try {
@@ -195,6 +197,30 @@ const FileManagerTab: React.FC = () => {
     }
   };
 
+  const handleMove = async (targetFolderId: string) => {
+    try {
+      const entriesToMove = selectedEntries.map(e => ({ id: e.id, name: e.name, isFolder: e.isFolder }));
+      const response = await fetch('/api/file-manager/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId: selectedAccountId,
+          entries: entriesToMove,
+          targetFolderId
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        alert('移动成功');
+        fetchFiles(path[path.length - 1].id);
+      } else {
+        alert('移动失败: ' + data.error);
+      }
+    } catch (error) {
+      alert('移动失败');
+    }
+  };
+
   const handleGetLink = async (entry: FileEntry, open = false) => {
     try {
       const response = await fetch(`/api/file-manager/download-link?accountId=${encodeURIComponent(selectedAccountId)}&fileId=${encodeURIComponent(entry.id)}`);
@@ -237,6 +263,7 @@ const FileManagerTab: React.FC = () => {
   );
 
   const selectedEntries = entries.filter(e => selectedIds.has(e.id));
+  const selectedAccount = accounts.find(a => String(a.id) === selectedAccountId);
 
   return (
     <div className="space-y-6">
@@ -281,6 +308,7 @@ const FileManagerTab: React.FC = () => {
             <Plus size={18} /> 新建目录
           </button>
           <button 
+            onClick={() => setIsFolderSelectorOpen(true)}
             disabled={selectedIds.size === 0 || loading}
             className="bg-[#d3e3fd] text-[#041e49] px-5 py-2.5 rounded-full text-sm font-medium hover:bg-[#c2e7ff] transition-all flex items-center gap-2 disabled:opacity-50"
           >
@@ -417,6 +445,15 @@ const FileManagerTab: React.FC = () => {
                           </button>
                           <div className="absolute right-0 top-full mt-1 w-32 bg-white border border-slate-200 rounded-xl shadow-lg py-1 hidden group-hover/menu:block z-20">
                             <button 
+                              onClick={() => {
+                                navigator.clipboard.writeText(entry.id);
+                                alert('已复制 ID');
+                              }}
+                              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-sm text-slate-700 transition-colors"
+                            >
+                              复制 ID
+                            </button>
+                            <button 
                               onClick={() => handleRename(entry)}
                               className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-sm text-slate-700 transition-colors"
                             >
@@ -439,6 +476,15 @@ const FileManagerTab: React.FC = () => {
           </table>
         </div>
       </div>
+
+      <FolderSelector
+        isOpen={isFolderSelectorOpen}
+        onClose={() => setIsFolderSelectorOpen(false)}
+        accountId={Number(selectedAccountId)}
+        accountName={selectedAccount?.username || ''}
+        title="选择移动目标目录"
+        onSelect={(folder) => handleMove(folder.id)}
+      />
     </div>
   );
 };

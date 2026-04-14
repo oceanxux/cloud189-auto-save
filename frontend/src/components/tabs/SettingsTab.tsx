@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Bell, MessageSquare, Shield, Globe, Cpu, Database, Save, RefreshCw, Key, Plus, Trash2, X, Settings } from 'lucide-react';
+import { Settings as SettingsIcon, Bell, MessageSquare, Shield, Globe, Cpu, Database, Save, RefreshCw, Key, Plus, Trash2, X, Settings, PlayCircle, Folder, Send } from 'lucide-react';
 import Modal from '../Modal';
+import FolderSelector from '../FolderSelector';
 
 interface CustomPushConfig {
   name: string;
@@ -10,6 +11,17 @@ interface CustomPushConfig {
   contentType: string;
   enabled: boolean;
   fields: { type: string; key: string; value: string }[];
+}
+
+interface RegexPreset {
+  id?: number;
+  name: string;
+  description: string;
+  sourceRegex: string;
+  targetRegex: string;
+  matchPattern: string;
+  matchOperator: string;
+  matchValue: string;
 }
 
 interface SettingsData {
@@ -85,6 +97,7 @@ interface SettingsData {
     to: string;
   };
   customPush: CustomPushConfig[];
+  regexPresets?: RegexPreset[];
   strm?: {
     enable: boolean;
     useStreamProxy: boolean;
@@ -155,13 +168,18 @@ const initialSettings: SettingsData = {
   bark: { enable: false, serverUrl: '', key: '' },
   system: { username: '', password: '', baseUrl: '', apiKey: '' },
   pushplus: { enable: false, token: '', topic: '', channel: '', webhook: '', to: '' },
-  customPush: []
+  customPush: [],
+  regexPresets: []
 };
 
 const SettingsTab: React.FC = () => {
   const [settings, setSettings] = useState<SettingsData>(initialSettings);
+  const [accounts, setAccounts] = useState<{id: number, username: string, alias?: string}[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Folder Selector State
+  const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
 
   // Custom Push Modal State
   const [isPushModalOpen, setIsPushModalOpen] = useState(false);
@@ -176,8 +194,23 @@ const SettingsTab: React.FC = () => {
     fields: []
   });
 
+  // Regex Preset Modal State
+  const [isRegexModalOpen, setIsRegexModalOpen] = useState(false);
+  const [editingRegexIndex, setEditingRegexIndex] = useState<number | null>(null);
+  const [regexForm, setRegexForm] = useState<RegexPreset>({
+    name: '',
+    description: '',
+    sourceRegex: '',
+    targetRegex: '',
+    matchPattern: '',
+    matchOperator: 'regex',
+    matchValue: ''
+  });
+
   useEffect(() => {
     loadSettings();
+    loadRegexPresets();
+    fetchAccounts();
   }, []);
 
   const loadSettings = async () => {
@@ -186,7 +219,7 @@ const SettingsTab: React.FC = () => {
       const response = await fetch('/api/settings');
       const data = await response.json();
       if (data.success) {
-        setSettings(data.data);
+        setSettings(prev => ({ ...data.data, regexPresets: prev.regexPresets }));
       }
     } catch (error) {
       console.error('Failed to load settings:', error);
@@ -195,16 +228,47 @@ const SettingsTab: React.FC = () => {
     }
   };
 
+  const fetchAccounts = async () => {
+    try {
+      const response = await fetch('/api/accounts');
+      const data = await response.json();
+      if (data.success) {
+        setAccounts(data.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch accounts:', error);
+    }
+  };
+
+  const loadRegexPresets = async () => {
+    try {
+      const response = await fetch('/api/settings/regex-presets');
+      const data = await response.json();
+      if (data.success) {
+        setSettings(prev => ({ ...prev, regexPresets: data.data || [] }));
+      }
+    } catch (error) {
+      console.error('Failed to load regex presets:', error);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
+      const { regexPresets, ...mainSettings } = settings;
       const response = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings)
+        body: JSON.stringify(mainSettings)
       });
       const data = await response.json();
       if (data.success) {
+        // Also save regex presets
+        await fetch('/api/settings/regex-presets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ regexPresets })
+        });
         alert('设置已成功保存');
       } else {
         alert('保存失败: ' + data.error);
@@ -284,6 +348,8 @@ const SettingsTab: React.FC = () => {
       </div>
     );
   }
+
+  const selectedAccount = accounts.find(a => String(a.id) === settings.task.autoCreate.accountId);
 
   return (
     <div className="max-w-4xl space-y-8">
@@ -487,6 +553,103 @@ const SettingsTab: React.FC = () => {
               </div>
             </label>
           </div>
+
+          {/* Auto Series Defaults */}
+          <div className="pt-6 border-t border-slate-100 space-y-4">
+            <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <PlayCircle size={18} className="text-[#0b57d0]" /> 自动追剧默认配置
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-700">默认追剧账号</label>
+                <select 
+                  value={settings.task.autoCreate.accountId}
+                  onChange={(e) => updateSettings('task.autoCreate.accountId', e.target.value)}
+                  className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                >
+                  <option value="">选择默认账号...</option>
+                  {accounts.map(acc => (
+                    <option key={acc.id} value={acc.id}>{acc.alias ? `${acc.username} (${acc.alias})` : acc.username}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-700">默认保存目录</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={settings.task.autoCreate.targetFolder || settings.task.autoCreate.targetFolderId}
+                    readOnly
+                    placeholder="根目录"
+                    className="flex-1 px-5 py-3 bg-slate-100 border border-slate-300 rounded-2xl text-sm outline-none text-slate-500"
+                  />
+                  <button 
+                    type="button" 
+                    onClick={() => setIsFolderSelectorOpen(true)}
+                    disabled={!settings.task.autoCreate.accountId}
+                    className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                  >
+                    <Folder size={20} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Telegram Bot Settings */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-medium text-slate-900 flex items-center gap-3">
+            <Send size={24} className="text-[#0b57d0]" /> Telegram 机器人
+          </h3>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input 
+              type="checkbox" 
+              className="sr-only peer" 
+              checked={settings.telegram.enable}
+              onChange={(e) => updateSettings('telegram.enable', e.target.checked)}
+            />
+            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#0b57d0]"></div>
+          </label>
+        </div>
+        <div className={`bg-white rounded-3xl border border-slate-200/60 p-8 space-y-6 shadow-sm transition-opacity ${!settings.telegram.enable && 'opacity-60 pointer-events-none'}`}>
+          <p className="text-xs text-slate-500 bg-slate-50 p-4 rounded-2xl border border-slate-100 leading-relaxed">
+            启用后，你可以通过 Telegram 机器人直接管理任务、切换账号、搜索资源以及接收任务状态推送。
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Bot Token</label>
+              <input 
+                type="password" 
+                value={settings.telegram.botToken}
+                onChange={(e) => updateSettings('telegram.botToken', e.target.value)}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                placeholder="123456789:ABCDefgh..."
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Chat ID</label>
+              <input 
+                type="text" 
+                value={settings.telegram.chatId}
+                onChange={(e) => updateSettings('telegram.chatId', e.target.value)}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                placeholder="例如：123456789"
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-sm font-medium text-slate-700">反代 API 域名 (可选)</label>
+              <input 
+                type="text" 
+                value={settings.telegram.proxyDomain}
+                onChange={(e) => updateSettings('telegram.proxyDomain', e.target.value)}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                placeholder="例如：api.telegram.org (留空使用官方地址)"
+              />
+            </div>
+          </div>
         </div>
       </section>
 
@@ -528,54 +691,6 @@ const SettingsTab: React.FC = () => {
                   className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
                   placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
                 />
-              </div>
-            )}
-          </div>
-
-          {/* Telegram */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-xl bg-[#d3e3fd] text-[#0b57d0] flex items-center justify-center">
-                  <Globe size={20} />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-slate-900">Telegram 推送</p>
-                  <p className="text-xs text-slate-500">使用 Bot 推送通知</p>
-                </div>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer" 
-                  checked={settings.telegram.enable}
-                  onChange={(e) => updateSettings('telegram.enable', e.target.checked)}
-                />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#0b57d0]"></div>
-              </label>
-            </div>
-            {settings.telegram.enable && (
-              <div className="px-4 space-y-4 animate-in slide-in-from-top-2 duration-200">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500 block">Bot Token</label>
-                    <input 
-                      type="text" 
-                      value={settings.telegram.botToken}
-                      onChange={(e) => updateSettings('telegram.botToken', e.target.value)}
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500 block">Chat ID</label>
-                    <input 
-                      type="text" 
-                      value={settings.telegram.chatId}
-                      onChange={(e) => updateSettings('telegram.chatId', e.target.value)}
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                    />
-                  </div>
-                </div>
               </div>
             )}
           </div>
@@ -722,6 +837,72 @@ const SettingsTab: React.FC = () => {
         </div>
       </section>
 
+      {/* Regex Presets Management */}
+      <section className="space-y-4">
+        <h3 className="text-xl font-medium text-slate-900 flex items-center gap-3">
+          <Cpu size={24} className="text-[#0b57d0]" /> 正则预设列表
+        </h3>
+        <div className="bg-white rounded-3xl border border-slate-200/60 p-8 space-y-6 shadow-sm">
+          <div className="flex justify-end">
+            <button 
+              type="button"
+              onClick={() => {
+                setEditingRegexIndex(null);
+                setRegexForm({ name: '', description: '', sourceRegex: '', targetRegex: '', matchPattern: '', matchOperator: 'regex', matchValue: '' });
+                setIsRegexModalOpen(true);
+              }}
+              className="px-4 py-2 bg-[#d3e3fd] text-[#041e49] rounded-xl text-sm font-medium hover:bg-[#c2e7ff] transition-colors flex items-center gap-2"
+            >
+              <Plus size={18} /> 添加预设
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {(settings.regexPresets || []).length === 0 ? (
+              <div className="text-center py-8 text-slate-400 italic text-sm">暂未配置正则预设</div>
+            ) : (
+              settings.regexPresets.map((preset, index) => (
+                <div key={index} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 group">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-[#d3e3fd] text-[#0b57d0] flex items-center justify-center">
+                      <Cpu size={20} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-900 truncate">{preset.name}</p>
+                      <p className="text-xs text-slate-500 truncate max-w-[300px]">{preset.description || `${preset.sourceRegex} -> ${preset.targetRegex}`}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        setEditingRegexIndex(index);
+                        setRegexForm(preset);
+                        setIsRegexModalOpen(true);
+                      }}
+                      className="p-2 hover:bg-white rounded-full text-slate-500 transition-colors"
+                    >
+                      <Settings size={18} />
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        if (!confirm('确定删除此正则预设吗？')) return;
+                        const newPresets = settings.regexPresets!.filter((_, i) => i !== index);
+                        updateSettings('regexPresets', newPresets);
+                      }}
+                      className="p-2 hover:bg-white rounded-full text-red-500 transition-colors"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </section>
+
       <div className="flex justify-end pt-4 gap-4 sticky bottom-8 z-10">
         <button 
           type="button"
@@ -764,7 +945,7 @@ const SettingsTab: React.FC = () => {
             <label className="text-xs font-medium text-slate-500">Webhook URL</label>
             <input type="url" value={pushForm.url} onChange={e => setPushForm({...pushForm, url: e.target.value})} required className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm" />
           </div>
-          
+
           <div className="space-y-2">
             <div className="flex justify-between items-center">
               <label className="text-xs font-medium text-slate-500">字段配置 (支持 {"{{"}content{"}}"})</label>
@@ -822,7 +1003,7 @@ const SettingsTab: React.FC = () => {
               ))}
             </div>
           </div>
-          
+
           <label className="flex items-center gap-3 cursor-pointer">
             <input 
               type="checkbox" 
@@ -839,6 +1020,78 @@ const SettingsTab: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      <Modal 
+        isOpen={isRegexModalOpen} 
+        onClose={() => setIsRegexModalOpen(false)} 
+        title={editingRegexIndex !== null ? "编辑正则预设" : "添加正则预设"}
+      >
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          const newPresets = [...(settings.regexPresets || [])];
+          if (editingRegexIndex !== null) newPresets[editingRegexIndex] = regexForm;
+          else newPresets.push(regexForm);
+          updateSettings('regexPresets', newPresets);
+          setIsRegexModalOpen(false);
+        }} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">预设名称</label>
+              <input type="text" value={regexForm.name} onChange={e => setRegexForm({...regexForm, name: e.target.value})} required className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm" placeholder="例如：去广告后缀" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">匹配模式</label>
+              <input type="text" value={regexForm.matchPattern} onChange={e => setRegexForm({...regexForm, matchPattern: e.target.value})} className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm" placeholder="文件名匹配 (可选)" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">源正则 (Source Regex)</label>
+              <input type="text" value={regexForm.sourceRegex} onChange={e => setRegexForm({...regexForm, sourceRegex: e.target.value})} required className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono" placeholder="\[.*?\]" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">目标替换 (Target Regex)</label>
+              <input type="text" value={regexForm.targetRegex} onChange={e => setRegexForm({...regexForm, targetRegex: e.target.value})} className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono" placeholder="留空则删除" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">匹配操作符</label>
+              <select value={regexForm.matchOperator} onChange={e => setRegexForm({...regexForm, matchOperator: e.target.value})} className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm">
+                <option value="regex">正则表达式</option>
+                <option value="lt">小于 (Size)</option>
+                <option value="gt">大于 (Size)</option>
+                <option value="eq">等于 (Size)</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-500">匹配值 (Match Value)</label>
+              <input type="text" value={regexForm.matchValue} onChange={e => setRegexForm({...regexForm, matchValue: e.target.value})} className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm" />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500">描述</label>
+            <input type="text" value={regexForm.description} onChange={e => setRegexForm({...regexForm, description: e.target.value})} className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm" placeholder="简单说明预设用途" />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+            <button type="button" onClick={() => setIsRegexModalOpen(false)} className="px-6 py-2.5 rounded-full text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors">取消</button>
+            <button type="submit" className="px-8 py-2.5 bg-[#0b57d0] text-white rounded-full text-sm font-medium shadow-sm hover:bg-[#0b57d0]/90 transition-all">保存预设</button>
+          </div>
+        </form>
+      </Modal>
+
+      <FolderSelector
+        isOpen={isFolderSelectorOpen}
+        onClose={() => setIsFolderSelectorOpen(false)}
+        accountId={Number(settings.task.autoCreate.accountId)}
+        accountName={selectedAccount?.username || ''}
+        title="选择自动追剧默认保存目录"
+        onSelect={(folder) => {
+          updateSettings('task.autoCreate.targetFolderId', folder.id);
+          updateSettings('task.autoCreate.targetFolder', folder.name);
+        }}
+      />
     </div>
   );
 };

@@ -1,11 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Files, Search, RefreshCw, X, Check } from 'lucide-react';
+import { Files, Search, RefreshCw, X, Check, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
 import Modal from './Modal';
+import FolderSelector from './FolderSelector';
 
 interface Account {
   id: number;
   username: string;
   accountType: 'family' | 'personal';
+}
+
+interface RegexPreset {
+  id: number;
+  name: string;
+  sourceRegex: string;
+  targetRegex: string;
+  matchPattern: string;
+  matchOperator: string;
+  matchValue: string;
 }
 
 interface CreateTaskModalProps {
@@ -17,12 +28,15 @@ interface CreateTaskModalProps {
 
 const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSuccess, initialData }) => {
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [regexPresets, setRegexPresets] = useState<RegexPreset[]>([]);
   const [loading, setLoading] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [shareFolders, setShareFolders] = useState<any[]>([]);
   const [selectedFolders, setSelectedFolders] = useState<string[]>([]);
   const [tmdbResults, setTmdbResults] = useState<any[]>([]);
   const [isBatchMode, setIsBatchMode] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
 
   const [formData, setFormData] = useState({
     accountId: '',
@@ -52,6 +66,7 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
   useEffect(() => {
     if (isOpen) {
       fetchAccounts();
+      fetchRegexPresets();
       if (initialData) {
         setFormData(prev => ({ ...prev, ...initialData }));
       } else {
@@ -60,14 +75,12 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
         if (lastTarget) {
           try {
             const { lastTargetFolderId, lastTargetFolderName } = JSON.parse(lastTarget);
-            console.log('CreateTaskModal: loaded lastTargetFolder', { lastTargetFolderId, lastTargetFolderName });
             setFormData(prev => ({
               ...prev,
               targetFolderId: lastTargetFolderId,
               targetFolder: lastTargetFolderName
             }));
           } catch (e) {
-            console.error('CreateTaskModal: failed to parse lastTargetFolder', e);
             localStorage.removeItem('lastTargetFolder');
           }
         }
@@ -87,6 +100,32 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
       }
     } catch (error) {
       console.error('Failed to fetch accounts:', error);
+    }
+  };
+
+  const fetchRegexPresets = async () => {
+    try {
+      const response = await fetch('/api/settings/regex-presets');
+      const data = await response.json();
+      if (data.success) {
+        setRegexPresets(data.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch regex presets:', error);
+    }
+  };
+
+  const handleApplyPreset = (presetId: string) => {
+    const preset = regexPresets.find(p => String(p.id) === presetId);
+    if (preset) {
+      setFormData(prev => ({
+        ...prev,
+        sourceRegex: preset.sourceRegex || prev.sourceRegex,
+        targetRegex: preset.targetRegex || prev.targetRegex,
+        matchPattern: preset.matchPattern || prev.matchPattern,
+        matchOperator: preset.matchOperator || prev.matchOperator,
+        matchValue: preset.matchValue || prev.matchValue
+      }));
     }
   };
 
@@ -144,13 +183,12 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
 
       if (isBatchMode) {
         endpoint = '/api/tasks/batch-create';
-        // Simplified batch creation logic for now
         const blocks = formData.batchShareLinks.split('\n').filter(l => l.trim());
         body = {
           tasks: blocks.map(link => ({
             ...formData,
             shareLink: link,
-            taskName: '', // Backend should handle name extraction or we can add it
+            taskName: '', 
             selectedFolders: []
           }))
         };
@@ -182,6 +220,8 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
       setLoading(false);
     }
   };
+
+  const selectedAccount = accounts.find(a => String(a.id) === formData.accountId);
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={isBatchMode ? "批量创建任务" : "创建任务"}>
@@ -326,16 +366,20 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">保存目录 ID</label>
+              <label className="text-sm font-medium text-slate-700">保存目录</label>
               <div className="flex gap-2">
                 <input
                   type="text"
-                  value={formData.targetFolderId}
-                  onChange={e => setFormData({ ...formData, targetFolderId: e.target.value })}
-                  placeholder="父目录 ID"
-                  className="flex-1 px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                  value={formData.targetFolder || formData.targetFolderId}
+                  readOnly
+                  placeholder="根目录"
+                  className="flex-1 px-5 py-3 bg-slate-100 border border-slate-300 rounded-2xl text-sm outline-none text-slate-500"
                 />
-                <button type="button" className="px-4 py-3 bg-slate-100 rounded-2xl text-slate-600 hover:bg-slate-200 transition-colors">
+                <button 
+                  type="button" 
+                  onClick={() => setIsFolderSelectorOpen(true)}
+                  className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors"
+                >
                   <Files size={20} />
                 </button>
               </div>
@@ -400,6 +444,92 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
               />
             </div>
           )}
+
+          {/* Advanced Options */}
+          <div className="pt-2 border-t border-slate-100">
+            <button 
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              {showAdvanced ? <ChevronUp size={18} /> : <ChevronDown size={18} />} 高级配置 (正则过滤/替换)
+            </button>
+            
+            {showAdvanced && (
+              <div className="mt-4 space-y-4 animate-in slide-in-from-top-2 duration-200 p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                    <Cpu size={14} /> 正则预设
+                  </label>
+                  <select 
+                    onChange={e => handleApplyPreset(e.target.value)}
+                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm outline-none"
+                  >
+                    <option value="">选择预设直接应用...</option>
+                    {regexPresets.map(preset => (
+                      <option key={preset.id} value={preset.id}>{preset.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-slate-500">源正则 (Source Regex)</label>
+                    <input 
+                      type="text" 
+                      value={formData.sourceRegex}
+                      onChange={e => setFormData({...formData, sourceRegex: e.target.value})}
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono"
+                      placeholder="e.g. \[.*?\]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-slate-500">目标正则 (Target Regex)</label>
+                    <input 
+                      type="text" 
+                      value={formData.targetRegex}
+                      onChange={e => setFormData({...formData, targetRegex: e.target.value})}
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-slate-500">匹配模式 (Match Pattern)</label>
+                    <input 
+                      type="text" 
+                      value={formData.matchPattern}
+                      onChange={e => setFormData({...formData, matchPattern: e.target.value})}
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-slate-500">操作符</label>
+                    <select 
+                      value={formData.matchOperator}
+                      onChange={e => setFormData({...formData, matchOperator: e.target.value})}
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs"
+                    >
+                      <option value="regex">正则表达式</option>
+                      <option value="lt">小于 (lt)</option>
+                      <option value="gt">大于 (gt)</option>
+                      <option value="eq">等于 (eq)</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-slate-500">匹配值 (Match Value)</label>
+                    <input 
+                      type="text" 
+                      value={formData.matchValue}
+                      onChange={e => setFormData({...formData, matchValue: e.target.value})}
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex justify-end gap-3 pt-4">
@@ -420,6 +550,18 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
           </button>
         </div>
       </form>
+
+      <FolderSelector
+        isOpen={isFolderSelectorOpen}
+        onClose={() => setIsFolderSelectorOpen(false)}
+        accountId={Number(formData.accountId)}
+        accountName={selectedAccount?.username || ''}
+        onSelect={(folder) => setFormData(prev => ({ 
+            ...prev, 
+            targetFolderId: folder.id, 
+            targetFolder: folder.name 
+        }))}
+      />
     </Modal>
   );
 };

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Link2, MoreVertical, RefreshCw, Edit2, Trash2, Folder, Play, CheckCircle2, AlertCircle, HelpCircle, ChevronLeft, Search, X, Check } from 'lucide-react';
+import { Plus, Link2, MoreVertical, RefreshCw, Edit2, Trash2, Folder, Play, CheckCircle2, AlertCircle, HelpCircle, ChevronLeft, Search, X, Check, FileText } from 'lucide-react';
 import Modal from '../Modal';
+import FolderSelector from '../FolderSelector';
 
 interface Account {
   id: number;
@@ -92,6 +93,19 @@ const StrmConfigTab: React.FC = () => {
   const [folderStack, setFolderStack] = useState<{ id: string, name: string }[]>([]);
   const [folderEntries, setFolderEntries] = useState<FolderEntry[]>([]);
   const [folderLoading, setFolderLoading] = useState(false);
+
+  // Lazy Share State
+  const [isLazyModalOpen, setIsLazyModalOpen] = useState(false);
+  const [isLazyFolderSelectorOpen, setIsLazyFolderSelectorOpen] = useState(false);
+  const [lazyFormData, setLazyFormData] = useState({
+    accountId: '',
+    shareLink: '',
+    accessCode: '',
+    targetFolderId: '',
+    targetFolder: '',
+    localPathPrefix: '',
+    overwriteExisting: false
+  });
 
   const fetchConfigs = async () => {
     setLoading(true);
@@ -262,6 +276,46 @@ const StrmConfigTab: React.FC = () => {
     }
   };
 
+  const handleLazySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lazyFormData.accountId || !lazyFormData.shareLink) {
+      alert('请选择账号并输入分享链接');
+      return;
+    }
+    try {
+      const response = await fetch('/api/strm/lazy-share/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId: lazyFormData.accountId,
+          shareLink: lazyFormData.shareLink,
+          accessCode: lazyFormData.accessCode,
+          targetFolderId: lazyFormData.targetFolderId,
+          localPathPrefix: lazyFormData.localPathPrefix,
+          overwriteExisting: lazyFormData.overwriteExisting
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        alert('懒转存生成任务已提交后台执行');
+        setIsLazyModalOpen(false);
+        setLazyFormData({
+          accountId: accounts[0]?.id.toString() || '',
+          shareLink: '',
+          accessCode: '',
+          targetFolderId: '',
+          targetFolder: '',
+          localPathPrefix: '',
+          overwriteExisting: false
+        });
+      } else {
+        alert('生成失败: ' + data.error);
+      }
+    } catch (error) {
+      alert('操作失败');
+    }
+  };
+
   const fetchFolderEntries = async (accountId: number, folderId: string = '') => {
     setFolderLoading(true);
     try {
@@ -363,12 +417,23 @@ const StrmConfigTab: React.FC = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <button 
-          onClick={handleOpenAddModal}
-          className="bg-[#0b57d0] text-white px-6 py-2.5 rounded-full text-sm font-medium hover:bg-[#0b57d0]/90 transition-all shadow-sm flex items-center gap-2"
-        >
-          <Plus size={18} /> 新建配置
-        </button>
+        <div className="flex gap-3">
+          <button 
+            onClick={handleOpenAddModal}
+            className="bg-[#0b57d0] text-white px-6 py-2.5 rounded-full text-sm font-medium hover:bg-[#0b57d0]/90 transition-all shadow-sm flex items-center gap-2"
+          >
+            <Plus size={18} /> 新建配置
+          </button>
+          <button 
+            onClick={() => {
+              setLazyFormData(prev => ({ ...prev, accountId: accounts[0]?.id.toString() || '' }));
+              setIsLazyModalOpen(true);
+            }}
+            className="bg-[#d3e3fd] text-[#041e49] px-6 py-2.5 rounded-full text-sm font-medium hover:bg-[#c2e7ff] transition-all shadow-sm flex items-center gap-2"
+          >
+            <FileText size={18} /> 懒转存STRM生成
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-3xl border border-slate-200/60 overflow-hidden shadow-sm">
@@ -721,91 +786,138 @@ const StrmConfigTab: React.FC = () => {
         </form>
       </Modal>
 
-      <Modal
+      <Modal 
+        isOpen={isLazyModalOpen} 
+        onClose={() => setIsLazyModalOpen(false)} 
+        title="懒转存 STRM 生成"
+      >
+        <form onSubmit={handleLazySubmit} className="space-y-6">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-700">选择账号</label>
+            <select
+              value={lazyFormData.accountId}
+              onChange={e => setLazyFormData({ ...lazyFormData, accountId: e.target.value })}
+              required
+              className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+            >
+              <option value="">请选择账号...</option>
+              {accounts.map(acc => (
+                <option key={acc.id} value={acc.id}>{acc.alias || acc.username}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+             <label className="text-sm font-medium text-slate-700">分享链接</label>
+              <div className="flex gap-3">
+                <input
+                  type="text"
+                  value={lazyFormData.shareLink}
+                  onChange={e => setLazyFormData({ ...lazyFormData, shareLink: e.target.value })}
+                  required
+                  placeholder="分享链接"
+                  className="flex-1 px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                />
+                <input
+                  type="text"
+                  value={lazyFormData.accessCode}
+                  onChange={e => setLazyFormData({ ...lazyFormData, accessCode: e.target.value })}
+                  placeholder="访问码"
+                  className="w-28 px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                />
+              </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">保存目录</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={lazyFormData.targetFolder || lazyFormData.targetFolderId}
+                  readOnly
+                  placeholder="根目录"
+                  className="flex-1 px-5 py-3 bg-slate-100 border border-slate-300 rounded-2xl text-sm outline-none text-slate-500"
+                />
+                <button 
+                  type="button" 
+                  onClick={() => setIsLazyFolderSelectorOpen(true)}
+                  disabled={!lazyFormData.accountId}
+                  className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                >
+                  <Folder size={20} />
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">本地路径前缀 (可选)</label>
+              <input 
+                type="text" 
+                value={lazyFormData.localPathPrefix || ''}
+                onChange={e => setLazyFormData({...lazyFormData, localPathPrefix: e.target.value})}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20" 
+                placeholder="/volume1/media"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-end pb-3">
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <div 
+                  onClick={() => setLazyFormData({...lazyFormData, overwriteExisting: !lazyFormData.overwriteExisting})}
+                  className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
+                    lazyFormData.overwriteExisting ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
+                  }`}
+                >
+                  {lazyFormData.overwriteExisting && <Check size={14} className="text-white" />}
+                </div>
+                <span className="text-sm font-medium text-slate-700">覆盖已存在的 .strm 文件</span>
+              </label>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4">
+            <button
+              type="button"
+              onClick={() => setIsLazyModalOpen(false)}
+              className="px-6 py-3 bg-white border border-slate-300 text-slate-700 rounded-full font-medium hover:bg-slate-50 transition-all"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              className="px-10 py-3 bg-[#0b57d0] text-white rounded-full font-medium shadow-lg hover:bg-[#0b57d0]/90 transition-all flex items-center gap-2"
+            >
+              <Check size={20} /> 立即生成
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <FolderSelector
         isOpen={isFolderSelectorOpen}
         onClose={() => setIsFolderSelectorOpen(false)}
         title={`选择目录 - ${getAccountLabel(selectorAccountId || 0)}`}
-        footer={
-          <div className="px-8 py-6 flex justify-end gap-3 border-t border-slate-100">
-             <button 
-                onClick={() => handleSelectFolder()} 
-                className="px-6 py-2.5 rounded-full text-sm font-medium bg-[#0b57d0] text-white hover:bg-[#0b57d0]/90 transition-colors shadow-sm"
-              >
-                选择当前目录
-              </button>
-          </div>
-        }
-      >
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-2xl overflow-x-auto text-xs text-slate-500 whitespace-nowrap scrollbar-none">
-            <span className="shrink-0">根目录</span>
-            {folderStack.map((folder, i) => (
-              <React.Fragment key={folder.id}>
-                <span>/</span>
-                <span className={i === folderStack.length - 1 ? 'text-slate-900 font-medium' : ''}>{folder.name}</span>
-              </React.Fragment>
-            ))}
-          </div>
+        accountId={selectorAccountId || 0}
+        accountName={getAccountLabel(selectorAccountId || 0)}
+        onSelect={(folder) => {
+          handleSelectFolder(folder as unknown as FolderEntry);
+        }}
+      />
 
-          <div className="flex items-center gap-2">
-            {folderStack.length > 0 && (
-              <button 
-                onClick={handleGoBack}
-                className="p-2.5 hover:bg-slate-100 rounded-2xl text-slate-600 transition-colors border border-slate-200"
-              >
-                <ChevronLeft size={20} />
-              </button>
-            )}
-            <div className="flex-1 font-medium text-slate-700 text-sm">
-              {folderStack.length === 0 ? '根目录' : folderStack[folderStack.length - 1].name}
-            </div>
-            <button 
-              onClick={() => fetchFolderEntries(selectorAccountId!, folderStack[folderStack.length-1]?.id)}
-              className="p-2.5 hover:bg-slate-100 rounded-2xl text-slate-500 transition-colors border border-slate-200"
-              title="刷新"
-            >
-              <RefreshCw size={20} className={folderLoading ? 'animate-spin' : ''} />
-            </button>
-          </div>
-
-          <div className="max-h-[400px] overflow-y-auto rounded-2xl border border-slate-100">
-            <table className="w-full text-left text-sm">
-              <tbody className="divide-y divide-slate-100">
-                {folderLoading ? (
-                  <tr>
-                    <td className="px-4 py-8 text-center text-slate-500">加载中...</td>
-                  </tr>
-                ) : folderEntries.length === 0 ? (
-                  <tr>
-                    <td className="px-4 py-8 text-center text-slate-500">当前目录没有子目录</td>
-                  </tr>
-                ) : folderEntries.map(entry => (
-                  <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors group">
-                    <td 
-                      className="px-4 py-3 font-medium text-slate-900 cursor-pointer flex items-center gap-3"
-                      onClick={() => handleEnterFolder(entry)}
-                    >
-                      <Folder size={18} className="text-[#0b57d0]" />
-                      <span className="truncate flex-1">{entry.name}</span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSelectFolder(entry);
-                        }}
-                        className="px-3 py-1.5 bg-[#0b57d0]/10 text-[#0b57d0] hover:bg-[#0b57d0]/20 rounded-xl text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        选择
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </Modal>
+      <FolderSelector
+        isOpen={isLazyFolderSelectorOpen}
+        onClose={() => setIsLazyFolderSelectorOpen(false)}
+        title={`选择生成目录`}
+        accountId={Number(lazyFormData.accountId)}
+        accountName={getAccountLabel(Number(lazyFormData.accountId))}
+        onSelect={(folder) => {
+          setLazyFormData(prev => ({ 
+            ...prev, 
+            targetFolderId: folder.id, 
+            targetFolder: folder.name 
+          }));
+        }}
+      />
     </div>
   );
 };

@@ -370,16 +370,55 @@ const SettingsTab: React.FC = () => {
               />
             </div>
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700">任务检查定时 (Cron)</label>
-            <input 
-              type="text" 
-              value={settings.task.taskCheckCron}
-              onChange={(e) => updateSettings('task.taskCheckCron', e.target.value)}
-              className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-            />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">任务检查定时 (Cron)</label>
+              <input 
+                type="text" 
+                value={settings.task.taskCheckCron}
+                onChange={(e) => updateSettings('task.taskCheckCron', e.target.value)}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">回收站清理定时 (Cron)</label>
+              <input 
+                type="text" 
+                value={settings.task.cleanRecycleCron}
+                onChange={(e) => updateSettings('task.cleanRecycleCron', e.target.value)}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">懒转存清理定时 (Cron)</label>
+              <input 
+                type="text" 
+                value={settings.task.lazyFileCleanupCron}
+                onChange={(e) => updateSettings('task.lazyFileCleanupCron', e.target.value)}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">懒转存保留时间 (小时)</label>
+              <input 
+                type="number" 
+                value={settings.task.lazyFileRetentionHours}
+                onChange={(e) => updateSettings('task.lazyFileRetentionHours', parseInt(e.target.value))}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-sm font-medium text-slate-700">媒体文件后缀</label>
+              <input 
+                type="text" 
+                value={settings.task.mediaSuffix}
+                onChange={(e) => updateSettings('task.mediaSuffix', e.target.value)}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                placeholder=".mkv;.mp4;..."
+              />
+            </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div 
                 onClick={() => updateSettings('task.enableAutoClearRecycle', !settings.task.enableAutoClearRecycle)}
@@ -396,6 +435,32 @@ const SettingsTab: React.FC = () => {
             </label>
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div 
+                onClick={() => updateSettings('task.enableAutoClearFamilyRecycle', !settings.task.enableAutoClearFamilyRecycle)}
+                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                  settings.task.enableAutoClearFamilyRecycle ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
+                }`}
+              >
+                {settings.task.enableAutoClearFamilyRecycle && <div className="w-2.5 h-2.5 bg-white rounded-sm" />}
+              </div>
+              <div>
+                <span className="text-sm font-medium text-slate-900">自动清理家庭云回收站</span>
+              </div>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+              <div 
+                onClick={() => updateSettings('task.enableAutoCleanLazyFiles', !settings.task.enableAutoCleanLazyFiles)}
+                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                  settings.task.enableAutoCleanLazyFiles ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
+                }`}
+              >
+                {settings.task.enableAutoCleanLazyFiles && <div className="w-2.5 h-2.5 bg-white rounded-sm" />}
+              </div>
+              <div>
+                <span className="text-sm font-medium text-slate-900">自动清理懒转存文件</span>
+              </div>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+              <div 
                 onClick={() => updateSettings('task.enableOnlySaveMedia', !settings.task.enableOnlySaveMedia)}
                 className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
                   settings.task.enableOnlySaveMedia ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
@@ -406,6 +471,19 @@ const SettingsTab: React.FC = () => {
               <div>
                 <span className="text-sm font-medium text-slate-900">仅转存媒体文件</span>
                 <p className="text-[10px] text-slate-400">跳过图片、文档等非媒体文件</p>
+              </div>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+              <div 
+                onClick={() => updateSettings('task.enableAutoCreateFolder', !settings.task.enableAutoCreateFolder)}
+                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                  settings.task.enableAutoCreateFolder ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
+                }`}
+              >
+                {settings.task.enableAutoCreateFolder && <div className="w-2.5 h-2.5 bg-white rounded-sm" />}
+              </div>
+              <div>
+                <span className="text-sm font-medium text-slate-900">目标文件夹自动创建</span>
               </div>
             </label>
           </div>

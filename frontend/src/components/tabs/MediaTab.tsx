@@ -54,6 +54,15 @@ interface MediaSettings {
     baseUrl: string;
     apiKey: string;
   };
+  organizer: {
+    categories: {
+      tv: string;
+      anime: string;
+      movie: string;
+      variety: string;
+      documentary: string;
+    }
+  };
 }
 
 interface RegexPreset {
@@ -78,7 +87,16 @@ const initialSettings: MediaSettings = {
     model: '', 
     rename: { template: '{name} - {se}{ext}', movieTemplate: '{name} ({year}){ext}' } 
   },
-  alist: { enable: false, baseUrl: '', apiKey: '' }
+  alist: { enable: false, baseUrl: '', apiKey: '' },
+  organizer: {
+    categories: {
+      tv: '电视剧',
+      anime: '动漫',
+      movie: '电影',
+      variety: '综艺',
+      documentary: '纪录片'
+    }
+  }
 };
 
 const MediaTab: React.FC = () => {
@@ -127,6 +145,11 @@ const MediaTab: React.FC = () => {
             rename: { ...initialSettings.openai.rename, ...fetched.openai?.rename }
           },
           alist: { ...initialSettings.alist, ...fetched.alist },
+          organizer: {
+            ...initialSettings.organizer,
+            ...fetched.organizer,
+            categories: { ...initialSettings.organizer.categories, ...fetched.organizer?.categories }
+          },
         });
       }
 
@@ -527,6 +550,33 @@ const MediaTab: React.FC = () => {
           </div>
         </section>
       </div>
+
+      {/* Media Organizer Settings */}
+      <section className="space-y-4">
+        <h3 className="text-xl font-medium text-slate-900 flex items-center gap-3">
+          <Settings size={24} className="text-[#0b57d0]" /> 媒体库分类命名
+        </h3>
+        <div className="bg-white rounded-3xl border border-slate-200/60 p-8 space-y-6 shadow-sm">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            {Object.entries(settings.organizer.categories).map(([key, value]) => (
+              <div key={key} className="space-y-1">
+                <label className="text-xs font-medium text-slate-500 block">
+                  {key === 'tv' ? '电视剧' : 
+                   key === 'movie' ? '电影' : 
+                   key === 'anime' ? '动漫' : 
+                   key === 'variety' ? '综艺' : '纪录片'}
+                </label>
+                <input 
+                  type="text" 
+                  value={value}
+                  onChange={e => updateSetting(`organizer.categories.${key}`, e.target.value)}
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
       {/* Regex Presets Management */}
       <section className="space-y-4">

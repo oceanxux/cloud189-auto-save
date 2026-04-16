@@ -8,6 +8,7 @@ const { BatchTaskDto } = require('../dto/BatchTaskDto');
 const { StreamProxyService } = require('./streamProxy');
 const AIService = require('./ai');
 const { OrganizerService } = require('./organizer');
+const { CasService } = require('./casService');
 
 class LazyShareStrmService {
     constructor(accountRepo, taskService) {
@@ -16,6 +17,7 @@ class LazyShareStrmService {
         this.strmService = new StrmService();
         this.streamProxyService = new StreamProxyService();
         this.organizerService = new OrganizerService(taskService);
+        this.casService = new CasService();
         this.cache = new Map();
         this.inflight = new Map();
         this.transferInflight = new Map();
@@ -80,7 +82,9 @@ class LazyShareStrmService {
                 fileName: file.sourceFileName || file.name,
                 targetFolderId,
                 rootName,
-                relativeDir: file.sourceRelativeDir || ''
+                relativeDir: file.sourceRelativeDir || '',
+                isCas: !!file.isCas,
+                originalFileName: file.originalFileName || ''
             }),
             overwriteExisting,
             false
@@ -148,7 +152,9 @@ class LazyShareStrmService {
                 fileName: file.sourceFileName || file.name,
                 targetFolderId,
                 rootName: '',
-                relativeDir: file.sourceRelativeDir || ''
+                relativeDir: file.sourceRelativeDir || '',
+                isCas: !!file.isCas,
+                originalFileName: file.originalFileName || ''
             }),
             overwriteExisting,
             true
@@ -188,7 +194,10 @@ class LazyShareStrmService {
             payload.rootName,
             payload.relativeDir
         );
-        let targetFile = await this._findFileByName(cloud189, targetFolderId, payload.fileName);
+        const expectedFileName = payload.isCas
+            ? (payload.originalFileName || CasService.getOriginalFileName(payload.fileName))
+            : payload.fileName;
+        let targetFile = await this._findFileByName(cloud189, targetFolderId, expectedFileName);
 
         if (!targetFile) {
             targetFile = await this._ensureTransferredFile(cloud189, payload, targetFolderId);
@@ -281,8 +290,21 @@ class LazyShareStrmService {
             .split(';')
             .map((suffix) => suffix.toLowerCase());
         return entries.filter((file) => {
+            if (CasService.isCasFile(file.name)) {
+                return true;
+            }
             const fileExt = '.' + String(file.name).split('.').pop().toLowerCase();
             return mediaSuffixs.includes(fileExt);
+        }).map((file) => {
+            const isCas = CasService.isCasFile(file.name);
+            const originalFileName = isCas
+                ? CasService.getOriginalFileName(file.name)
+                : file.name;
+            return {
+                ...file,
+                isCas,
+                originalFileName
+            };
         });
     }
 
@@ -313,7 +335,8 @@ class LazyShareStrmService {
             ...file,
             relativeDir: this._normalizeRelativePath(file.relativeDir || ''),
             sourceRelativeDir: this._normalizeRelativePath(file.relativeDir || ''),
-            sourceFileName: file.sourceFileName || file.name
+            sourceFileName: file.sourceFileName || file.name,
+            originalFileName: file.originalFileName || (CasService.isCasFile(file.name) ? CasService.getOriginalFileName(file.name) : file.name)
         }));
 
         if (!enableOrganizer) {
@@ -368,9 +391,12 @@ class LazyShareStrmService {
 
         const organizedFiles = preparedFiles.map(file => {
             const aiFile = episodeMap.get(String(file.id));
+            const baseFile = file.isCas
+                ? { ...file, name: file.originalFileName || file.name }
+                : file;
             const targetName = aiFile
-                ? this.taskService._generateFileName(file, aiFile, resourceInfo, template)
-                : file.name;
+                ? this.taskService._generateFileName(baseFile, aiFile, resourceInfo, template)
+                : (file.originalFileName || file.name);
             const targetRelativeDir = this.organizerService._buildTargetRelativeDir(
                 { ...file, name: targetName },
                 aiFile,
@@ -505,11 +531,36 @@ class LazyShareStrmService {
 
         const pending = (async () => {
             const submitResult = await this._submitShareSaveTask(cloud189, payload, targetFolderId);
-            return await this._waitForTransferredFile(cloud189, targetFolderId, payload.fileName, submitResult);
+            const transferredFile = await this._waitForTransferredFile(cloud189, targetFolderId, payload.fileName, submitResult);
+            if (!payload.isCas) {
+                return transferredFile;
+            }
+            return await this._restoreCasTransferredFile(cloud189, targetFolderId, transferredFile, payload);
         })().finally(() => this.transferInflight.delete(transferKey));
 
         this.transferInflight.set(transferKey, pending);
         return await pending;
+    }
+
+    async _restoreCasTransferredFile(cloud189, targetFolderId, casFile, payload) {
+        const restoreName = payload.originalFileName || CasService.getOriginalFileName(payload.fileName);
+        let restoredFile = await this._findFileByName(cloud189, targetFolderId, restoreName);
+        if (restoredFile) {
+            return restoredFile;
+        }
+
+        const casInfo = await this.casService.downloadAndParseCas(cloud189, casFile.id);
+        await this.casService.restoreFromCas(cloud189, targetFolderId, casInfo, restoreName);
+        restoredFile = await this._waitForTransferredFile(cloud189, targetFolderId, restoreName, {}, 30, 1000);
+
+        try {
+            await cloud189.deleteFile(casFile.id, casFile.name);
+            logTaskEvent(`已删除懒转存CAS文件: ${casFile.name}`);
+        } catch (error) {
+            logTaskEvent(`删除懒转存CAS文件失败: ${casFile.name}, 错误: ${error.message}`);
+        }
+
+        return restoredFile;
     }
 
     async _waitForTransferredFile(cloud189, targetFolderId, fileName, submitResult = {}, maxAttempts = 120, intervalMs = 1000) {

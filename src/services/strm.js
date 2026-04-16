@@ -7,6 +7,8 @@ const alistService = require('./alistService');
 const { MessageUtil } = require('./message');
 const { StreamProxyService } = require('./streamProxy');
 
+const { CasService } = require('./casService');
+
 class StrmService {
     constructor() {
         this.enable = ConfigService.getConfigValue('strm.enable');
@@ -195,7 +197,12 @@ class StrmService {
 
     _buildRelativeStrmPath(relativeDir, fileName) {
         const normalizedRelativeDir = this._normalizeRelativePath(relativeDir || '');
-        const parsedPath = path.parse(fileName);
+        // 对 .cas 文件，使用原始文件名（去掉 .cas 后缀）
+        let effectiveFileName = fileName;
+        if (CasService.isCasFile(fileName)) {
+            effectiveFileName = CasService.getOriginalFileName(fileName);
+        }
+        const parsedPath = path.parse(effectiveFileName);
         const strmFileName = `${parsedPath.name}.strm`;
         return normalizedRelativeDir
             ? path.join(normalizedRelativeDir, strmFileName)
@@ -707,10 +714,11 @@ class StrmService {
             }
         }));
     }
-    //检查文件是否是媒体文件
+    //检查文件是否是媒体文件（.cas 文件也视为媒体文件）
     _checkFileSuffix(file, mediaSuffixs) {
          // 获取文件后缀
          const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+         if (CasService.isCasFile(file.name)) return true;
          return mediaSuffixs.includes(fileExt)
     }
 

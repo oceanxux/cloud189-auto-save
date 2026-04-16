@@ -17,6 +17,7 @@ const harmonizedFilter = require('../utils/BloomFilter');
 const cloud189Utils = require('../utils/Cloud189Utils');
 const alistService = require('./alistService');
 const { LazyShareStrmService } = require('./lazyShareStrm');
+const { CasService } = require('./casService');
 
 class TaskService {
     constructor(taskRepo, accountRepo) {
@@ -433,6 +434,7 @@ class TaskService {
         const taskInfoList = [];
         const fileNameList = [];
         let fileCount = 0;
+        const casService = new CasService();
 
         for (const file of newFiles) {
             if (task.enableSystemProxy) {
@@ -446,7 +448,10 @@ class TaskService {
                     md5: file.md5,
                 });
             }
-            fileNameList.push(`├─ ${file.name}`);
+            const displayName = CasService.isCasFile(file.name)
+                ? `${file.name} -> ${CasService.getOriginalFileName(file.name)}`
+                : file.name;
+            fileNameList.push(`├─ ${displayName}`);
             if (this._checkFileSuffix(file, true, mediaSuffixs)) fileCount++;
         }
         // 如果有多个文件，最后一个文件使用└─
@@ -463,7 +468,8 @@ class TaskService {
                     shareId: task.shareId
                 });
                 await this.createBatchTask(cloud189, batchTaskDto);
-            }else{
+                await this._restoreTransferredCasFiles(task, newFiles, cloud189, casService);
+            } else {
                 throw new Error('系统代理模式已移除');
             }
         }
@@ -473,6 +479,50 @@ class TaskService {
         }
 
         return { fileNameList, fileCount };
+    }
+
+    async _restoreTransferredCasFiles(task, newFiles, cloud189, casService = new CasService()) {
+        const casFiles = (newFiles || []).filter((file) => CasService.isCasFile(file.name));
+        if (!casFiles.length) {
+            return;
+        }
+
+        for (const casFile of casFiles) {
+            try {
+                const transferredCasFile = await this._waitForFileByName(cloud189, task.realFolderId, casFile.name);
+                if (!transferredCasFile) {
+                    throw new Error(`未找到已转存CAS文件: ${casFile.name}`);
+                }
+                const casInfo = await casService.downloadAndParseCas(cloud189, transferredCasFile.id);
+                const restoreName = CasService.getOriginalFileName(casFile.name, casInfo);
+                await casService.restoreFromCas(cloud189, task.realFolderId, casInfo, restoreName);
+                await this._waitForFileByName(cloud189, task.realFolderId, restoreName, 30, 1000);
+                try {
+                    await cloud189.deleteFile(transferredCasFile.id, transferredCasFile.name);
+                    logTaskEvent(`普通任务已删除CAS文件: ${transferredCasFile.name}`);
+                } catch (deleteError) {
+                    logTaskEvent(`普通任务删除CAS文件失败: ${transferredCasFile.name}, 错误: ${deleteError.message}`);
+                }
+            } catch (error) {
+                logTaskEvent(`普通任务恢复CAS文件失败: ${casFile.name}, 错误: ${error.message}`);
+                throw error;
+            }
+        }
+    }
+
+    async _waitForFileByName(cloud189, folderId, fileName, maxAttempts = 120, intervalMs = 1000) {
+        for (let index = 0; index < maxAttempts; index++) {
+            const folderInfo = await cloud189.listFiles(folderId);
+            const files = folderInfo?.fileListAO?.fileList || [];
+            const file = files.find((item) => item.name === fileName);
+            if (file) {
+                return file;
+            }
+            if (index < maxAttempts - 1) {
+                await new Promise((resolve) => setTimeout(resolve, intervalMs));
+            }
+        }
+        return null;
     }
 
     async _getLazyStrmFiles(task, shareFiles) {
@@ -1364,6 +1414,9 @@ class TaskService {
     }
     // 校验文件后缀
     _checkFileSuffix(file,enableOnlySaveMedia, mediaSuffixs) {
+        if (CasService.isCasFile(file.name)) {
+            return true;
+        }
         // 获取文件后缀
         const fileExt = '.' + file.name.split('.').pop().toLowerCase();
         const isMedia = mediaSuffixs.includes(fileExt)

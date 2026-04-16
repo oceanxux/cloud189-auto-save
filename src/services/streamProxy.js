@@ -49,7 +49,9 @@ class StreamProxyService {
             fileName: payload.fileName ? String(payload.fileName) : '',
             targetFolderId: payload.targetFolderId ? String(payload.targetFolderId) : '',
             rootName: payload.rootName ? String(payload.rootName) : '',
-            relativeDir: payload.relativeDir ? String(payload.relativeDir) : ''
+            relativeDir: payload.relativeDir ? String(payload.relativeDir) : '',
+            isCas: !!payload.isCas,
+            originalFileName: payload.originalFileName ? String(payload.originalFileName) : ''
         };
         const encodedPayload = this._encodePayload(normalizedPayload);
         return `${encodedPayload}.${this._sign(encodedPayload)}`;

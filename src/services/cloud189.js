@@ -439,6 +439,72 @@ class Cloud189Service {
         })
         return res.headers.location
     }
+    // 获取 sessionKey（用于 upload 域名的加密请求）
+    async getSessionKeyForUpload() {
+        const resp = await this.request('/v2/getUserBriefInfo.action', {
+            method: 'GET'
+        });
+        if (!resp?.sessionKey) {
+            throw new Error('获取上传SessionKey失败');
+        }
+        return resp.sessionKey;
+    }
+
+    // 获取 RSA 公钥（用于 upload 域名的加密请求）
+    async getRsaKey() {
+        const resp = await this.request('/api/security/generateRsaKey.action', {
+            method: 'GET'
+        });
+        if (!resp?.pubKey || !resp?.pkId) {
+            throw new Error('获取RSA公钥失败');
+        }
+        return {
+            pubKey: resp.pubKey,
+            pkId: resp.pkId,
+            expire: resp.expire || 0
+        };
+    }
+
+    // 获取文件下载URL（用于下载 .cas 文件内容）
+    async getFileDownloadUrl(fileId) {
+        if (this.isFamilyAccount()) {
+            const familyId = await this.resolveFamilyId();
+            const response = await this.request(`${Cloud189Service.CLOUD_API_BASE_URL}/family/file/getFileDownloadUrl.action`, {
+                method: 'GET',
+                searchParams: { fileId, familyId }
+            });
+            return response?.fileDownloadUrl || null;
+        }
+        const response = await this.request('/api/open/file/getFileDownloadUrl.action', {
+            method: 'GET',
+            searchParams: { fileId, dt: 3 }
+        });
+        return response?.fileDownloadUrl || null;
+    }
+
+    // 删除文件
+    async deleteFile(fileId, fileName) {
+        const batchTaskDto = {
+            taskInfos: JSON.stringify([{
+                fileId: String(fileId),
+                fileName: String(fileName),
+                isFolder: 0
+            }]),
+            type: 'DELETE',
+            targetFolderId: ''
+        };
+        if (this.isFamilyAccount()) {
+            batchTaskDto.familyId = await this.resolveFamilyId();
+        }
+        const action = batchTaskDto.familyId
+            ? `${Cloud189Service.CLOUD_API_BASE_URL}/batch/createBatchTask.action`
+            : '/api/open/batch/createBatchTask.action';
+        return await this.request(action, {
+            method: 'POST',
+            form: batchTaskDto
+        });
+    }
+
     // 记录转存量
     async increaseShareFileAccessCount(shareId) {
         const response = await this.request(`${Cloud189Service.CLOUD_WEB_BASE_URL}/api/portal//share/increaseShareFileAccessCount.action`, {

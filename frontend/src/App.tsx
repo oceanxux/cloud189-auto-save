@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User, 
   Files, 
@@ -13,7 +13,9 @@ import {
   Bell,
   Menu,
   LogOut,
-  MessageSquare
+  MessageSquare,
+  Moon,
+  Sun
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -47,6 +49,22 @@ export default function App() {
   const [createTaskInitialData, setCreateTaskInitialData] = useState<any>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [taskRefreshKey, setTaskRefreshKey] = useState(0);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    return localStorage.getItem('theme') === 'dark' || 
+      (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  });
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
 
   const tabs: { id: TabType, label: string, icon: any }[] = [
     { id: 'account', label: '账号', icon: User },
@@ -100,7 +118,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[#f8fafd] overflow-hidden font-sans">
+    <div className="flex h-screen bg-[var(--bg-surface)] overflow-hidden font-sans transition-colors duration-200">
       
       {/* Mobile Navigation Drawer Overlay */}
       <AnimatePresence>
@@ -111,20 +129,20 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setIsMobileMenuOpen(false)}
-              className="fixed inset-0 bg-slate-900/40 z-40 md:hidden"
+              className="fixed inset-0 bg-slate-900/40 z-40 md:hidden dark:bg-slate-950/60"
             />
             <motion.nav 
               initial={{ x: '-100%' }}
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
               transition={{ type: 'spring', bounce: 0, duration: 0.4 }}
-              className="fixed inset-y-0 left-0 w-72 bg-[#f8fafd] flex flex-col z-50 md:hidden shadow-2xl"
+              className="fixed inset-y-0 left-0 w-72 bg-[var(--bg-surface)] flex flex-col z-50 md:hidden shadow-2xl border-r border-[var(--border-color)]"
             >
               <div className="px-6 py-8">
-                <h1 className="text-2xl font-medium text-slate-900">天翼自动转存</h1>
-                <p className="text-sm text-slate-500 mt-1">Material Design 3</p>
+                <h1 className="text-2xl font-medium text-[var(--text-primary)]">天翼自动转存</h1>
+                <p className="text-sm text-[var(--text-secondary)] mt-1">Material Design 3</p>
               </div>
-              <div className="flex-1 px-3 space-y-1 overflow-y-auto">
+              <div className="flex-1 px-3 space-y-1 overflow-y-auto custom-scrollbar">
                 {tabs.map(tab => (
                   <button
                     key={tab.id}
@@ -134,19 +152,19 @@ export default function App() {
                     }}
                     className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-full text-sm font-medium transition-colors ${
                       activeTab === tab.id 
-                        ? 'bg-[#c2e7ff] text-[#001d35]' 
-                        : 'text-slate-700 hover:bg-slate-200/50'
+                        ? 'bg-[var(--nav-active-bg)] text-[var(--nav-active-text)]' 
+                        : 'text-[var(--text-primary)] hover:bg-slate-200/50 dark:hover:bg-slate-800/50'
                     }`}
                   >
-                    <tab.icon size={22} className={activeTab === tab.id ? 'text-[#001d35]' : 'text-slate-500'} />
+                    <tab.icon size={22} className={activeTab === tab.id ? 'text-[var(--nav-active-text)]' : 'text-[var(--text-secondary)]'} />
                     {tab.label}
                   </button>
                 ))}
               </div>
-              <div className="p-4 border-t border-slate-100">
+              <div className="p-4 border-t border-[var(--border-color)]">
                 <button 
                   onClick={handleLogout}
-                  className="w-full flex items-center gap-4 px-4 py-3.5 rounded-full text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+                  className="w-full flex items-center gap-4 px-4 py-3.5 rounded-full text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
                 >
                   <LogOut size={22} />
                   退出登录
@@ -158,31 +176,31 @@ export default function App() {
       </AnimatePresence>
 
       {/* Desktop Navigation Drawer */}
-      <nav className="w-72 bg-[#f8fafd] flex flex-col hidden md:flex z-10 border-r border-slate-100">
+      <nav className="w-72 bg-[var(--bg-surface)] flex flex-col hidden md:flex z-10 border-r border-[var(--border-color)]">
         <div className="px-8 py-8">
-          <h1 className="text-2xl font-medium text-slate-900">天翼自动转存</h1>
-          <p className="text-sm text-slate-500 mt-1">Material Design 3</p>
+          <h1 className="text-2xl font-medium text-[var(--text-primary)]">天翼自动转存</h1>
+          <p className="text-sm text-[var(--text-secondary)] mt-1">Material Design 3</p>
         </div>
-        <div className="flex-1 px-3 space-y-1 overflow-y-auto pb-6">
+        <div className="flex-1 px-3 space-y-1 overflow-y-auto pb-6 custom-scrollbar">
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`w-full flex items-center gap-4 px-5 py-3.5 rounded-full text-sm font-medium transition-colors ${
                 activeTab === tab.id 
-                  ? 'bg-[#c2e7ff] text-[#001d35]' 
-                  : 'text-slate-700 hover:bg-slate-200/50'
+                  ? 'bg-[var(--nav-active-bg)] text-[var(--nav-active-text)]' 
+                  : 'text-[var(--text-primary)] hover:bg-slate-200/50 dark:hover:bg-slate-800/50'
               }`}
             >
-              <tab.icon size={22} className={activeTab === tab.id ? 'text-[#001d35]' : 'text-slate-500'} />
+              <tab.icon size={22} className={activeTab === tab.id ? 'text-[var(--nav-active-text)]' : 'text-[var(--text-secondary)]'} />
               {tab.label}
             </button>
           ))}
         </div>
-        <div className="p-4 border-t border-slate-100">
+        <div className="p-4 border-t border-[var(--border-color)]">
           <button 
             onClick={handleLogout}
-            className="w-full flex items-center gap-4 px-5 py-3.5 rounded-full text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+            className="w-full flex items-center gap-4 px-5 py-3.5 rounded-full text-sm font-medium text-[var(--text-secondary)] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
             <LogOut size={22} />
             退出登录
@@ -191,28 +209,35 @@ export default function App() {
       </nav>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 h-screen relative bg-white rounded-tl-3xl shadow-sm border-l border-t border-slate-200/50">
+      <main className="flex-1 flex flex-col min-w-0 h-screen relative bg-[var(--bg-main)] rounded-tl-3xl shadow-sm border-l border-t border-[var(--border-color)] transition-colors duration-200">
         
         {/* Top App Bar */}
-        <header className="h-16 flex items-center justify-between px-4 md:px-8 bg-white/80 backdrop-blur-md z-10 sticky top-0 rounded-tl-3xl">
+        <header className="h-16 flex items-center justify-between px-4 md:px-8 bg-[var(--bg-main)]/80 backdrop-blur-md z-10 sticky top-0 rounded-tl-3xl transition-colors duration-200">
           <div className="flex items-center gap-4">
             <button 
               onClick={() => setIsMobileMenuOpen(true)}
-              className="p-2 rounded-full hover:bg-slate-100 transition-colors text-slate-700 md:hidden"
+              className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-[var(--text-primary)] md:hidden"
             >
               <Menu size={24} />
             </button>
-            <h2 className="text-2xl font-normal text-slate-800">{activeTabLabel}</h2>
+            <h2 className="text-2xl font-normal text-[var(--text-primary)]">{activeTabLabel}</h2>
           </div>
           <div className="flex items-center gap-2">
             <button 
+              onClick={toggleDarkMode}
+              className="p-2.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-[var(--text-primary)]"
+              title={isDarkMode ? "切换到亮色模式" : "切换到深色模式"}
+            >
+              {isDarkMode ? <Sun size={22} /> : <Moon size={22} />}
+            </button>
+            <button 
               onClick={() => setIsAIChatOpen(true)}
-              className="p-2.5 rounded-full hover:bg-slate-100 transition-colors text-slate-700"
+              className="p-2.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-[var(--text-primary)]"
               title="AI 助手"
             >
               <MessageSquare size={22} />
             </button>
-            <button className="p-2.5 rounded-full hover:bg-slate-100 transition-colors text-slate-700">
+            <button className="p-2.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-[var(--text-primary)]">
               <Bell size={22} />
             </button>
             <div className="w-9 h-9 rounded-full bg-[#0b57d0] text-white flex items-center justify-center font-medium text-sm ml-2 cursor-pointer hover:shadow-md transition-shadow">
@@ -222,7 +247,7 @@ export default function App() {
         </header>
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-32">
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-32 custom-scrollbar">
           <div className="max-w-6xl mx-auto">
             <AnimatePresence mode="wait">
               <motion.div

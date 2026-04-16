@@ -17,7 +17,7 @@ class ConfigService {
         enableAutoClearFamilyRecycle: false,
         enableAutoCleanLazyFiles: false,
         lazyFileRetentionHours: 24,
-        mediaSuffix: '.mkv;.iso;.ts;.mp4;.avi;.rmvb;.wmv;.m2ts;.mpg;.flv;.rm;.mov', // 媒体文件后缀
+        mediaSuffix: '.mkv;.iso;.ts;.mp4;.avi;.rmvb;.wmv;.m2ts;.mpg;.flv;.rm;.mov;.cas', // 媒体文件后缀
         enableOnlySaveMedia: false, // 只保存媒体文件
         // 文件夹不存在时重新创建
         enableAutoCreateFolder: false,

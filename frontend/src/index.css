@@ -3,18 +3,54 @@
 
 @theme {
   --font-sans: "Inter", "Roboto Flex", ui-sans-serif, system-ui, sans-serif;
+  --color-brand: #0b57d0;
+  --color-brand-container: #d3e3fd;
+  --color-brand-container-hover: #c2e7ff;
 }
 
 @layer base {
+  :root {
+    --bg-surface: #f8fafd;
+    --bg-main: #ffffff;
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --border-color: #e2e8f0;
+    --nav-active-bg: #c2e7ff;
+    --nav-active-text: #001d35;
+  }
+
+  .dark {
+    --bg-surface: #0f172a;
+    --bg-main: #1e293b;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --border-color: #334155;
+    --nav-active-bg: #0b57d0;
+    --nav-active-text: #ffffff;
+  }
+
   body {
-    @apply bg-slate-50 text-slate-900 antialiased;
+    @apply bg-[var(--bg-surface)] text-[var(--text-primary)] antialiased transition-colors duration-200;
   }
 }
 
 .tab-active {
-  @apply border-b-2 border-blue-600 text-blue-600 font-medium;
+  @apply border-b-2 border-blue-600 text-blue-600 font-medium dark:border-blue-400 dark:text-blue-400;
 }
 
 .glass-panel {
-  @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-sm;
+  @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-sm dark:bg-slate-800/80 dark:border-slate-700/30;
+}
+
+/* Scrollbar styles */
+@layer utilities {
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-slate-200 rounded-full dark:bg-slate-700;
+  }
 }

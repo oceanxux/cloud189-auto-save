@@ -79,7 +79,6 @@ const AccountTab: React.FC = () => {
   };
 
   useEffect(() => {
-    console.log('AccountTab: useEffect fetching accounts');
     fetchAccounts();
   }, []);
 
@@ -271,7 +270,6 @@ const AccountTab: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {console.log('AccountTab: rendering accounts', accounts)}
               {loading ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-4 text-center text-slate-500">加载中...</td>

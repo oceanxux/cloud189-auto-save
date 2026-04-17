@@ -113,7 +113,7 @@ export default function App() {
         setIsAIChatOpen(true);
         break;
       default:
-        console.log('Action not implemented:', id);
+        break;
     }
   };
 

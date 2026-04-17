@@ -627,6 +627,7 @@ const MediaTab: React.FC = () => {
         isOpen={isRegexModalOpen}
         onClose={() => setIsRegexModalOpen(false)}
         title="正则预设管理"
+        footer={null}
       >
         <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
           <div className="flex justify-end">
@@ -678,6 +679,7 @@ const MediaTab: React.FC = () => {
         isOpen={isEditRegexModalOpen}
         onClose={() => setIsEditRegexModalOpen(false)}
         title={editingPresetIndex === null ? "新增正则预设" : "编辑正则预设"}
+        footer={null}
       >
         <form onSubmit={handleRegexSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">

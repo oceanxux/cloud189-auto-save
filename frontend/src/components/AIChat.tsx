@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Send, Bot, User, Trash2, RefreshCw } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Bot, Send, Trash2, User } from 'lucide-react';
 import Modal from './Modal';
 
 interface Message {
@@ -19,12 +19,92 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const isStreamingRef = useRef(false);
+  const hasAssistantPlaceholderRef = useRef(false);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
+      isStreamingRef.current = false;
+      hasAssistantPlaceholderRef.current = false;
+      setLoading(false);
+      return;
+    }
+
+    const eventSource = new EventSource('/api/logs/events');
+    eventSourceRef.current = eventSource;
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type !== 'aimessage' || !isStreamingRef.current) {
+          return;
+        }
+
+        const chunk = String(data.message || '');
+        if (chunk === '[END]') {
+          isStreamingRef.current = false;
+          hasAssistantPlaceholderRef.current = false;
+          setLoading(false);
+          return;
+        }
+
+        setMessages(prev => {
+          if (!hasAssistantPlaceholderRef.current) {
+            hasAssistantPlaceholderRef.current = true;
+            return [...prev, { role: 'assistant', content: chunk }];
+          }
+
+          const nextMessages = [...prev];
+          const lastMessage = nextMessages[nextMessages.length - 1];
+          if (lastMessage?.role === 'assistant') {
+            nextMessages[nextMessages.length - 1] = {
+              ...lastMessage,
+              content: `${lastMessage.content}${chunk}`
+            };
+            return nextMessages;
+          }
+
+          return [...nextMessages, { role: 'assistant', content: chunk }];
+        });
+      } catch (error) {
+        console.error('解析 AI SSE 消息失败:', error);
+      }
+    };
+
+    eventSource.onerror = () => {
+      eventSource.close();
+      eventSourceRef.current = null;
+      if (isStreamingRef.current) {
+        isStreamingRef.current = false;
+        hasAssistantPlaceholderRef.current = false;
+        setLoading(false);
+        setMessages(prev => [...prev, { role: 'assistant', content: 'AI 响应流已中断，请稍后重试。' }]);
+      }
+    };
+
+    return () => {
+      eventSource.close();
+      if (eventSourceRef.current === eventSource) {
+        eventSourceRef.current = null;
+      }
+    };
+  }, [isOpen]);
+
+  const resetChat = () => {
+    isStreamingRef.current = false;
+    hasAssistantPlaceholderRef.current = false;
+    setLoading(false);
+    setMessages(prev => prev.slice(0, 1));
+  };
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
@@ -33,23 +113,27 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
     setInput('');
     setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
     setLoading(true);
+    isStreamingRef.current = true;
+    hasAssistantPlaceholderRef.current = false;
 
     try {
-      const response = await fetch('/api/ai/chat', {
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg, history: messages })
+        body: JSON.stringify({ message: userMsg })
       });
       const data = await response.json();
-      if (data.success) {
-        setMessages(prev => [...prev, { role: 'assistant', content: data.data }]);
-      } else {
-        setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，我遇到了一点问题: ' + data.error }]);
+      if (!response.ok || !data.success) {
+        isStreamingRef.current = false;
+        hasAssistantPlaceholderRef.current = false;
+        setLoading(false);
+        setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，我遇到了一点问题: ' + (data.error || '请求失败') }]);
       }
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'assistant', content: '发送失败，请检查网络连接或 AI 配置。' }]);
-    } finally {
+      isStreamingRef.current = false;
+      hasAssistantPlaceholderRef.current = false;
       setLoading(false);
+      setMessages(prev => [...prev, { role: 'assistant', content: '发送失败，请检查网络连接或 AI 配置。' }]);
     }
   };
 
@@ -95,7 +179,7 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
 
         <div className="mt-4 pt-4 border-t border-slate-100 flex gap-2">
           <button 
-            onClick={() => setMessages(messages.slice(0, 1))}
+            onClick={resetChat}
             className="p-3 text-slate-400 hover:text-red-500 transition-colors"
             title="清空对话"
           >

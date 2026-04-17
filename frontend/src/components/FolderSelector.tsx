@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Folder, ChevronLeft, RefreshCw, Star, Trash2, X, Check } from 'lucide-react';
+import { Folder, ChevronLeft, RefreshCw, Star, Trash2, Check } from 'lucide-react';
 import Modal from './Modal';
 
 interface FolderEntry {
@@ -17,10 +17,18 @@ interface FavoriteFolder {
   accountName: string;
 }
 
+export interface SelectedFolder {
+  id: string;
+  name: string;
+  path: string;
+  accountId: number;
+  accountName: string;
+}
+
 interface FolderSelectorProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelect: (folder: { id: string; name: string; path: string }) => void;
+  onSelect: (folder: SelectedFolder) => void;
   accountId: number;
   accountName: string;
   title?: string;
@@ -129,7 +137,13 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
         folderPath = '/';
     }
 
-    onSelect({ id: folderId, name: folderName, path: folderPath });
+    onSelect({
+      id: folderId,
+      name: folderName,
+      path: folderPath,
+      accountId,
+      accountName
+    });
     onClose();
   };
 
@@ -206,15 +220,14 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
                     onClick={() => {
                       if (fav.accountId === accountId) {
                         // If same account, we could try to navigate there, but for now just select
-                        onSelect({ id: fav.id, name: fav.name, path: fav.path });
+                        onSelect({
+                          id: fav.id,
+                          name: fav.name,
+                          path: fav.path,
+                          accountId: fav.accountId,
+                          accountName: fav.accountName
+                        });
                         onClose();
-                      } else {
-                        // If different account, alert or just select (depends on caller logic)
-                        if (confirm(`该目录属于账号 "${fav.accountName}"，确定要选择它吗？`)) {
-                          onSelect({ id: fav.id, name: fav.name, path: fav.path });
-                          onClose();
-                        }
-                      }
                     }}
                   >
                     <div className="flex flex-col min-w-0">

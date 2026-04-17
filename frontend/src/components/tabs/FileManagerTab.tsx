@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Files, ChevronRight, Search, LayoutGrid, MoreVertical, RefreshCw, ArrowLeft, FolderPlus, Move, Trash2, ExternalLink, Copy, FileText, Folder } from 'lucide-react';
-import Modal from '../Modal';
-import FolderSelector from '../FolderSelector';
+import FolderSelector, { SelectedFolder } from '../FolderSelector';
 
 interface Account {
   id: number;
@@ -68,7 +67,6 @@ const FileManagerTab: React.FC = () => {
   const fetchFiles = useCallback(async (folderId: string) => {
     if (!selectedAccountId) return;
     setLoading(true);
-    console.log(`FileManagerTab: fetchFiles account=${selectedAccountId} folder=${folderId}`);
     try {
       const response = await fetch(`/api/file-manager/list?accountId=${encodeURIComponent(selectedAccountId)}&folderId=${encodeURIComponent(folderId)}`);
       const data = await response.json();
@@ -519,7 +517,13 @@ const FileManagerTab: React.FC = () => {
         accountId={Number(selectedAccountId)}
         accountName={selectedAccount?.username || ''}
         title="选择移动目标目录"
-        onSelect={(folder) => handleMove(folder.id)}
+        onSelect={(folder: SelectedFolder) => {
+          if (folder.accountId !== Number(selectedAccountId)) {
+            alert('不能跨账号移动文件，请选择当前账号下的目标目录');
+            return;
+          }
+          handleMove(folder.id);
+        }}
       />
     </div>
   );

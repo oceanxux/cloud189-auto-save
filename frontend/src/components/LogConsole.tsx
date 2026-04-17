@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, X, RefreshCw, Trash2, Download } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Terminal, Trash2 } from 'lucide-react';
 import Modal from './Modal';
 
 interface LogConsoleProps {
@@ -15,17 +15,25 @@ const LogConsole: React.FC<LogConsoleProps> = ({ isOpen, onClose }) => {
 
   useEffect(() => {
     if (isOpen) {
-      // Connect to SSE
-      const eventSource = new EventSource('/api/logs/stream');
+      const eventSource = new EventSource('/api/logs/events');
       eventSourceRef.current = eventSource;
 
       eventSource.onmessage = (event) => {
-        const newLog = event.data;
-        setLogs(prev => [...prev, newLog].slice(-500)); // Keep last 500 logs
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'history') {
+            setLogs(Array.isArray(data.logs) ? data.logs.slice(-500) : []);
+            return;
+          }
+          if (data.type === 'log' && data.message) {
+            setLogs(prev => [...prev, String(data.message)].slice(-500));
+          }
+        } catch (error) {
+          console.error('解析日志 SSE 消息失败:', error);
+        }
       };
 
-      eventSource.onerror = (err) => {
-        console.error('SSE Error:', err);
+      eventSource.onerror = () => {
         eventSource.close();
       };
 
@@ -89,7 +97,6 @@ const LogConsole: React.FC<LogConsoleProps> = ({ isOpen, onClose }) => {
         ) : (
           logs.map((log, i) => (
             <div key={i} className="py-0.5 border-b border-white/5 last:border-0">
-              <span className="text-slate-500 mr-2">[{new Date().toLocaleTimeString()}]</span>
               {log}
             </div>
           ))

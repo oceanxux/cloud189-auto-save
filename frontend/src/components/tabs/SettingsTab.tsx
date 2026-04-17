@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Bell, MessageSquare, Shield, Globe, Cpu, Database, Save, RefreshCw, Key, Plus, Trash2, X, Settings, PlayCircle, Folder, Send } from 'lucide-react';
 import Modal from '../Modal';
-import FolderSelector from '../FolderSelector';
+import FolderSelector, { SelectedFolder } from '../FolderSelector';
 
 interface CustomPushConfig {
   name: string;
@@ -935,6 +935,7 @@ const SettingsTab: React.FC = () => {
         isOpen={isPushModalOpen} 
         onClose={() => setIsPushModalOpen(false)} 
         title={editingPushIndex !== null ? "编辑推送配置" : "添加推送配置"}
+        footer={null}
       >
         <form onSubmit={handlePushSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -1035,6 +1036,7 @@ const SettingsTab: React.FC = () => {
         isOpen={isRegexModalOpen} 
         onClose={() => setIsRegexModalOpen(false)} 
         title={editingRegexIndex !== null ? "编辑正则预设" : "添加正则预设"}
+        footer={null}
       >
         <form onSubmit={(e) => {
           e.preventDefault();
@@ -1103,7 +1105,8 @@ const SettingsTab: React.FC = () => {
         accountId={Number(settings.task.autoCreate.accountId)}
         accountName={selectedAccount?.username || ''}
         title="选择自动追剧默认保存目录"
-        onSelect={(folder) => {
+        onSelect={(folder: SelectedFolder) => {
+          updateSettings('task.autoCreate.accountId', String(folder.accountId));
           updateSettings('task.autoCreate.targetFolderId', folder.id);
           updateSettings('task.autoCreate.targetFolder', folder.name);
         }}

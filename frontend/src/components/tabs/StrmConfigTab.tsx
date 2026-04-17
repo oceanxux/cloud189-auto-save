@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Link2, MoreVertical, RefreshCw, Edit2, Trash2, Folder, Play, CheckCircle2, AlertCircle, HelpCircle, ChevronLeft, Search, X, Check, FileText } from 'lucide-react';
 import Modal from '../Modal';
-import FolderSelector from '../FolderSelector';
+import FolderSelector, { SelectedFolder } from '../FolderSelector';
 
 interface Account {
   id: number;
@@ -353,52 +353,29 @@ const StrmConfigTab: React.FC = () => {
     fetchFolderEntries(selectorAccountId!, parentFolder?.id || '');
   };
 
-  const handleSelectFolder = (entry?: FolderEntry) => {
-    if (!selectorAccountId) return;
-    
-    let folderId = '';
-    let folderName = '根目录';
-    let folderPath = '/';
-    
-    if (entry) {
-        folderId = entry.id;
-        folderName = entry.name;
-        // Construct path from stack
-        folderPath = '/' + folderStack.map(s => s.name).concat(entry.name).join('/');
-    } else if (folderStack.length > 0) {
-        const last = folderStack[folderStack.length - 1];
-        folderId = last.id;
-        folderName = last.name;
-        folderPath = '/' + folderStack.map(s => s.name).join('/');
-    } else {
-        folderId = '-11'; // Common root ID in this app
-        folderName = '全部文件';
-        folderPath = '/';
-    }
-
+  const handleSelectFolder = (folder: SelectedFolder) => {
     const newDirectories = [...(formData.directories || [])];
-    const exists = newDirectories.findIndex(d => d.accountId === selectorAccountId && d.folderId === folderId);
-    
+    const exists = newDirectories.findIndex(d => d.accountId === folder.accountId && d.folderId === folder.id);
+
     if (exists === -1) {
       newDirectories.push({
-        accountId: selectorAccountId,
-        folderId,
-        name: folderName,
-        path: folderPath
+        accountId: folder.accountId,
+        folderId: folder.id,
+        name: folder.name,
+        path: folder.path
       });
-      
-      // Also ensure this account is selected in accountIds
-      if (!formData.accountIds?.includes(selectorAccountId)) {
+
+      if (!formData.accountIds?.includes(folder.accountId)) {
         setFormData({
           ...formData,
           directories: newDirectories,
-          accountIds: [...(formData.accountIds || []), selectorAccountId]
+          accountIds: [...(formData.accountIds || []), folder.accountId]
         });
       } else {
         setFormData({ ...formData, directories: newDirectories });
       }
     }
-    
+
     setIsFolderSelectorOpen(false);
   };
 
@@ -546,6 +523,7 @@ const StrmConfigTab: React.FC = () => {
         isOpen={isModalOpen} 
         onClose={() => setIsModalOpen(false)} 
         title={editingConfig ? "编辑STRM配置" : "新建STRM配置"}
+        footer={null}
       >
         <form onSubmit={handleSaveConfig} className="space-y-6">
           <div className="space-y-2">
@@ -790,6 +768,7 @@ const StrmConfigTab: React.FC = () => {
         isOpen={isLazyModalOpen} 
         onClose={() => setIsLazyModalOpen(false)} 
         title="懒转存 STRM 生成"
+        footer={null}
       >
         <form onSubmit={handleLazySubmit} className="space-y-6">
           <div className="space-y-2">
@@ -899,9 +878,7 @@ const StrmConfigTab: React.FC = () => {
         title={`选择目录 - ${getAccountLabel(selectorAccountId || 0)}`}
         accountId={selectorAccountId || 0}
         accountName={getAccountLabel(selectorAccountId || 0)}
-        onSelect={(folder) => {
-          handleSelectFolder(folder as unknown as FolderEntry);
-        }}
+        onSelect={handleSelectFolder}
       />
 
       <FolderSelector
@@ -910,9 +887,10 @@ const StrmConfigTab: React.FC = () => {
         title={`选择生成目录`}
         accountId={Number(lazyFormData.accountId)}
         accountName={getAccountLabel(Number(lazyFormData.accountId))}
-        onSelect={(folder) => {
+        onSelect={(folder: SelectedFolder) => {
           setLazyFormData(prev => ({ 
             ...prev, 
+            accountId: String(folder.accountId),
             targetFolderId: folder.id, 
             targetFolder: folder.name 
           }));

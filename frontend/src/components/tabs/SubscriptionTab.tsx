@@ -716,6 +716,7 @@ const SubscriptionTab: React.FC<SubscriptionTabProps> = ({ onTransfer }) => {
         isOpen={isAddResModalOpen}
         onClose={() => setIsAddResModalOpen(false)}
         title="添加订阅资源"
+        footer={null}
       >
         <form id="res-modal-form" onSubmit={handleSaveResource} className="space-y-6">
           <div className="space-y-2">

@@ -17,6 +17,8 @@
     --border-color: #e2e8f0;
     --nav-active-bg: #c2e7ff;
     --nav-active-text: #001d35;
+    --modal-bg: #f8fafd;
+    --modal-border: #e2e8f0;
   }
 
   .dark {
@@ -27,6 +29,8 @@
     --border-color: #334155;
     --nav-active-bg: #0b57d0;
     --nav-active-text: #ffffff;
+    --modal-bg: #0f172a;
+    --modal-border: #334155;
   }
 
   body {
@@ -52,5 +56,59 @@
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
     @apply bg-slate-200 rounded-full dark:bg-slate-700;
+  }
+}
+
+@layer utilities {
+  .dark .bg-white {
+    background-color: #0f172a !important;
+  }
+
+  .dark .bg-slate-50,
+  .dark .bg-slate-50\/50 {
+    background-color: #111827 !important;
+  }
+
+  .dark .bg-slate-100,
+  .dark .bg-slate-100\/50,
+  .dark .bg-\[\#f8fafd\] {
+    background-color: #1f2937 !important;
+  }
+
+  .dark .text-slate-900 {
+    color: #f8fafc !important;
+  }
+
+  .dark .text-slate-800 {
+    color: #e2e8f0 !important;
+  }
+
+  .dark .text-slate-700 {
+    color: #cbd5e1 !important;
+  }
+
+  .dark .text-slate-600 {
+    color: #94a3b8 !important;
+  }
+
+  .dark .text-slate-500 {
+    color: #64748b !important;
+  }
+
+  .dark .border-slate-300,
+  .dark .border-slate-200,
+  .dark .border-slate-100 {
+    border-color: #334155 !important;
+  }
+
+  .dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+    border-color: #334155 !important;
+  }
+
+  .dark .hover\:bg-white:hover,
+  .dark .hover\:bg-slate-50:hover,
+  .dark .hover\:bg-slate-50\/50:hover,
+  .dark .hover\:bg-slate-100:hover {
+    background-color: #334155 !important;
   }
 }

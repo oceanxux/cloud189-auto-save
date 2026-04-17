@@ -11,6 +11,7 @@ interface Account {
 interface Task {
   id: number;
   resourceName: string;
+  shareFolderId?: string;
   shareFolderName?: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   account: Account;
@@ -23,6 +24,14 @@ interface Task {
   totalEpisodes: number | null;
   lastFileUpdateTime: string | null;
   remark?: string;
+  sourceRegex?: string;
+  targetRegex?: string;
+  matchPattern?: string;
+  matchOperator?: string;
+  matchValue?: string;
+  cronExpression?: string;
+  tmdbId?: string;
+  enableTaskScraper?: boolean;
   enableLazyStrm: boolean;
   enableOrganizer: boolean;
   enableCron: boolean;
@@ -49,6 +58,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
       const data = await response.json();
       if (data.success) {
         setTasks(data.data || []);
+        setSelectedTaskIds([]);
       }
     } catch (error) {
       console.error('Failed to fetch tasks:', error);
@@ -104,15 +114,28 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
       id: task.id,
       accountId: String(task.account.id),
       shareLink: task.shareLink,
-      accessCode: '', 
+      accessCode: '',
       taskName: task.resourceName,
       totalEpisodes: task.totalEpisodes ? String(task.totalEpisodes) : '',
-      targetFolderId: task.targetFolderId,
+      currentEpisodes: String(task.currentEpisodes || 0),
+      targetFolderId: task.realFolderId || task.targetFolderId,
+      targetFolder: task.realFolderName || '',
+      shareFolderId: task.shareFolderId || '',
+      shareFolderName: task.shareFolderName || '',
       taskGroup: task.taskGroup || '',
       remark: task.remark || '',
+      matchPattern: task.matchPattern || '',
+      matchOperator: task.matchOperator || '',
+      matchValue: task.matchValue || '',
+      sourceRegex: task.sourceRegex || '',
+      targetRegex: task.targetRegex || '',
+      tmdbId: task.tmdbId || '',
+      status: task.status,
+      cronExpression: task.cronExpression || '',
+      enableTaskScraper: Boolean(task.enableTaskScraper),
       enableLazyStrm: task.enableLazyStrm,
       enableOrganizer: task.enableOrganizer,
-      enableCron: task.enableCron,
+      enableCron: Boolean(task.enableCron)
     });
   };
 

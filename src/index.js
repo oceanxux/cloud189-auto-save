@@ -386,6 +386,18 @@ app.post('/api/auth/login', (req, res) => {
         res.json({ success: false, error: '用户名或密码错误' });
     }
 });
+
+app.post('/api/auth/logout', (req, res) => {
+    req.session.destroy((error) => {
+        if (error) {
+            res.status(500).json({ success: false, error: '退出登录失败' });
+            return;
+        }
+        res.clearCookie('connect.sid');
+        res.json({ success: true });
+    });
+});
+
 app.use(express.static(publicDir));
 // 为所有路由添加认证（除了登录页和登录接口）
 app.use((req, res, next) => {
@@ -625,6 +637,7 @@ AppDataSource.initialize().then(async () => {
             },
             select: {
                 account: {
+                    id: true,
                     username: true,
                     accountType: true
                 }

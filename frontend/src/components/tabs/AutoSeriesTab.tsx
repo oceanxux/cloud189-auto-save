@@ -160,6 +160,7 @@ const AutoSeriesTab: React.FC = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title="添加自动追剧"
+        footer={null}
       >
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-2">

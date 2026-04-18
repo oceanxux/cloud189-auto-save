@@ -18,6 +18,11 @@ FROM node:20-bookworm-slim AS builder
 # 设置工作目录
 WORKDIR /home
 
+# arm64 下 sqlite3 可能回退到 node-gyp 源码编译，这里补齐最小工具链
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3 make g++ && \
+    rm -rf /var/lib/apt/lists/*
+
 # 先复制依赖清单，尽量命中 Docker 层缓存
 COPY package.json yarn.lock ./
 COPY vender/cloud189-sdk/package.json vender/cloud189-sdk/yarn.lock ./vender/cloud189-sdk/

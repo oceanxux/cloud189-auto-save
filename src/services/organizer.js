@@ -7,8 +7,8 @@ const { logTaskEvent } = require('../utils/logUtils');
 
 class OrganizerService {
     constructor(taskService, taskRepo = null) {
-        this.taskService = taskService;
-        this.taskRepo = taskRepo || taskService.taskRepo;
+        this.taskService = taskService || null;
+        this.taskRepo = taskRepo || (taskService && taskService.taskRepo) || null;
         this.tmdbService = new TMDBService();
     }
 

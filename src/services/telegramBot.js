@@ -318,7 +318,7 @@ class TelegramBotService {
             }
             const message = await this.bot.sendMessage(chatId, '开始通知emby...');
             try{
-                const embyService = new EmbyService()                
+                const embyService = new EmbyService(this.taskService)
                 await embyService.notify(task)
                 // 删除消息
                 await this.bot.deleteMessage(chatId, msg.message_id);

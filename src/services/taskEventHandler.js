@@ -130,9 +130,9 @@ class TaskEventHandler {
 
     async _handleEmbyNotification(taskCompleteEventDto) {
         try {
-            const {task} = taskCompleteEventDto;
+            const {task, taskService} = taskCompleteEventDto;
             if (ConfigService.getConfigValue('emby.enable')) {
-                const embyService = new EmbyService();
+                const embyService = new EmbyService(taskService);
                 await embyService.notify(task);
             }
         } catch (error) {

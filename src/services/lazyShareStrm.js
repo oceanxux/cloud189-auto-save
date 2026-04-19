@@ -723,6 +723,18 @@ class LazyShareStrmService {
         }
 
         const pending = (async () => {
+            if (payload.isCas) {
+                const cachedCasInfo = await this._getCachedCasMetadata(payload);
+                if (cachedCasInfo) {
+                    try {
+                        logTaskEvent(`懒转存CAS命中本地元数据缓存，直接秒传恢复: ${payload.fileName}`);
+                        return await this._restoreCasFromMetadata(cloud189, targetFolderId, payload, cachedCasInfo);
+                    } catch (error) {
+                        logTaskEvent(`懒转存CAS直恢复失败，回退分享转存: ${payload.fileName}, 错误: ${error.message}`);
+                    }
+                }
+            }
+
             const submitResult = await this._submitShareSaveTask(cloud189, payload, targetFolderId);
             const transferredFile = await this._waitForTransferredFile(cloud189, targetFolderId, payload.fileName, submitResult);
             if (!payload.isCas) {
@@ -733,6 +745,18 @@ class LazyShareStrmService {
 
         this.transferInflight.set(transferKey, pending);
         return await pending;
+    }
+
+    async _restoreCasFromMetadata(cloud189, targetFolderId, payload, casInfo) {
+        const restoreName = payload.originalFileName || CasService.getOriginalFileName(payload.fileName, casInfo);
+        let restoredFile = await this._findFileByName(cloud189, targetFolderId, restoreName);
+        if (restoredFile) {
+            return restoredFile;
+        }
+
+        await this.casService.restoreFromCas(cloud189, targetFolderId, casInfo, restoreName);
+        restoredFile = await this._waitForTransferredFile(cloud189, targetFolderId, restoreName, {}, 30, 1000);
+        return restoredFile;
     }
 
     async _restoreCasTransferredFile(cloud189, targetFolderId, casFile, payload) {

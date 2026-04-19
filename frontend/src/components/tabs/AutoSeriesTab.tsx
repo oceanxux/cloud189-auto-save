@@ -14,15 +14,23 @@ interface AutoSeriesSettings {
   targetFolder: string;
 }
 
+type AutoSeriesMode = 'normal' | 'lazy';
+
+const DEFAULT_AUTO_SERIES_MODE: AutoSeriesMode = 'lazy';
+
 const AutoSeriesTab: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [defaults, setDefaults] = useState<AutoSeriesSettings | null>(null);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    title: string;
+    year: string;
+    mode: AutoSeriesMode;
+  }>({
     title: '',
     year: '',
-    mode: 'auto'
+    mode: DEFAULT_AUTO_SERIES_MODE
   });
 
   useEffect(() => {
@@ -61,11 +69,12 @@ const AutoSeriesTab: React.FC = () => {
       });
       const data = await response.json();
       if (data.success) {
+        const resultMode: AutoSeriesMode = data.data?.mode === 'normal' ? 'normal' : form.mode;
         alert(data.data?.taskCount > 0 
-          ? `已创建${form.mode === 'lazy' ? '懒转存' : '自动'}任务：${data.data.taskName}`
+          ? `已创建${resultMode === 'lazy' ? '懒转存' : '自动'}任务：${data.data.taskName}`
           : `已生成懒转存STRM：${data.data.taskName}`);
         setIsModalOpen(false);
-        setForm({ title: '', year: '', mode: 'auto' });
+        setForm({ title: '', year: '', mode: DEFAULT_AUTO_SERIES_MODE });
       } else {
         alert('自动追剧失败: ' + data.error);
       }
@@ -190,11 +199,11 @@ const AutoSeriesTab: React.FC = () => {
               <label className="text-sm font-medium text-slate-700">模式</label>
               <select 
                 value={form.mode}
-                onChange={e => setForm({...form, mode: e.target.value})}
+                onChange={e => setForm({...form, mode: e.target.value as AutoSeriesMode})}
                 className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
               >
-                <option value="auto">自动转存 (下载文件)</option>
                 <option value="lazy">懒转存 (生成STRM)</option>
+                <option value="normal">自动转存 (下载文件)</option>
               </select>
             </div>
           </div>

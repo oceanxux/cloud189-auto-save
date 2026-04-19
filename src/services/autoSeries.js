@@ -10,10 +10,10 @@ class AutoSeriesService {
         this.tmdbService = new TMDBService();
     }
 
-    async createByTitle({ title, year = '', mode = 'normal' }) {
+    async createByTitle({ title, year = '', mode = 'lazy' }) {
         const normalizedTitle = String(title || '').trim();
         const normalizedYear = String(year || '').trim();
-        const normalizedMode = String(mode || 'normal').trim();
+        const normalizedMode = this._normalizeMode(mode);
         if (!normalizedTitle) {
             throw new Error('剧名不能为空');
         }
@@ -234,6 +234,11 @@ class AutoSeriesService {
             score += 10;
         }
         return score;
+    }
+
+    _normalizeMode(mode) {
+        const normalizedMode = String(mode || 'lazy').trim().toLowerCase();
+        return normalizedMode === 'auto' ? 'normal' : normalizedMode;
     }
 }
 

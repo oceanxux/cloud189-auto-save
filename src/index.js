@@ -456,9 +456,9 @@ AppDataSource.initialize().then(async () => {
     const botManager = TelegramBotManager.getInstance();
     // 初始化机器人
     await botManager.handleBotStatus(
-        ConfigService.getConfigValue('telegram.bot.botToken'),
-        ConfigService.getConfigValue('telegram.bot.chatId'),
-        ConfigService.getConfigValue('telegram.bot.enable')
+        ConfigService.getConfigValue('telegram.botToken'),
+        ConfigService.getConfigValue('telegram.chatId'),
+        ConfigService.getConfigValue('telegram.enable')
     );
     // 初始化缓存管理器
     const folderCache = new CacheManager(parseInt(600));
@@ -1302,9 +1302,9 @@ AppDataSource.initialize().then(async () => {
         SchedulerService.handleScheduleTasks(settings,taskService);
         ConfigService.setConfig(settings)
         await botManager.handleBotStatus(
-            settings.telegram?.bot?.botToken,
-            settings.telegram?.bot?.chatId,
-            settings.telegram?.bot?.enable
+        settings.telegram?.botToken,
+        settings.telegram?.chatId,
+        settings.telegram?.enable
         );
         // 修改配置, 重新实例化消息推送
         messageUtil.updateConfig()

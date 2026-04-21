@@ -21,6 +21,7 @@ class ConfigService {
         enableOnlySaveMedia: false, // 只保存媒体文件
         // CAS 秒传走家庭中转（个人空间被风控时自动回退）
         enableFamilyTransit: true,
+        enableFamilyTransitFirst: false, 
         // 文件夹不存在时重新创建
         enableAutoCreateFolder: false,
         autoCreate: {

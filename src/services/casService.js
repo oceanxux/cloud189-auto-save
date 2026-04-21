@@ -182,21 +182,29 @@ class CasService {
      * @returns {Promise<object>} { name, size }
      */
     async restoreFromCas(cloud189, parentFolderId, casInfo, restoreName) {
-        logTaskEvent(`[CAS秒传] 开始: ${restoreName} 大小=${casInfo.size} md5=${casInfo.md5}`);
+    logTaskEvent(`[CAS秒传] 开始: ${restoreName} 大小=${casInfo.size} md5=${casInfo.md5}`);
 
-        try {
-            return await this._restorePersonal(cloud189, parentFolderId, casInfo, restoreName);
-        } catch (personalErr) {
-            const transitEnabled = ConfigService.getConfigValue('task.enableFamilyTransit', true);
-            const shouldFallback = transitEnabled && this._shouldFallbackToFamily(personalErr);
-            if (!shouldFallback) {
-                throw personalErr;
-            }
-            logTaskEvent(`[CAS秒传] 个人秒传失败(${personalErr.message || personalErr})，切换家庭中转`);
-            return await this._restoreViaFamily(cloud189, parentFolderId, casInfo, restoreName, personalErr);
-        }
+    const transitFirst = ConfigService.getConfigValue('task.enableFamilyTransitFirst', false);
+    const transitEnabled = ConfigService.getConfigValue('task.enableFamilyTransit', true);
+
+    // 优先走家庭中转
+    if (transitFirst && transitEnabled) {
+        logTaskEvent(`[CAS秒传] 已开启优先家庭中转`);
+        return await this._restoreViaFamily(cloud189, parentFolderId, casInfo, restoreName, null);
     }
 
+    // 默认：先个人，失败再家庭
+    try {
+        return await this._restorePersonal(cloud189, parentFolderId, casInfo, restoreName);
+    } catch (personalErr) {
+        const shouldFallback = transitEnabled && this._shouldFallbackToFamily(personalErr);
+        if (!shouldFallback) {
+            throw personalErr;
+        }
+        logTaskEvent(`[CAS秒传] 个人秒传失败(${personalErr.message || personalErr})，切换家庭中转`);
+        return await this._restoreViaFamily(cloud189, parentFolderId, casInfo, restoreName, personalErr);
+    }
+}
     // 判断是否应触发家庭中转回退：黑名单/风控/403 情形
     _shouldFallbackToFamily(err) {
         if (!err) return false;

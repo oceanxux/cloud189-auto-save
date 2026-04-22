@@ -22,13 +22,12 @@
 ---
 本项目仅供学习交流，请勿用于非法用途。开发者不对任何资源内容负责。
 精力有限，更新速度可能不是很快，敬请谅解。
-问题反馈与功能请求，请提交 [Issues](https://github.com/wobuhui666/cloud189-auto-save/issues) 
 
 ## 核心亮点
 
 **Cloud189 Auto Save** 是一款专为影音爱好者打造的天翼云盘辅助工具。它能够自动监控分享链接的更新并转存到您的网盘，同时生成 `.strm` 文件，让您的本地媒体服务器（如 Emby, Jellyfin, Plex）像播放本地文件一样播放云端资源。
 
-推荐使用修改过的cloudsaver https://github.com/wobuhui666/CloudSaver 支持搜索雷鲸小站和云巢的资源
+推荐使用修改过的[cloudsaver](https://github.com/oceanxux/CloudSaver) 支持搜索雷鲸小站和云巢的资源
 
 ### 自动化与智能
 - **全自动转存**：支持 Cron 定时规则，自动检查分享链接更新并执行转存。
@@ -58,14 +57,14 @@
 docker run -d \
   --name cloud189 \
   --restart unless-stopped \
-  -v /opt/cloud189/data:/home/data \
-  -v /opt/cloud189/strm:/home/strm \
+  -v /mnt/cloud189/data:/home/data \
+  -v /mnt/cloud189/strm:/home/strm \
   -p 3000:3000 \
   -p 8097:8097 \
   -e PUID=0 \
   -e PGID=0 \
   -e DNS_LOOKUP_IP_VERSION=ipv4 \
-  ghcr.io/wobuhui666/cloud189-auto-save:latest
+  ghcr.io/oceanxux/cloud189-auto-save:latest
 ```
 
 > **注意**：
@@ -106,6 +105,7 @@ docker run -d \
 - 感谢
 - Claude Codex GeminiCLI
 - [原版项目](https://github.com/1307super/cloud189-auto-save)
+- [fork wobuhui666佬](https://github.com/wobuhui666/cloud189-auto-save)
 - [my-cloud189-auto-save](https://github.com/ymting/my-cloud189-auto-save)
 - [OpenList](https://github.com/OpenListTeam/OpenList) - 家庭转存参考实现
 - [OpenList-CAS](https://github.com/GitYuA/OpenList-CAS) - CAS 功能参考

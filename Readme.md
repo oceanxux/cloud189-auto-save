@@ -4,18 +4,6 @@
     <p><strong>天翼云盘全自动转存与媒体管理系统</strong></p>
     <p>自动化监控更新、智能重命名、STRM 生成、Emby/Jellyfin 完美联动</p>
     <p align="center">
-        <a href="https://github.com/wobuhui666/cloud189-auto-save/releases/latest">
-            <img src="https://img.shields.io/github/v/release/wobuhui666/cloud189-auto-save?style=flat-square&color=blue" alt="GitHub release">
-        </a>
-        <a href="https://github.com/wobuhui666/cloud189-auto-save/pkgs/container/cloud189-auto-save">
-            <img src="https://img.shields.io/badge/ghcr.io-wobuhui666-blue?style=flat-square&logo=github" alt="GHCR">
-        </a>
-        <a href="https://github.com/wobuhui666/cloud189-auto-save/stargazers">
-            <img src="https://img.shields.io/github/stars/wobuhui666/cloud189-auto-save?style=flat-square" alt="GitHub Stars">
-        </a>
-        <a href="https://github.com/wobuhui666/cloud189-auto-save/blob/main/LICENSE">
-            <img src="https://img.shields.io/github/license/wobuhui666/cloud189-auto-save?style=flat-square" alt="License">
-        </a>
     </p>
 </div>
 

@@ -71,8 +71,20 @@ jobs:
         if: steps.guard.outputs.should_publish == 'true'
         id: version
         run: |
-          npm version patch --no-git-tag-version
-          new_version=$(node -p "require('./package.json').version")
+          current_version=$(node -p "require('./package.json').version")
+          IFS='.' read -r major minor patch <<< "$current_version"
+
+          while true; do
+            patch=$((patch + 1))
+            candidate_version="${major}.${minor}.${patch}"
+            candidate_tag="v${candidate_version}"
+            if ! git rev-parse -q --verify "refs/tags/${candidate_tag}" >/dev/null; then
+              npm version "${candidate_version}" --no-git-tag-version
+              new_version="${candidate_version}"
+              break
+            fi
+          done
+
           echo "version=$new_version" >> "$GITHUB_OUTPUT"
           echo "tag=v$new_version" >> "$GITHUB_OUTPUT"
 

@@ -123,9 +123,14 @@ class TMDBService {
         });
 
         const details = await Promise.all(detailPromises);
+        const validDetails = details.filter(Boolean);
+        if (!validDetails.length) {
+            console.log(`TMDB搜索${type}详情请求全部失败`);
+            return null;
+        }
         
         // 分析最匹配的结果
-        const bestMatch = details.reduce((best, current) => {
+        const bestMatch = validDetails.reduce((best, current) => {
             if (!current) return best;
             let score = 0;
             
@@ -161,6 +166,9 @@ class TMDBService {
         }, null);
 
         console.log(`最佳匹配结果: ${bestMatch?.title}, 分数: ${bestMatch?.score}`);
+        if (!bestMatch?.id) {
+            return null;
+        }
         
         console.log("根据TMDBID获取详情")
         if (type == 'tv') {

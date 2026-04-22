@@ -46,6 +46,8 @@ interface SettingsData {
     mediaSuffix: string;
     enableOnlySaveMedia: boolean;
     enableAutoCreateFolder: boolean;
+    enableFamilyTransit: boolean;
+    enableFamilyTransitFirst: boolean;
     autoCreate: {
       accountId: string;
       targetFolderId: string;
@@ -151,9 +153,11 @@ const initialSettings: SettingsData = {
     enableAutoClearFamilyRecycle: false,
     enableAutoCleanLazyFiles: false,
     lazyFileRetentionHours: 24,
-    mediaSuffix: '.mkv;.iso;.ts;.mp4;.avi;.rmvb;.wmv;.m2ts;.mpg;.flv;.rm;.mov',
+    mediaSuffix: '.mkv;.iso;.ts;.mp4;.avi;.rmvb;.wmv;.m2ts;.mpg;.flv;.rm;.mov;.cas',
     enableOnlySaveMedia: false,
     enableAutoCreateFolder: false,
+    enableFamilyTransit: true,
+    enableFamilyTransitFirst: false,
     autoCreate: { accountId: '', targetFolderId: '', targetFolder: '' }
   },
   wecom: { enable: false, webhook: '' },
@@ -271,11 +275,16 @@ const SettingsTab: React.FC = () => {
       const data = await response.json();
       if (data.success) {
         // Also save regex presets
-        await fetch('/api/settings/regex-presets', {
+        const regexResponse = await fetch('/api/settings/regex-presets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ regexPresets })
         });
+        const regexData = await regexResponse.json();
+        if (!regexData.success) {
+          alert('正则预设保存失败: ' + regexData.error);
+          return;
+        }
         alert('设置已成功保存');
       } else {
         alert('保存失败: ' + data.error);
@@ -544,6 +553,34 @@ const SettingsTab: React.FC = () => {
               <div>
                 <span className="text-sm font-medium text-slate-900">仅转存媒体文件</span>
                 <p className="text-[10px] text-slate-400">跳过图片、文档等非媒体文件</p>
+              </div>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+              <div
+                onClick={() => updateSettings('task.enableFamilyTransit', !settings.task.enableFamilyTransit)}
+                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                  settings.task.enableFamilyTransit ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
+                }`}
+              >
+                {settings.task.enableFamilyTransit && <div className="w-2.5 h-2.5 bg-white rounded-sm" />}
+              </div>
+              <div>
+                <span className="text-sm font-medium text-slate-900">启用家庭云中转</span>
+                <p className="text-[10px] text-slate-400">个人秒传失败时允许回退到家庭云中转</p>
+              </div>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+              <div
+                onClick={() => updateSettings('task.enableFamilyTransitFirst', !settings.task.enableFamilyTransitFirst)}
+                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                  settings.task.enableFamilyTransitFirst ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
+                }`}
+              >
+                {settings.task.enableFamilyTransitFirst && <div className="w-2.5 h-2.5 bg-white rounded-sm" />}
+              </div>
+              <div>
+                <span className="text-sm font-medium text-slate-900">家庭云转存优先</span>
+                <p className="text-[10px] text-slate-400">优先尝试家庭云转存，失败后再回退其他方式</p>
               </div>
             </label>
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">

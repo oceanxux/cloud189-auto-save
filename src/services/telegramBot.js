@@ -13,10 +13,10 @@ const cloud189Utils = require('../utils/Cloud189Utils');
 const { LazyShareStrmService } = require('./lazyShareStrm');
 
 class TelegramBotService {
-    constructor(token, chatId) {
+    constructor(token, chatId, proxyDomain) {
         this.token = token;
-        this.chatId = chatId
-        this.bot = null;
+        this.chatId = chatId;
+        this.proxyDomain = proxyDomain || '';
         this.accountRepo = AppDataSource.getRepository(Account);
         this.commonFolderRepo = AppDataSource.getRepository(CommonFolder);
         this.taskRepo = AppDataSource.getRepository(Task);
@@ -45,6 +45,17 @@ class TelegramBotService {
         this.cloudSaverSearchMap = new Map();
 
         this.tmdbService = new TMDBService();
+
+        // 批量重命名状态机
+        // step: null | 'folder' | 'tmdb' | 'confirm'
+        this.renameState = {
+            step: null,
+            folderId: null,
+            folderPath: '',
+            tmdbResults: [],       // TMDB 搜索结果列表
+            selectedTitle: null,   // 最终确定的剧名
+            plans: [],             // [{ fileId, oldName, newName }]
+        };
     }
 
     async start() {
@@ -53,20 +64,24 @@ class TelegramBotService {
         }
         // 从配置文件获取代理
         const proxy = ProxyUtil.getProxy('telegram');
-        this.bot = new TelegramBot(this.token, { 
-            polling: true, 
+        const botOptions = {
+            polling: true,
             request: {
                 proxy: proxy,
                 agentOptions: {
                     keepAlive: true,
                     family: 4,
-                    timeout:  30000 // 10秒超时
+                    timeout: 30000
                 },
-                timeout: 30000, // 请求超时时间
-                forever: true, // 保持连接
-                retries: 3 // 添加重试次数
-            } 
-        });
+                timeout: 30000,
+                forever: true,
+                retries: 3
+            }
+        };
+        if (this.proxyDomain) {
+            botOptions.baseApiUrl = `https://${this.proxyDomain}`;
+        }
+        this.bot = new TelegramBot(this.token, botOptions);
 
         // 添加错误处理
         this.bot.on('polling_error', (error) => {
@@ -76,7 +91,7 @@ class TelegramBotService {
         this.bot.on('error', (error) => {
             console.error('Telegram Bot error:', error.message);
         });
-        
+
         // 设置命令菜单
         await this.bot.setMyCommands([
             { command: 'help', description: '帮助信息' },
@@ -88,6 +103,7 @@ class TelegramBotService {
             { command: 'execute_all', description: '执行所有任务' },
             { command: 'fl', description: '常用目录列表' },
             { command: 'fs', description: '添加常用目录' },
+            { command: 'rename', description: '批量剧集重命名' },
             { command: 'cancel', description: '取消当前操作' }
         ]);
         // 从数据库中加载默认的账号
@@ -129,7 +145,7 @@ class TelegramBotService {
 
     initCommands() {
         this.bot.onText(/\/help/, async (msg) => {
-            const helpText = 
+            const helpText =
                 '🤖 天翼云盘机器人使用指南\n\n' +
                 '📋 基础命令：\n' +
                 '/help - 显示帮助信息\n' +
@@ -167,11 +183,18 @@ class TelegramBotService {
 
         this.bot.on('message', async (msg) => {
             const chatId = msg.chat.id;
-            if (!this._checkChatId(chatId)){
+            if (!this._checkChatId(chatId)) {
                 return;
             }
             // 忽略命令消息
             if (msg.text?.startsWith('/')) return;
+
+            // ── 批量重命名状态机 ──
+            if (this.renameState.step === 'tmdb') {
+                await this._handleRenameInput(chatId, msg.text?.trim());
+                return;
+            }
+
             // 搜索模式下处理消息
             if (this.isSearchMode) {
                 const input = msg.text?.trim();
@@ -188,8 +211,8 @@ class TelegramBotService {
                         // 处理分享链接
                         await this.handleFolderSelection(chatId, shareLink, null, accessCode);
                         return
-                    }catch(e){
-                        this.bot.sendMessage(chatId, `处理失败: ${error.message}`);
+                    } catch (e) {
+                        this.bot.sendMessage(chatId, `处理失败: ${e.message}`);
                         return;
                     }
                 }
@@ -199,7 +222,7 @@ class TelegramBotService {
 
         this.bot.onText(/cloud\.189\.cn/, async (msg) => {
             const chatId = msg.chat.id;
-            if (!this._checkChatId(chatId)){
+            if (!this._checkChatId(chatId)) {
                 return;
             }
             // 如果处于搜索模式，则不处理
@@ -250,13 +273,13 @@ class TelegramBotService {
             const chatId = msg.chat.id;
             const taskId = match[1];
             if (!this._checkChatId(chatId)) return
-            if(!this._checkTaskId(taskId)) return;
+            if (!this._checkTaskId(taskId)) return;
             const message = await this.bot.sendMessage(chatId, `任务开始执行`);
-            try{
-                await this.taskService.processAllTasks(true, [taskId])   
+            try {
+                await this.taskService.processAllTasks(true, [taskId])
                 this.bot.deleteMessage(chatId, message.message_id);
                 await this.bot.sendMessage(chatId, `任务执行完成`);
-            }catch(e){
+            } catch (e) {
                 await this.bot.editMessageText(`任务执行失败: ${e.message}`, {
                     chat_id: chatId,
                     message_id: message.message_id
@@ -276,7 +299,7 @@ class TelegramBotService {
                     chat_id: chatId,
                     message_id: message.message_id
                 });
-            } catch(e) {
+            } catch (e) {
                 await this.bot.editMessageText(`任务执行失败: ${e.message}`, {
                     chat_id: chatId,
                     message_id: message.message_id
@@ -289,16 +312,16 @@ class TelegramBotService {
             const chatId = msg.chat.id;
             const taskId = match[1];
             if (!this._checkChatId(chatId)) return
-            if(!this._checkTaskId(taskId)) return;
+            if (!this._checkTaskId(taskId)) return;
             const task = await this.taskService.getTaskById(taskId);
             if (!task) {
                 await this.bot.sendMessage(chatId, '未找到该任务');
                 return;
             }
             const message = await this.bot.sendMessage(chatId, '开始生成strm...');
-            try{
+            try {
                 this.taskService._createStrmFileByTask(task, false);
-            }catch(e){
+            } catch (e) {
                 await this.bot.sendMessage(chatId, `生成strm失败: ${e.message}`);
                 return;
             }
@@ -310,19 +333,19 @@ class TelegramBotService {
             const chatId = msg.chat.id;
             const taskId = match[1];
             if (!this._checkChatId(chatId)) return
-            if(!this._checkTaskId(taskId)) return;
+            if (!this._checkTaskId(taskId)) return;
             const task = await this.taskService.getTaskById(taskId);
             if (!task) {
                 await this.bot.sendMessage(chatId, '未找到该任务');
                 return;
             }
             const message = await this.bot.sendMessage(chatId, '开始通知emby...');
-            try{
+            try {
                 const embyService = new EmbyService(this.taskService)
                 await embyService.notify(task)
                 // 删除消息
                 await this.bot.deleteMessage(chatId, msg.message_id);
-            }catch(e){
+            } catch (e) {
                 await this.bot.sendMessage(chatId, `通知失败: ${e.message}`);
                 return;
             }
@@ -350,7 +373,7 @@ class TelegramBotService {
             const folderId = match[1];
             if (!this._checkChatId(chatId)) return
             if (!this._checkUserId(chatId)) return
-          
+
             try {
                 await this.commonFolderRepo.delete({
                     id: folderId,
@@ -370,10 +393,10 @@ class TelegramBotService {
             if (this.isSearchMode) {
                 await this.bot.sendMessage(chatId, '当前已处于搜索模式, 请直接输入关键字搜索资源\n输入 /cancel 退出搜索模式');
                 return;
-            } 
+            }
             if (!this._checkUserId(chatId)) return;
             // 判断用户是否开启了CloudSaver
-            if (!this.cloudSaverSdk.enabled){
+            if (!this.cloudSaverSdk.enabled) {
                 await this.bot.sendMessage(chatId, '未开启CloudSaver, 请先在网页端配置CloudSaver');
                 return;
             }
@@ -398,6 +421,7 @@ class TelegramBotService {
             this.currentShareLink = null;
             this.currentAccessCode = null;
             this.isSearchMode = false;  // 退出搜索模式
+            this._resetRenameState();  // 退出重命名模式
             try {
                 if (this.lastButtonMessageId) {
                     await this.bot.deleteMessage(chatId, this.lastButtonMessageId);
@@ -406,8 +430,19 @@ class TelegramBotService {
             } catch (error) {
                 console.error('删除消息失败:', error);
             }
-            
+
             await this.bot.sendMessage(chatId, '已取消当前操作');
+        });
+
+        // 批量重命名命令
+        this.bot.onText(/\/rename/, async (msg) => {
+            const chatId = msg.chat.id;
+            if (!this._checkChatId(chatId)) return;
+            if (!this._checkUserId(chatId)) return;
+            this._resetRenameState();
+            this.renameState.step = 'folder';
+            // 复用 showFolderTree，但"确认"按钮走重命名流程
+            await this._showRenameFolderTree(chatId);
         });
 
         // 修改回调处理
@@ -423,7 +458,7 @@ class TelegramBotService {
                         break;
                     case 'of': // 覆盖文件夹
                         if (!data.o) {
-                            await this.bot.editMessageText("已取消任务创建",{
+                            await this.bot.editMessageText("已取消任务创建", {
                                 chat_id: chatId,
                                 message_id: messageId
                             });
@@ -439,7 +474,7 @@ class TelegramBotService {
                         break;
                     case 'dt': // 删除任务
                         if (!data.c) {
-                            await this.bot.editMessageText("已取消删除",{
+                            await this.bot.editMessageText("已取消删除", {
                                 chat_id: chatId,
                                 message_id: messageId
                             });
@@ -448,13 +483,36 @@ class TelegramBotService {
                         await this.deleteTask(chatId, data, messageId);
                         break;
                     case 'fd': // 进入下一级目录
-                        await this.showFolderTree(chatId, data, messageId);
+                        if (this.renameState.step === 'folder') {
+                            await this._showRenameFolderTree(chatId, data, messageId);
+                        } else {
+                            await this.showFolderTree(chatId, data, messageId);
+                        }
                         break;
                     case 'fc': // 取消操作
+                        if (this.renameState.step === 'folder') {
+                            this._resetRenameState();
+                        }
                         await this.bot.deleteMessage(chatId, messageId);
                         break;
                     case 'fs': // 保存当前目录
                         await this.saveFolderAsFavorite(chatId, data, messageId);
+                        break;
+                    case 'rn_folder': // 重命名：确认文件夹
+                        await this._onRenameFolderConfirm(chatId, data, messageId);
+                        break;
+                    case 'rn_pick': // 重命名：从TMDB结果选择
+                        await this._onRenameTmdbPick(chatId, data, messageId);
+                        break;
+                    case 'rn_confirm': // 重命名：最终执行确认
+                        await this._onRenameExecute(chatId, messageId);
+                        break;
+                    case 'rn_cancel': // 重命名：取消
+                        this._resetRenameState();
+                        await this.bot.editMessageText('已取消重命名', {
+                            chat_id: chatId,
+                            message_id: messageId
+                        });
                         break;
                 }
             } catch (error) {
@@ -489,10 +547,10 @@ class TelegramBotService {
                 if (results.movies.length > 0) {
                     responseText += '📽 电影：\n\n';
                     results.movies.forEach(movie => {
-                        const shortOverview = movie.overview ? 
-                            (movie.overview.length > 20 ? movie.overview.substring(0, 20) + '...' : movie.overview) : 
+                        const shortOverview = movie.overview ?
+                            (movie.overview.length > 20 ? movie.overview.substring(0, 20) + '...' : movie.overview) :
                             '暂无';
-                        
+
                         responseText += `标题：${movie.title}\n` +
                             `原标题：${movie.originalTitle}\n` +
                             `上映日期：${movie.releaseDate}\n` +
@@ -504,8 +562,8 @@ class TelegramBotService {
                 if (results.tvShows.length > 0) {
                     responseText += '📺 剧集：\n\n';
                     results.tvShows.forEach(show => {
-                        const shortOverview = show.overview ? 
-                            (show.overview.length > 20 ? show.overview.substring(0, 20) + '...' : show.overview) : 
+                        const shortOverview = show.overview ?
+                            (show.overview.length > 20 ? show.overview.substring(0, 20) + '...' : show.overview) :
                             '暂无';
 
                         responseText += `标题：${show.title}\n` +
@@ -535,7 +593,7 @@ class TelegramBotService {
     }
 
     async showAccounts(chatId, messageId = null) {
-        if (!this._checkChatId(chatId)){
+        if (!this._checkChatId(chatId)) {
             return;
         }
         const accounts = await this.accountRepo.find();
@@ -561,7 +619,7 @@ class TelegramBotService {
     async showTasks(chatId, page = 1, messageId = null) {
         const pageSize = 5;
         const skip = (page - 1) * pageSize;
-        
+
         const [tasks, total] = await this.taskRepo.findAndCount({
             order: { updatedAt: 'DESC' },
             take: pageSize,
@@ -569,8 +627,8 @@ class TelegramBotService {
         });
 
         const totalPages = Math.ceil(total / pageSize);
-        
-        const taskList = tasks.map(task => 
+
+        const taskList = tasks.map(task =>
             `📺 ${task.resourceName}\n` +
             `⏱ 进度：${task.currentEpisodes}${task.totalEpisodes ? '/' + task.totalEpisodes : ''} 集\n` +
             `🔄 状态：${this.formatStatus(task.status)}\n` +
@@ -605,8 +663,8 @@ class TelegramBotService {
             keyboard.push(pageButtons);
         }
 
-        const message = tasks.length > 0 ? 
-            `📋 任务列表 (第${page}页):\n\n${taskList}` : 
+        const message = tasks.length > 0 ?
+            `📋 任务列表 (第${page}页):\n\n${taskList}` :
             '📭 暂无任务';
 
         if (messageId) {
@@ -646,7 +704,7 @@ class TelegramBotService {
                 await this.bot.sendMessage(chatId, `账号[${data.a}]已被选中`);
                 await this.bot.deleteMessage(chatId, messageId);
                 return;
-            } 
+            }
             this.currentAccountId = accountId;
             // 获取账号信息
             const account = await this.accountRepo.findOneBy({ id: accountId });
@@ -665,11 +723,11 @@ class TelegramBotService {
         }
     }
 
-    async handleFolderSelection(chatId, shareLink, messageId = null,accessCode) {
+    async handleFolderSelection(chatId, shareLink, messageId = null, accessCode) {
         const folders = await this.commonFolderRepo.find({ where: { accountId: this.currentAccountId } });
-        
+
         if (folders.length === 0) {
-            const keyboard = [[{ 
+            const keyboard = [[{
                 text: '📁 添加常用目录',
                 callback_data: JSON.stringify({ t: 'fd', f: '-11' })
             }]];
@@ -682,7 +740,7 @@ class TelegramBotService {
                 });
                 this.globalCommonFolderListMessageId = null
             } else {
-                await this.bot.sendMessage(chatId, message, {reply_markup: { inline_keyboard: keyboard }});
+                await this.bot.sendMessage(chatId, message, { reply_markup: { inline_keyboard: keyboard } });
             }
             return;
         }
@@ -691,18 +749,18 @@ class TelegramBotService {
         this.currentAccessCode = accessCode;
         let taskName = ""
         // 解析链接
-        try{
+        try {
             const shareFolders = await this.taskService.parseShareFolderByShareLink(shareLink, this.currentAccountId, accessCode);
             taskName = shareFolders[0].name;
-        }catch(e){
+        } catch (e) {
             await this.bot.sendMessage(chatId, `解析分享链接失败: ${e.message}`);
             return;
         }
-    
+
         const keyboard = folders.map(folder => [{
-            text: folder.path.length > 30 ? 
-                  '.../' + folder.path.split('/').slice(-2).join('/') : 
-                  folder.path,
+            text: folder.path.length > 30 ?
+                '.../' + folder.path.split('/').slice(-2).join('/') :
+                folder.path,
             callback_data: JSON.stringify({
                 t: 'f',               // type
                 f: folder.id,   // folderId
@@ -739,7 +797,7 @@ class TelegramBotService {
                 return
             }
             // 发送任务创建中消息
-            const message = await this.bot.editMessageText('任务创建中...',{
+            const message = await this.bot.editMessageText('任务创建中...', {
                 chat_id: chatId,
                 message_id: messageId
             });
@@ -759,8 +817,8 @@ class TelegramBotService {
                 chat_id: chatId,
                 message_id: message.message_id
             });
-            if(taskIds.length > 0) {
-                await this.taskService.processAllTasks(true, taskIds)   
+            if (taskIds.length > 0) {
+                await this.taskService.processAllTasks(true, taskIds)
             }
             this.bot.deleteMessage(chatId, message.message_id);
             // 发送任务执行完成消息
@@ -783,7 +841,7 @@ class TelegramBotService {
                     }
                 });
                 return;
-            }else{
+            } else {
                 await this.bot.editMessageText(`任务创建失败: ${error.message}`, {
                     chat_id: chatId,
                     message_id: messageId
@@ -796,10 +854,10 @@ class TelegramBotService {
         }
     }
 
-    async deleteTask(chatId,data,messageId) {
-        try{
+    async deleteTask(chatId, data, messageId) {
+        try {
             // 判断data.i是否为数字
-            if(isNaN(data.i)) {
+            if (isNaN(data.i)) {
                 await this.bot.editMessageText('任务ID无效', {
                     chat_id: chatId,
                     message_id: messageId
@@ -807,7 +865,7 @@ class TelegramBotService {
                 return;
             }
             // 发送任务删除中消息
-            await this.bot.editMessageText('任务删除中...',{
+            await this.bot.editMessageText('任务删除中...', {
                 chat_id: chatId,
                 message_id: messageId
             });
@@ -819,7 +877,7 @@ class TelegramBotService {
             });
             // 刷新任务列表
             setTimeout(() => this.showTasks(chatId, 1), 800);
-        }catch(e) {
+        } catch (e) {
             this.bot.editMessageText(`任务删除失败: ${e.message}`, {
                 chat_id: chatId,
                 message_id: messageId
@@ -828,15 +886,15 @@ class TelegramBotService {
     }
 
     async showCommonFolders(chatId, messageId = null) {
-        const folders = await this.commonFolderRepo.find({ 
-            where: { 
-                accountId: this.currentAccountId 
+        const folders = await this.commonFolderRepo.find({
+            where: {
+                accountId: this.currentAccountId
             },
             order: {
                 path: 'ASC'
             }
         });
-        const keyboard = [[{ 
+        const keyboard = [[{
             text: '📁 添加常用目录',
             callback_data: JSON.stringify({ t: 'fd', f: '-11' })
         }]];
@@ -849,17 +907,17 @@ class TelegramBotService {
                     reply_markup: { inline_keyboard: keyboard }
                 });
                 this.globalCommonFolderListMessageId = null
-            } else { 
+            } else {
                 if (this.globalCommonFolderListMessageId) {
                     await this.bot.deleteMessage(chatId, this.globalCommonFolderListMessageId);
                     this.globalCommonFolderListMessageId = null;
                 }
-                await this.bot.sendMessage(chatId, message,{reply_markup: { inline_keyboard: keyboard }});
+                await this.bot.sendMessage(chatId, message, { reply_markup: { inline_keyboard: keyboard } });
             }
             return;
         }
 
-        const folderList = folders.map(folder => 
+        const folderList = folders.map(folder =>
             `📁 ${folder.path}\n❌ 删除: /df_${folder.id}`
         ).join('\n\n');
 
@@ -875,7 +933,7 @@ class TelegramBotService {
             if (this.globalCommonFolderListMessageId) {
                 await this.bot.deleteMessage(chatId, this.globalCommonFolderListMessageId);
             }
-            const newMessage = await this.bot.sendMessage(chatId, message,{reply_markup: { inline_keyboard: keyboard }});
+            const newMessage = await this.bot.sendMessage(chatId, message, { reply_markup: { inline_keyboard: keyboard } });
             this.globalCommonFolderListMessageId = newMessage.message_id;
         }
     }
@@ -885,14 +943,14 @@ class TelegramBotService {
             let folderId = data?.f || '-11';
             if (!this._checkUserId(chatId)) return;
             if (data?.r) {
-               // 返回上一级目录，从记录的父级ID中获取
-               const parentId = Array.from(this.parentFolderIds).pop() || '-11';
-               this.parentFolderIds.delete(parentId);
-               const path = this.currentFolderPath.split('/').filter(Boolean);
-               path.pop();
-               path.pop();
-               this.currentFolderPath = path.join('/');
-               folderId = parentId;
+                // 返回上一级目录，从记录的父级ID中获取
+                const parentId = Array.from(this.parentFolderIds).pop() || '-11';
+                this.parentFolderIds.delete(parentId);
+                const path = this.currentFolderPath.split('/').filter(Boolean);
+                path.pop();
+                path.pop();
+                this.currentFolderPath = path.join('/');
+                folderId = parentId;
             } else if (folderId !== '-11') {
                 // 非根目录时记录父级ID
                 const folder = this.folders.get(folderId);
@@ -925,7 +983,7 @@ class TelegramBotService {
             }
 
             const keyboard = [];
-            
+
             // 添加文件夹按钮
             for (const folder of folders) {
                 keyboard.push([{
@@ -937,7 +995,7 @@ class TelegramBotService {
                 }]);
                 this.folders.set(folder.id, folder);
             }
-            
+
             // 添加操作按钮
             keyboard.push([
                 {
@@ -954,7 +1012,7 @@ class TelegramBotService {
                 }] : []),
                 {
                     text: '✅ 确认',
-                    callback_data: JSON.stringify({ 
+                    callback_data: JSON.stringify({
                         t: 'fs',
                         f: folderId
                     })
@@ -983,7 +1041,7 @@ class TelegramBotService {
 
     async saveFolderAsFavorite(chatId, data, messageId) {
         try {
-            let currentPath = this.currentFolderPath|| '';
+            let currentPath = this.currentFolderPath || '';
 
             // 校验目录是否已经是常用目录
             const existingFavorite = await this.commonFolderRepo.findOne({
@@ -1002,7 +1060,7 @@ class TelegramBotService {
             }
             if (currentPath === '' || currentPath === '/') {
                 currentPath = '/';
-            }else{
+            } else {
                 currentPath = currentPath.replace(/^\/|\/$/g, '');
             }
             const favorite = {
@@ -1011,13 +1069,13 @@ class TelegramBotService {
                 path: currentPath,
                 name: currentPath.split('/').pop() || '根目录'
             };
-            
+
             await this.commonFolderRepo.save(favorite);
             await this.bot.editMessageText(`已将 ${currentPath || '根目录'} 添加到常用目录`, {
                 chat_id: chatId,
                 message_id: messageId
             });
-            
+
         } catch (error) {
             throw new Error(`保存常用目录失败: ${error.message}`);
         }
@@ -1044,7 +1102,7 @@ class TelegramBotService {
             });
             const results = `💡 以下资源来自 CloudSaver\n` +
                 `📝 共找到 ${result.length} 个结果,输入编号可转存\n` +
-                result.map((item, index) => 
+                result.map((item, index) =>
                     `${index + 1}. 🎬 <a href="${item.cloudLinks[0].link}">${item.title}</a>`
                 ).join('\n\n');
             await this.bot.editMessageText(`搜索结果：\n\n${results}`, {
@@ -1107,7 +1165,7 @@ class TelegramBotService {
 
     // 校验任务id
     _checkTaskId(taskId) {
-        if(isNaN(taskId)) {
+        if (isNaN(taskId)) {
             this.bot.editMessageText('任务ID无效', {
                 chat_id: chatId,
                 message_id: messageId
@@ -1118,7 +1176,7 @@ class TelegramBotService {
     }
     // 校验当前是否有用户id
     _checkUserId(chatId) {
-        if(!this.currentAccountId) {
+        if (!this.currentAccountId) {
             this.bot.sendMessage(chatId, '请先使用 /accounts 选择账号');
             return false;
         }
@@ -1131,7 +1189,7 @@ class TelegramBotService {
     }
     // 获取当前已脱敏的用户名
     _getDesensitizedUserName() {
-       return this.currentAccount.username.replace(/(.{3}).*(.{4})/, '$1****$2');
+        return this.currentAccount.username.replace(/(.{3}).*(.{4})/, '$1****$2');
     }
 
     // 在类的底部添加新的辅助方法
@@ -1140,7 +1198,7 @@ class TelegramBotService {
         if (this.searchModeTimeout) {
             clearTimeout(this.searchModeTimeout);
         }
-        
+
         // 设置新的超时计时器
         this.searchModeTimeout = setTimeout(async () => {
             if (this.isSearchMode) {
@@ -1149,6 +1207,312 @@ class TelegramBotService {
                 await this.bot.sendMessage(chatId, '长时间未搜索，已自动退出搜索模式');
             }
         }, 3 * 60 * 1000);  // 3分钟
+    }
+
+    // ==================== 批量重命名 ====================
+
+    _resetRenameState() {
+        this.renameState = {
+            step: null,
+            folderId: null,
+            folderPath: '',
+            tmdbResults: [],
+            selectedTitle: null,
+            plans: [],
+        };
+    }
+
+    // 解析文件名里的 S01E01 / 1x01
+    _extractSE(filename) {
+        let m = filename.match(/S(\d{1,2})E(\d{1,3})/i);
+        if (m) {
+            const s = String(parseInt(m[1])).padStart(2, '0');
+            const e = String(parseInt(m[2])).padStart(2, '0');
+            return `S${s}E${e}`;
+        }
+        m = filename.match(/(\d{1,2})x(\d{1,3})/i);
+        if (m) {
+            const s = String(parseInt(m[1])).padStart(2, '0');
+            const e = String(parseInt(m[2])).padStart(2, '0');
+            return `S${s}E${e}`;
+        }
+        return null;
+    }
+
+    _extractExt(filename) {
+        const m = filename.match(/(\.[a-z0-9]{2,6})$/i);
+        return m ? m[1] : '';
+    }
+
+    // 根据剧名+文件列表生成重命名计划
+    _buildRenamePlans(seriesTitle, files) {
+        return files
+            .map(f => {
+                const se = this._extractSE(f.name);
+                if (!se) return null;
+                const ext = this._extractExt(f.name);
+                return { fileId: f.id, oldName: f.name, newName: `${seriesTitle} - ${se}${ext}` };
+            })
+            .filter(Boolean)
+            .filter(p => p.oldName !== p.newName);
+    }
+
+    // 显示重命名专用文件夹浏览器（复用 showFolderTree 的 UI，"确认"走重命名流程）
+    async _showRenameFolderTree(chatId, data = null, messageId = null) {
+        try {
+            let folderId = data?.f || '-11';
+
+            if (data?.r) {
+                const parentId = Array.from(this.parentFolderIds).pop() || '-11';
+                this.parentFolderIds.delete(parentId);
+                const pathParts = this.currentFolderPath.split('/').filter(Boolean);
+                pathParts.pop();
+                this.currentFolderPath = pathParts.length ? '/' + pathParts.join('/') : '/';
+                folderId = parentId;
+            } else if (folderId !== '-11') {
+                const folder = this.folders.get(folderId);
+                if (folder?.pId) this.parentFolderIds.add(folder.pId);
+            }
+
+            const cloud189 = Cloud189Service.getInstance(this.currentAccount);
+            const folders = await cloud189.getFolderNodes(folderId);
+            if (!folders) {
+                await this.bot.sendMessage(chatId, '获取文件夹列表失败');
+                return;
+            }
+
+            this.currentFolderId = folderId;
+            if (folderId === '-11') {
+                this.currentFolderPath = '/';
+            } else {
+                const folderName = this.folders.get(folderId)?.name || '';
+                if (folderName) {
+                    this.currentFolderPath = (this.currentFolderPath === '/' ? '' : this.currentFolderPath) + '/' + folderName;
+                }
+            }
+            this.renameState.folderId = folderId;
+            this.renameState.folderPath = this.currentFolderPath;
+
+            const keyboard = [];
+            for (const folder of folders) {
+                keyboard.push([{
+                    text: `📁 ${folder.name}`,
+                    callback_data: JSON.stringify({ t: 'fd', f: folder.id })
+                }]);
+                this.folders.set(folder.id, folder);
+            }
+            keyboard.push([
+                { text: '❌ 取消', callback_data: JSON.stringify({ t: 'fc' }) },
+                ...(folderId !== '-11' ? [{
+                    text: '🔄 返回',
+                    callback_data: JSON.stringify({ t: 'fd', f: folders[0]?.pId || '-11', r: true })
+                }] : []),
+                { text: '✅ 选此目录', callback_data: JSON.stringify({ t: 'rn_folder', f: folderId }) }
+            ]);
+
+            const message = `🔤 批量重命名 — 选择文件夹\n当前路径: ${this.currentFolderPath}`;
+            if (messageId) {
+                await this.bot.editMessageText(message, {
+                    chat_id: chatId, message_id: messageId,
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            } else {
+                await this.bot.sendMessage(chatId, message, {
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            }
+        } catch (e) {
+            this.bot.sendMessage(chatId, `获取目录失败: ${e.message}`);
+        }
+    }
+
+    // 用户点击"选此目录"后，提示输入剧名或TMDB ID
+    async _onRenameFolderConfirm(chatId, data, messageId) {
+        this.renameState.folderId = data.f;
+        this.renameState.step = 'tmdb';
+        await this.bot.editMessageText(
+            `📂 已选择目录: ${this.renameState.folderPath || '根目录'}\n\n` +
+            `请输入剧名或 TMDB ID（直接回复）：\n` +
+            `例如：剑来 / 120分钟 / 12345\n\n` +
+            `输入 /cancel 取消`,
+            { chat_id: chatId, message_id: messageId }
+        );
+    }
+
+    // 接收用户输入的剧名/TMDB ID
+    async _handleRenameInput(chatId, input) {
+        if (!input) return;
+
+        const waitMsg = await this.bot.sendMessage(chatId, '🔍 正在搜索 TMDB...');
+        try {
+            let title = null;
+            let tmdbId = null;
+
+            // 判断是否为纯数字 TMDB ID
+            if (/^\d+$/.test(input)) {
+                tmdbId = parseInt(input);
+                const detail = await this.tmdbService.getTVDetails(tmdbId);
+                if (detail?.title) {
+                    title = detail.title;
+                    await this.bot.editMessageText(
+                        `✅ 找到剧集：${title}\n将重命名为：${title} - S01E01.mkv 格式\n\n读取文件列表中...`,
+                        { chat_id: chatId, message_id: waitMsg.message_id }
+                    );
+                    await this._proceedWithTitle(chatId, waitMsg.message_id, title);
+                    return;
+                } else {
+                    throw new Error(`TMDB ID ${tmdbId} 未找到剧集`);
+                }
+            }
+
+            // 关键字搜索
+            const results = await this.tmdbService.search(input);
+            const allResults = [
+                ...results.tvShows.map(r => ({ ...r, label: `📺 ${r.title}（${r.releaseDate?.slice(0, 4) || '?'}）` })),
+                ...results.movies.map(r => ({ ...r, label: `🎬 ${r.title}（${r.releaseDate?.slice(0, 4) || '?'}）` })),
+            ].slice(0, 5);
+
+            if (!allResults.length) {
+                // 没有TMDB结果，直接用输入的文字作为剧名
+                await this.bot.editMessageText(
+                    `⚠️ TMDB 未找到「${input}」，直接使用该名称重命名。`,
+                    { chat_id: chatId, message_id: waitMsg.message_id }
+                );
+                await this._proceedWithTitle(chatId, waitMsg.message_id, input);
+                return;
+            }
+
+            if (allResults.length === 1) {
+                // 只有一个结果，直接用
+                await this.bot.editMessageText(
+                    `✅ 唯一匹配：${allResults[0].title}，读取文件列表中...`,
+                    { chat_id: chatId, message_id: waitMsg.message_id }
+                );
+                await this._proceedWithTitle(chatId, waitMsg.message_id, allResults[0].title);
+                return;
+            }
+
+            // 多个结果，让用户选
+            this.renameState.tmdbResults = allResults;
+            const keyboard = allResults.map((r, i) => ([{
+                text: r.label,
+                callback_data: JSON.stringify({ t: 'rn_pick', i })
+            }]));
+            keyboard.push([{ text: `✏️ 直接用「${input}」`, callback_data: JSON.stringify({ t: 'rn_pick', i: -1, raw: input }) }]);
+            keyboard.push([{ text: '❌ 取消', callback_data: JSON.stringify({ t: 'rn_cancel' }) }]);
+
+            await this.bot.editMessageText(
+                `找到 ${allResults.length} 个结果，请选择正确的剧集：`,
+                { chat_id: chatId, message_id: waitMsg.message_id, reply_markup: { inline_keyboard: keyboard } }
+            );
+            this.renameState.step = 'confirm';
+
+        } catch (e) {
+            await this.bot.editMessageText(`搜索失败: ${e.message}`, {
+                chat_id: chatId, message_id: waitMsg.message_id
+            });
+            this._resetRenameState();
+        }
+    }
+
+    // 用户从TMDB列表点选某一个
+    async _onRenameTmdbPick(chatId, data, messageId) {
+        let title;
+        if (data.i === -1) {
+            title = data.raw;
+        } else {
+            title = this.renameState.tmdbResults[data.i]?.title;
+        }
+        if (!title) {
+            await this.bot.editMessageText('选择无效，请重试', { chat_id: chatId, message_id: messageId });
+            return;
+        }
+        await this._proceedWithTitle(chatId, messageId, title);
+    }
+
+    // 拿到剧名后，读取文件列表并生成预览
+    async _proceedWithTitle(chatId, messageId, title) {
+        try {
+            const cloud189 = Cloud189Service.getInstance(this.currentAccount);
+            const resp = await cloud189.listFiles(this.renameState.folderId || '-11');
+            const files = resp?.fileListAO?.fileList || [];
+
+            if (!files.length) {
+                await this.bot.editMessageText('该目录下没有找到文件', { chat_id: chatId, message_id: messageId });
+                this._resetRenameState();
+                return;
+            }
+
+            const plans = this._buildRenamePlans(title, files);
+            if (!plans.length) {
+                await this.bot.editMessageText(
+                    `⚠️ 在 ${files.length} 个文件中未识别到 S01E01 格式的集数编号，无法重命名。`,
+                    { chat_id: chatId, message_id: messageId }
+                );
+                this._resetRenameState();
+                return;
+            }
+
+            this.renameState.selectedTitle = title;
+            this.renameState.plans = plans;
+            this.renameState.step = 'confirm';
+
+            // 预览前5条
+            const preview = plans.slice(0, 5)
+                .map(p => `  ${p.oldName}\n  → ${p.newName}`)
+                .join('\n\n');
+            const more = plans.length > 5 ? `\n...等共 ${plans.length} 个文件` : '';
+
+            const keyboard = [[
+                { text: `✅ 确认重命名 ${plans.length} 个文件`, callback_data: JSON.stringify({ t: 'rn_confirm' }) },
+                { text: '❌ 取消', callback_data: JSON.stringify({ t: 'rn_cancel' }) }
+            ]];
+
+            await this.bot.editMessageText(
+                `📋 重命名预览（剧名：${title}）\n\n${preview}${more}\n\n确认执行？`,
+                { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: keyboard } }
+            );
+        } catch (e) {
+            await this.bot.editMessageText(`读取文件列表失败: ${e.message}`, {
+                chat_id: chatId, message_id: messageId
+            });
+            this._resetRenameState();
+        }
+    }
+
+    // 执行批量重命名
+    async _onRenameExecute(chatId, messageId) {
+        const plans = this.renameState.plans;
+        if (!plans.length) {
+            await this.bot.editMessageText('没有可执行的重命名计划', { chat_id: chatId, message_id: messageId });
+            this._resetRenameState();
+            return;
+        }
+
+        await this.bot.editMessageText(`⏳ 正在重命名，共 ${plans.length} 个文件...`, {
+            chat_id: chatId, message_id: messageId
+        });
+
+        const cloud189 = Cloud189Service.getInstance(this.currentAccount);
+        let success = 0, failed = 0;
+        const errors = [];
+
+        for (const plan of plans) {
+            try {
+                await cloud189.renameFile(plan.fileId, plan.newName);
+                success++;
+                await new Promise(r => setTimeout(r, 700)); // 避免请求过快
+            } catch (e) {
+                failed++;
+                errors.push(`${plan.oldName}: ${e.message}`);
+            }
+        }
+
+        const resultText = `✅ 重命名完成\n成功: ${success}  失败: ${failed}` +
+            (errors.length ? `\n\n前几个错误：\n${errors.slice(0, 3).join('\n')}` : '');
+
+        await this.bot.editMessageText(resultText, { chat_id: chatId, message_id: messageId });
+        this._resetRenameState();
     }
 }
 

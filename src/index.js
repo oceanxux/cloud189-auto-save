@@ -458,7 +458,8 @@ AppDataSource.initialize().then(async () => {
     await botManager.handleBotStatus(
         ConfigService.getConfigValue('telegram.botToken'),
         ConfigService.getConfigValue('telegram.chatId'),
-        ConfigService.getConfigValue('telegram.enable')
+        ConfigService.getConfigValue('telegram.enable'),
+        ConfigService.getConfigValue('telegram.proxyDomain')
     );
     // 初始化缓存管理器
     const folderCache = new CacheManager(parseInt(600));
@@ -1304,7 +1305,8 @@ AppDataSource.initialize().then(async () => {
         await botManager.handleBotStatus(
         settings.telegram?.botToken,
         settings.telegram?.chatId,
-        settings.telegram?.enable
+        settings.telegram?.enable,
+        settings.telegram?.proxyDomain
         );
         // 修改配置, 重新实例化消息推送
         messageUtil.updateConfig()

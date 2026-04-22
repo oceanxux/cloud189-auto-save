@@ -820,6 +820,18 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
+    app.delete('/api/tasks/:id/processed-files/:recordId', async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            const recordId = parseInt(req.params.recordId);
+            if (!taskId || !recordId) throw new Error('参数不能为空');
+            await taskService.deleteProcessedRecord(taskId, recordId);
+            res.json({ success: true });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
     app.post('/api/organizer/tasks/:id/run', async (req, res) => {
         try {
             const taskId = parseInt(req.params.id);

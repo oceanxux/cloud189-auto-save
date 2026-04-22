@@ -336,6 +336,17 @@ class TaskService {
         await this.taskProcessedFileRepo.delete({ taskId });
     }
 
+    async deleteProcessedRecord(taskId, recordId) {
+        const record = await this.taskProcessedFileRepo.findOneBy({
+            id: recordId,
+            taskId
+        });
+        if (!record) {
+            throw new Error('已转存记录不存在');
+        }
+        await this.taskProcessedFileRepo.remove(record);
+    }
+
     async _getDoneProcessedSourceFileIds(taskId) {
         const records = await this.taskProcessedFileRepo.find({
             select: {

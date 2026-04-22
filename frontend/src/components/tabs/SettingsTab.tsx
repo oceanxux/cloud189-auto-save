@@ -504,7 +504,7 @@ const SettingsTab: React.FC = () => {
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div 
                 onClick={() => updateSettings('task.enableAutoClearRecycle', !settings.task.enableAutoClearRecycle)}
-                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                className={`w-6 h-6 shrink-0 rounded-lg border flex items-center justify-center transition-all ${
                   settings.task.enableAutoClearRecycle ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
                 }`}
               >
@@ -518,7 +518,7 @@ const SettingsTab: React.FC = () => {
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div 
                 onClick={() => updateSettings('task.enableAutoClearFamilyRecycle', !settings.task.enableAutoClearFamilyRecycle)}
-                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                className={`w-6 h-6 shrink-0 rounded-lg border flex items-center justify-center transition-all ${
                   settings.task.enableAutoClearFamilyRecycle ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
                 }`}
               >
@@ -531,7 +531,7 @@ const SettingsTab: React.FC = () => {
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div 
                 onClick={() => updateSettings('task.enableAutoCleanLazyFiles', !settings.task.enableAutoCleanLazyFiles)}
-                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                className={`w-6 h-6 shrink-0 rounded-lg border flex items-center justify-center transition-all ${
                   settings.task.enableAutoCleanLazyFiles ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
                 }`}
               >
@@ -544,7 +544,7 @@ const SettingsTab: React.FC = () => {
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div 
                 onClick={() => updateSettings('task.enableOnlySaveMedia', !settings.task.enableOnlySaveMedia)}
-                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                className={`w-6 h-6 shrink-0 rounded-lg border flex items-center justify-center transition-all ${
                   settings.task.enableOnlySaveMedia ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
                 }`}
               >
@@ -558,7 +558,7 @@ const SettingsTab: React.FC = () => {
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div
                 onClick={() => updateSettings('task.enableFamilyTransit', !settings.task.enableFamilyTransit)}
-                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                className={`w-6 h-6 shrink-0 rounded-lg border flex items-center justify-center transition-all ${
                   settings.task.enableFamilyTransit ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
                 }`}
               >
@@ -572,7 +572,7 @@ const SettingsTab: React.FC = () => {
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div
                 onClick={() => updateSettings('task.enableFamilyTransitFirst', !settings.task.enableFamilyTransitFirst)}
-                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                className={`w-6 h-6 shrink-0 rounded-lg border flex items-center justify-center transition-all ${
                   settings.task.enableFamilyTransitFirst ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
                 }`}
               >
@@ -586,7 +586,7 @@ const SettingsTab: React.FC = () => {
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <div 
                 onClick={() => updateSettings('task.enableAutoCreateFolder', !settings.task.enableAutoCreateFolder)}
-                className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
+                className={`w-6 h-6 shrink-0 rounded-lg border flex items-center justify-center transition-all ${
                   settings.task.enableAutoCreateFolder ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white'
                 }`}
               >

@@ -75,6 +75,7 @@ class OrganizerService {
         }
 
         const nestedFolderCache = new Map();
+        const folderFileCache = new Map();
         const fileMap = new Map((resourceInfo.episode || []).map(item => [String(item.id), item]));
 
         for (const file of allFiles) {
@@ -89,22 +90,41 @@ class OrganizerService {
             const targetFileName = this.taskService._generateFileName(file, aiFile, resourceInfo, template);
             const targetRelativeDir = this._buildTargetRelativeDir(file, aiFile, resourceInfo, libraryInfo);
             const targetFolderId = await this._ensureDirectoryPath(cloud189, resourceFolderId, targetRelativeDir, nestedFolderCache);
+            const currentFolderId = String(file.parentFolderId || originalFolderId);
 
             if (file.name !== targetFileName) {
-                const renameResult = await cloud189.renameFile(file.id, targetFileName);
-                if (!renameResult || (renameResult.res_code && renameResult.res_code !== 0)) {
-                    throw new Error(`重命名失败: ${file.name} -> ${targetFileName}`);
+                const conflictFile = await this._findConflictFile(cloud189, currentFolderId, file.id, targetFileName, folderFileCache);
+                if (conflictFile) {
+                    const conflictType = this._getConflictType(file, conflictFile);
+                    const conflictMessage = conflictType === 'same-md5'
+                        ? `├─ 文件已存在（MD5一致），跳过 ${file.name} -> ${targetFileName}`
+                        : conflictType === 'same-size'
+                            ? `├─ 文件同名且大小一致（疑似重复），跳过 ${file.name} -> ${targetFileName}`
+                            : `├─ 文件同名但内容不同，跳过 ${file.name} -> ${targetFileName}`;
+                    messages.push(conflictMessage);
+                    continue;
+                } else {
+                    const renameResult = await cloud189.renameFile(file.id, targetFileName);
+                    if (!renameResult || (renameResult.res_code && renameResult.res_code !== 0)) {
+                        throw new Error(`重命名失败: ${file.name} -> ${targetFileName}`);
+                    }
+                    this._updateFolderFileCacheAfterRename(folderFileCache, currentFolderId, file.name, {
+                        ...file,
+                        name: targetFileName,
+                        parentFolderId: currentFolderId
+                    });
+                    messages.push(`├─ 重命名 ${file.name} -> ${targetFileName}`);
+                    file.name = targetFileName;
                 }
-                messages.push(`├─ 重命名 ${file.name} -> ${targetFileName}`);
-                file.name = targetFileName;
             }
 
-            if (String(file.parentFolderId || originalFolderId) !== String(targetFolderId)) {
+            if (currentFolderId !== String(targetFolderId)) {
                 await this.taskService.moveCloudFile(cloud189, {
                     id: file.id,
                     name: file.name,
                     isFolder: false
                 }, targetFolderId);
+                this._updateFolderFileCacheAfterMove(folderFileCache, currentFolderId, String(targetFolderId), file);
                 messages.push(`├─ 移动 ${file.name} -> ${targetRelativeDir || '媒体根目录'}`);
                 file.parentFolderId = String(targetFolderId);
                 file.relativeDir = targetRelativeDir;
@@ -348,6 +368,62 @@ class OrganizerService {
         const folderId = String(folder.id);
         folderCache.set(cacheKey, folderId);
         return folderId;
+    }
+
+    async _findConflictFile(cloud189, folderId, currentFileId, targetFileName, folderFileCache = new Map()) {
+        const cacheKey = String(folderId);
+        let fileMap = folderFileCache.get(cacheKey);
+        if (!fileMap) {
+            const folderInfo = await cloud189.listFiles(folderId);
+            const files = folderInfo?.fileListAO?.fileList || [];
+            fileMap = new Map(files.map(item => [item.name, item]));
+            folderFileCache.set(cacheKey, fileMap);
+        }
+
+        const conflictFile = fileMap.get(targetFileName);
+        if (!conflictFile) {
+            return null;
+        }
+        return String(conflictFile.id) === String(currentFileId) ? null : conflictFile;
+    }
+
+    _getConflictType(sourceFile, targetFile) {
+        const sourceMd5 = String(sourceFile?.md5 || '').trim().toLowerCase();
+        const targetMd5 = String(targetFile?.md5 || '').trim().toLowerCase();
+        if (sourceMd5 && targetMd5 && sourceMd5 === targetMd5) {
+            return 'same-md5';
+        }
+
+        const sourceSize = Number(sourceFile?.size || sourceFile?.fileSize || 0);
+        const targetSize = Number(targetFile?.size || targetFile?.fileSize || 0);
+        if (sourceSize > 0 && targetSize > 0 && sourceSize === targetSize) {
+            return 'same-size';
+        }
+
+        return 'different';
+    }
+
+    _updateFolderFileCacheAfterRename(folderFileCache, folderId, oldName, nextFile) {
+        const fileMap = folderFileCache.get(String(folderId));
+        if (!fileMap) {
+            return;
+        }
+        fileMap.delete(oldName);
+        fileMap.set(nextFile.name, nextFile);
+    }
+
+    _updateFolderFileCacheAfterMove(folderFileCache, sourceFolderId, targetFolderId, file) {
+        const sourceMap = folderFileCache.get(String(sourceFolderId));
+        if (sourceMap) {
+            sourceMap.delete(file.name);
+        }
+        const targetMap = folderFileCache.get(String(targetFolderId));
+        if (targetMap) {
+            targetMap.set(file.name, {
+                ...file,
+                parentFolderId: String(targetFolderId)
+            });
+        }
     }
 
     _resolveBaseFolderPath(task) {

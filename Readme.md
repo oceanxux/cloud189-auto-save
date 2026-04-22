@@ -68,7 +68,7 @@ docker run -d \
 ```
 
 > **注意**：
-> 1. 请将 `/opt/cloud189` 替换为您宿主机的实际目录。
+> 1. 请将 `/mnt/cloud189` 替换为您宿主机的实际目录。
 > 2. `8097` 端口用于 Emby/Jellyfin 的独立流代理（可选）。
 > 3. 初始账号密码为 `admin` / `admin`。
 
@@ -91,10 +91,6 @@ docker run -d \
 ---
 
 ## 社区与支持
-
-- **问题反馈**：请提交 [Issues](https://github.com/wobuhui666/cloud189-auto-save/issues)
-
----
 
 ## ❤️
  贡献与致谢

@@ -18,12 +18,16 @@ const cloud189Utils = require('../utils/Cloud189Utils');
 const alistService = require('./alistService');
 const { LazyShareStrmService } = require('./lazyShareStrm');
 const { CasService } = require('./casService');
+const { AppDataSource } = require('../database');
+const { TaskProcessedFile } = require('../entities');
 
 class TaskService {
     constructor(taskRepo, accountRepo, taskProcessedFileRepo) {
         this.taskRepo = taskRepo;
         this.accountRepo = accountRepo;
-        this.taskProcessedFileRepo = taskProcessedFileRepo;
+        this.taskProcessedFileRepo = taskProcessedFileRepo || (AppDataSource.isInitialized
+            ? AppDataSource.getRepository(TaskProcessedFile)
+            : null);
         this.autoSeriesService = null;
         this.messageUtil = new MessageUtil();
         this.eventService = EventService.getInstance();
@@ -36,6 +40,17 @@ class TaskService {
                 taskEventHandler.handle(eventDto);
             });
         }
+    }
+
+    _getTaskProcessedFileRepo() {
+        if (this.taskProcessedFileRepo) {
+            return this.taskProcessedFileRepo;
+        }
+        if (AppDataSource.isInitialized) {
+            this.taskProcessedFileRepo = AppDataSource.getRepository(TaskProcessedFile);
+            return this.taskProcessedFileRepo;
+        }
+        throw new Error('TaskProcessedFile 仓库未初始化');
     }
 
     // 解析分享链接
@@ -133,9 +148,10 @@ class TaskService {
                         'folder'
                     );
                     // 遍历子文件夹，使用 AI 分析结果更新文件夹名称
+                    const aiFolders = Array.isArray(resourceInfo?.folders) ? resourceInfo.folders : [];
                     for (const folder of subFolders) {
                         // 在 AI 分析结果中查找对应的文件夹
-                        const aiFolder = resourceInfo.folders.find(f => f.id === folder.id);
+                        const aiFolder = aiFolders.find(f => f.id === folder.id);
                         if (aiFolder) {
                             folder.name = aiFolder.name;
                         }
@@ -307,12 +323,13 @@ class TaskService {
     }
 
     async getProcessedRecords(taskId, options = {}) {
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
         const where = { taskId };
         if (options.status && options.status !== 'all') {
             where.status = options.status;
         }
         if (options.search) {
-            return await this.taskProcessedFileRepo.find({
+            return await taskProcessedFileRepo.find({
                 where: [
                     { ...where, sourceFileName: Like(`%${options.search}%`) },
                     { ...where, restoredFileName: Like(`%${options.search}%`) },
@@ -324,7 +341,7 @@ class TaskService {
                 }
             });
         }
-        return await this.taskProcessedFileRepo.find({
+        return await taskProcessedFileRepo.find({
             where,
             order: {
                 updatedAt: 'DESC',
@@ -334,22 +351,25 @@ class TaskService {
     }
 
     async resetProcessedRecords(taskId) {
-        await this.taskProcessedFileRepo.delete({ taskId });
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        await taskProcessedFileRepo.delete({ taskId });
     }
 
     async deleteProcessedRecord(taskId, recordId) {
-        const record = await this.taskProcessedFileRepo.findOneBy({
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        const record = await taskProcessedFileRepo.findOneBy({
             id: recordId,
             taskId
         });
         if (!record) {
             throw new Error('已转存记录不存在');
         }
-        await this.taskProcessedFileRepo.remove(record);
+        await taskProcessedFileRepo.remove(record);
     }
 
     async _getDoneProcessedSourceFileIds(taskId) {
-        const records = await this.taskProcessedFileRepo.find({
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        const records = await taskProcessedFileRepo.find({
             select: {
                 sourceFileId: true
             },
@@ -362,17 +382,18 @@ class TaskService {
     }
 
     async _saveProcessedFileRecord(task, file, status, errorMessage = '') {
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
         const restoredFileName = CasService.isCasFile(file.name)
             ? CasService.getOriginalFileName(file.name)
             : file.name;
-        const existingRecord = await this.taskProcessedFileRepo.findOneBy({
+        const existingRecord = await taskProcessedFileRepo.findOneBy({
             taskId: task.id,
             sourceFileId: String(file.id)
         });
         if (existingRecord?.status === 'done' && status !== 'done') {
             return existingRecord;
         }
-        await this.taskProcessedFileRepo.upsert({
+        await taskProcessedFileRepo.upsert({
             taskId: task.id,
             sourceFileId: String(file.id),
             sourceFileName: file.name,
@@ -497,15 +518,20 @@ class TaskService {
             }
         }
 
-        // 如果是子文件夹任务，在 realRootFolderId 下创建子文件夹
-        if (task.realRootFolderId !== task.realFolderId) {
-            logTaskEvent(`正在创建子目录: ${task.shareFolderName}`);
-            const subFolder = await cloud189.createFolder(task.shareFolderName, task.realRootFolderId);
+        const shareFolderName = String(task.shareFolderName || '').trim();
+        const hasSubFolder = shareFolderName.length > 0;
+
+        // 只有明确存在子目录名称时，才按子目录任务处理。
+        // 根目录任务在某些场景下 realFolderId 可能与 realRootFolderId 不一致，
+        // 但 shareFolderName 为空，此时不能再尝试创建空名称目录。
+        if (hasSubFolder && task.realRootFolderId !== task.realFolderId) {
+            logTaskEvent(`正在创建子目录: ${shareFolderName}`);
+            const subFolder = await cloud189.createFolder(shareFolderName, task.realRootFolderId);
             if (!subFolder?.id) throw new Error('创建子目录失败');
             task.realFolderId = subFolder.id;
-            logTaskEvent(`子目录创建成功: ${task.shareFolderName}`);
+            logTaskEvent(`子目录创建成功: ${shareFolderName}`);
         } else {
-            // 如果是根目录任务，则 realFolderId 等于 realRootFolderId
+            // 根目录任务或缺少子目录名时，直接将 realFolderId 指向根目录。
             task.realFolderId = task.realRootFolderId;
         }
 
@@ -1181,7 +1207,7 @@ class TaskService {
     }
     // 处理重命名过程
     async _processRename(cloud189, task, files, resourceInfo, message, newFiles) {
-        const newNames = resourceInfo.episode;
+        const newNames = Array.isArray(resourceInfo?.episode) ? resourceInfo.episode : [];
         // 处理aiFilename, 文件命名通过配置文件的占位符获取
         // 获取用户配置的文件名模板，如果没有配置则使用默认模板
         const template = resourceInfo.type === 'movie' 
@@ -1915,7 +1941,7 @@ class TaskService {
         const template = resourceInfo.type === 'movie' 
         ? ConfigService.getConfigValue('openai.rename.movieTemplate') || '{name} ({year}){ext}'  // 电影模板
         : ConfigService.getConfigValue('openai.rename.template') || '{name} - {se}{ext}';  // 剧集模板
-        const aiNames = resourceInfo.episode
+        const aiNames = Array.isArray(resourceInfo?.episode) ? resourceInfo.episode : [];
         const newFiles = [];
         for (const file of files) {
             try {

@@ -384,7 +384,7 @@ class AutoSeriesService {
         let nextShareFolderName = task.shareFolderName || '';
         if (task.shareFolderName) {
             const shareDir = await cloud189.listShareDir(shareInfo.shareId, shareInfo.fileId, shareInfo.shareMode, accessCode || '');
-            const folderList = shareDir?.fileListAO?.folderList || [];
+            const folderList = Array.isArray(shareDir?.fileListAO?.folderList) ? shareDir.fileListAO.folderList : [];
             const matchedFolder = folderList.find(folder => String(folder.name || '').trim() === String(task.shareFolderName || '').trim());
             if (!matchedFolder?.id) {
                 return { updated: false, skipped: true };

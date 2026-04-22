@@ -24,6 +24,7 @@ class TaskService {
         this.taskRepo = taskRepo;
         this.accountRepo = accountRepo;
         this.taskProcessedFileRepo = taskProcessedFileRepo;
+        this.autoSeriesService = null;
         this.messageUtil = new MessageUtil();
         this.eventService = EventService.getInstance();
         // 如果还没有taskComplete事件的监听器，则添加
@@ -702,8 +703,39 @@ class TaskService {
         }
     }
 
+    _canAutoRefreshTaskSource(task) {
+        if (!this.autoSeriesService) {
+            return false;
+        }
+        return String(task?.taskGroup || '').includes('自动追剧') && !task?.enableLazyStrm;
+    }
+
+    _shouldOnlySaveMedia(task) {
+        return ConfigService.getConfigValue('task.enableOnlySaveMedia')
+            || String(task?.taskGroup || '').includes('自动追剧')
+            || !!task?.enableLazyStrm;
+    }
+
+    async _tryAutoRefreshTaskSource(task, reason) {
+        if (!this._canAutoRefreshTaskSource(task)) {
+            return { updated: false, skipped: true };
+        }
+
+        const reasonText = reason === 'share_invalid' ? '当前分享源失效' : '当前分享源无增量';
+        logTaskEvent(`任务[${task.resourceName}]${reasonText}，尝试通过 CloudSaver 自动换源...`);
+        const result = await this.autoSeriesService.maybeRefreshTaskSource(task, reason);
+        if (result?.updated) {
+            const resourceTitle = result.resourceTitle ? `，匹配资源: ${result.resourceTitle}` : '';
+            logTaskEvent(`任务[${task.resourceName}]已自动切换资源源${resourceTitle}，新链接: ${result.shareLink}`);
+        } else if (!result?.skipped) {
+            logTaskEvent(`任务[${task.resourceName}]自动换源未找到更合适的资源`);
+        }
+        return result || { updated: false };
+    }
+
     // 执行任务
-    async processTask(task) {
+    async processTask(task, options = {}) {
+        const { allowSourceRefresh = true } = options;
         let saveResults = [];
         let attemptedNewFiles = [];
         try {
@@ -721,11 +753,17 @@ class TaskService {
                 return ''
              }
              if (!shareDir?.fileListAO?.fileList) {
+                if (allowSourceRefresh) {
+                    const refreshResult = await this._tryAutoRefreshTaskSource(task, 'share_invalid');
+                    if (refreshResult?.updated) {
+                        return await this.processTask(task, { allowSourceRefresh: false });
+                    }
+                }
                 logTaskEvent("获取文件列表失败: " + JSON.stringify(shareDir));
                 throw new Error('获取文件列表失败');
             }
             let shareFiles = [...shareDir.fileListAO.fileList];
-            const enableOnlySaveMedia = ConfigService.getConfigValue('task.enableOnlySaveMedia');
+            const enableOnlySaveMedia = this._shouldOnlySaveMedia(task);
             // mediaSuffixs转为小写
             const mediaSuffixs = ConfigService.getConfigValue('task.mediaSuffix').split(';').map(suffix => suffix.toLowerCase())
             if (task.enableLazyStrm) {
@@ -835,15 +873,23 @@ class TaskService {
                         firstExecution: firstExecution
                     }));
                 })
-            } else if (task.lastFileUpdateTime) {
-                // 检查是否超过3天没有新文件
-                const now = new Date();
-                const lastUpdate = new Date(task.lastFileUpdateTime);
-                const daysDiff = (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24);
-                if (daysDiff >= ConfigService.getConfigValue('task.taskExpireDays')) {
-                    task.status = 'completed';
+            } else {
+                if (allowSourceRefresh) {
+                    const refreshResult = await this._tryAutoRefreshTaskSource(task, 'no_increment');
+                    if (refreshResult?.updated) {
+                        return await this.processTask(task, { allowSourceRefresh: false });
+                    }
                 }
-                logTaskEvent(`${task.resourceName} 没有增量剧集`)
+                if (task.lastFileUpdateTime) {
+                    // 检查是否超过3天没有新文件
+                    const now = new Date();
+                    const lastUpdate = new Date(task.lastFileUpdateTime);
+                    const daysDiff = (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24);
+                    if (daysDiff >= ConfigService.getConfigValue('task.taskExpireDays')) {
+                        task.status = 'completed';
+                    }
+                    logTaskEvent(`${task.resourceName} 没有增量剧集`)
+                }
             }
             // 检查是否达到总数
             if (task.totalEpisodes && task.currentEpisodes >= task.totalEpisodes) {
@@ -968,6 +1014,72 @@ class TaskService {
             SchedulerService.saveTaskJob(newTask, this)
         }
         return newTask;
+    }
+
+    async replaceTaskSource(taskId, params = {}) {
+        const task = await this.taskRepo.findOneBy({ id: taskId });
+        if (!task) {
+            throw new Error('任务不存在');
+        }
+
+        const account = await this.accountRepo.findOneBy({ id: task.accountId });
+        if (!account) {
+            throw new Error('账号不存在');
+        }
+
+        const rawShareLink = String(params.shareLink || '').trim();
+        if (!rawShareLink) {
+            throw new Error('分享链接不能为空');
+        }
+
+        const { url: parsedShareLink, accessCode: parsedAccessCode } = cloud189Utils.parseCloudShare(rawShareLink);
+        const nextAccessCode = String(params.accessCode || parsedAccessCode || '').trim();
+        const cloud189 = Cloud189Service.getInstance(account);
+        const shareCode = cloud189Utils.parseShareCode(parsedShareLink);
+        const shareInfo = await this.getShareInfo(cloud189, shareCode);
+
+        if (shareInfo.shareMode == 1) {
+            if (!nextAccessCode) {
+                throw new Error('新分享链接为加密链接，请提供访问码');
+            }
+            const accessCodeResponse = await cloud189.checkAccessCode(shareCode, nextAccessCode);
+            if (!accessCodeResponse?.shareId) {
+                throw new Error('新分享链接访问码无效');
+            }
+            shareInfo.shareId = accessCodeResponse.shareId;
+        }
+
+        let nextShareFolderId = shareInfo.fileId;
+        let nextShareFolderName = '';
+        if (task.shareFolderName) {
+            const shareDir = await cloud189.listShareDir(shareInfo.shareId, shareInfo.fileId, shareInfo.shareMode, nextAccessCode || '');
+            const folderList = shareDir?.fileListAO?.folderList || [];
+            const matchedFolder = folderList.find(folder => String(folder.name || '').trim() === String(task.shareFolderName || '').trim());
+            if (!matchedFolder?.id) {
+                throw new Error(`新分享链接中未找到目录: ${task.shareFolderName}`);
+            }
+            nextShareFolderId = matchedFolder.id;
+            nextShareFolderName = matchedFolder.name;
+        }
+
+        task.shareLink = parsedShareLink;
+        task.accessCode = nextAccessCode;
+        task.shareId = shareInfo.shareId;
+        task.shareMode = shareInfo.shareMode;
+        task.shareFileId = shareInfo.fileId;
+        task.shareFolderId = nextShareFolderId;
+        task.shareFolderName = nextShareFolderName;
+
+        const savedTask = await this.taskRepo.save(task);
+        if (params.executeNow) {
+            const taskWithAccount = await this.getTaskById(taskId);
+            if (!taskWithAccount) {
+                throw new Error('任务不存在');
+            }
+            await this.processTask(taskWithAccount, { allowSourceRefresh: false });
+        }
+
+        return await this.getTaskById(taskId);
     }
 
     // 自动重命名
@@ -1144,21 +1256,52 @@ class TaskService {
     }
 
     // 检查任务状态
+    async _checkBatchTaskFilesExist(cloud189, batchTaskDto) {
+        if (!batchTaskDto?.targetFolderId || !batchTaskDto?.taskInfos) {
+            return false;
+        }
+        let taskInfos = [];
+        try {
+            taskInfos = JSON.parse(batchTaskDto.taskInfos || '[]');
+        } catch (error) {
+            logTaskEvent(`批量任务目录校验失败: taskInfos 解析异常 ${error.message}`);
+            return false;
+        }
+        const fileList = await this.getAllFolderFiles(cloud189, {
+            enableSystemProxy: false,
+            realFolderId: batchTaskDto.targetFolderId
+        });
+        const existingMd5Set = new Set(
+            (fileList || [])
+                .filter(file => !file.isFolder && file.md5)
+                .map(file => String(file.md5))
+        );
+        const pendingFiles = taskInfos.filter(taskInfo => !existingMd5Set.has(String(taskInfo.md5 || '')));
+        if (pendingFiles.length === 0) {
+            logTaskEvent(`批量任务目录校验通过: 目标目录已存在 ${taskInfos.length} 个文件，按成功处理`);
+            return true;
+        }
+        logTaskEvent(`批量任务目录校验未通过: 仍缺少 ${pendingFiles.length} 个文件`);
+        return false;
+    }
+
     async checkTaskStatus(cloud189, taskId, count = 0, batchTaskDto) {
-        if (count > 20) {
-             return false;
+        const maxAttempts = 180;
+        const pollIntervalMs = 1000;
+        if (count > maxAttempts) {
+             logTaskEvent(`任务编号: ${taskId} 状态轮询超时，开始校验目标目录结果...`);
+             return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
         }
         let type = batchTaskDto.type || 'SHARE_SAVE';
         // 轮询任务状态
         const task = await cloud189.checkTaskStatus(taskId, batchTaskDto)
         if (!task) {
-            return false;
+            return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
         }
         const taskStatus = Number(task.taskStatus);
         logTaskEvent(`任务编号: ${task.taskId}, 任务状态: ${task.taskStatus}`)
         if (taskStatus === -1 || taskStatus === 3 || taskStatus === 1) {
-            // 暂停500毫秒
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
             return await this.checkTaskStatus(cloud189, taskId, count + 1, batchTaskDto)
         }
         if (taskStatus === 4) {
@@ -1188,7 +1331,7 @@ class TaskService {
         if (taskStatus === 2) {
             const conflictTaskInfo = await cloud189.getConflictTaskInfo(taskId, batchTaskDto);
             if (!conflictTaskInfo) {
-                return false
+                return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
             }
             // 忽略冲突
             const taskInfos = conflictTaskInfo.taskInfos;
@@ -1196,10 +1339,10 @@ class TaskService {
                 taskInfo.dealWay = 1;
             }
             await cloud189.manageBatchTask(taskId, conflictTaskInfo.targetFolderId, taskInfos, batchTaskDto);
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
             return await this.checkTaskStatus(cloud189, taskId, count + 1, batchTaskDto)
         }
-        return false;
+        return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
     }
 
     // 执行所有任务

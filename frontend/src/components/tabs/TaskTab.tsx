@@ -24,6 +24,7 @@ interface Task {
   currentEpisodes: number;
   totalEpisodes: number | null;
   lastFileUpdateTime: string | null;
+  lastSourceRefreshTime: string | null;
   remark?: string;
   sourceRegex?: string;
   targetRegex?: string;
@@ -37,6 +38,8 @@ interface Task {
   enableOrganizer: boolean;
   enableCron: boolean;
 }
+
+const isAutoRefreshTask = (task: Task) => String(task.taskGroup || '').includes('自动追剧') && !task.enableLazyStrm;
 
 interface TaskTabProps {
   onCreateTask: (initialData?: any) => void;
@@ -139,6 +142,8 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
       shareFolderId: task.shareFolderId || '',
       shareFolderName: task.shareFolderName || '',
       taskGroup: task.taskGroup || '',
+      currentSourceLink: task.shareLink,
+      lastSourceRefreshTime: task.lastSourceRefreshTime,
       remark: task.remark || '',
       matchPattern: task.matchPattern || '',
       matchOperator: task.matchOperator || '',
@@ -528,6 +533,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                       <h3 className="font-bold text-slate-900 text-lg truncate max-w-[300px]" title={taskName}>{taskName}</h3>
                       {getStatusBadge(task.status)}
                       {task.enableLazyStrm && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">懒STRM</span>}
+                      {isAutoRefreshTask(task) && <span className="px-2 py-0.5 bg-sky-100 text-sky-700 rounded text-[10px] font-bold">自动换源</span>}
                     </div>
                     <p className="text-sm text-slate-500 mt-1">
                       账号: {task.account?.username || '未知账号'} • 分组: {task.taskGroup || '-'}
@@ -539,6 +545,11 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                       </div>
                       <span className="text-xs text-slate-400">最后更新: {formatDateTime(task.lastFileUpdateTime)}</span>
                     </div>
+                    {isAutoRefreshTask(task) && (
+                      <div className="mt-2 text-xs text-slate-400">
+                        最近换源: {formatDateTime(task.lastSourceRefreshTime)}
+                      </div>
+                    )}
                   </div>
                 </div>
                 

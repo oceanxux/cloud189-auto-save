@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Cpu, Files, RefreshCw, Search } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Cpu, Files, RefreshCw, Search, PencilLine, Link2 } from 'lucide-react';
 import Modal from './Modal';
 import FolderSelector from './FolderSelector';
 
@@ -23,6 +23,8 @@ interface TaskInitialData {
   id?: number;
   accountId?: string | number;
   shareLink?: string;
+  currentSourceLink?: string;
+  lastSourceRefreshTime?: string | null;
   accessCode?: string;
   taskName?: string;
   totalEpisodes?: string | number | null;
@@ -46,6 +48,12 @@ interface TaskInitialData {
   enableOrganizer?: boolean;
   status?: 'pending' | 'processing' | 'completed' | 'failed';
 }
+
+const formatTaskDateTime = (dateStr?: string | null) => {
+  if (!dateStr) return '未换源';
+  const date = new Date(dateStr);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+};
 
 interface SelectedFolder {
   id: string;
@@ -207,6 +215,13 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
   const [formData, setFormData] = useState<TaskFormData>(() => createInitialFormData(initialData));
+  const [showManualSourceEditor, setShowManualSourceEditor] = useState(false);
+  const [manualSourceLink, setManualSourceLink] = useState('');
+  const [manualAccessCode, setManualAccessCode] = useState('');
+  const [currentSourceLink, setCurrentSourceLink] = useState('');
+  const [lastSourceRefreshTime, setLastSourceRefreshTime] = useState<string | null>(null);
+  const [replacingSource, setReplacingSource] = useState(false);
+  const [executeAfterReplace, setExecuteAfterReplace] = useState(true);
 
   const isEditing = Boolean(initialData?.id);
 
@@ -226,6 +241,12 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
     setTmdbResults([]);
     setIsBatchMode(false);
     setShowAdvanced(shouldShowAdvancedOptions(nextFormData));
+    setShowManualSourceEditor(false);
+    setManualSourceLink(initialData?.currentSourceLink || initialData?.shareLink || '');
+    setManualAccessCode(initialData?.accessCode || '');
+    setCurrentSourceLink(initialData?.currentSourceLink || initialData?.shareLink || '');
+    setLastSourceRefreshTime(initialData?.lastSourceRefreshTime || null);
+    setExecuteAfterReplace(true);
     fetchAccounts(nextFormData.accountId);
     fetchRegexPresets();
   }, [isOpen, initialData]);
@@ -482,6 +503,55 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
     }
   };
 
+  const handleReplaceSource = async () => {
+    if (!initialData?.id) return;
+    if (!manualSourceLink.trim()) {
+      window.alert('请先输入新的分享链接');
+      return;
+    }
+    if (!window.confirm('确定要替换当前任务的资源链接吗？系统会保留当前任务配置，只更新资源源。')) {
+      return;
+    }
+
+    setReplacingSource(true);
+    try {
+      const response = await fetch(`/api/tasks/${initialData.id}/replace-source`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shareLink: manualSourceLink.trim(),
+          accessCode: manualAccessCode.trim(),
+          executeNow: executeAfterReplace
+        })
+      });
+      const data = await response.json();
+      if (!data.success) {
+        window.alert(`更换资源链接失败: ${data.error || '未知错误'}`);
+        return;
+      }
+      const updatedTask = data.data || {};
+      const nextLink = updatedTask.shareLink || manualSourceLink.trim();
+      setCurrentSourceLink(nextLink);
+      setManualSourceLink(nextLink);
+      setManualAccessCode(updatedTask.accessCode || manualAccessCode.trim());
+      setFormData(prev => ({
+        ...prev,
+        shareLink: nextLink,
+        accessCode: updatedTask.accessCode || prev.accessCode,
+        shareFolderId: updatedTask.shareFolderId || prev.shareFolderId,
+        shareFolderName: updatedTask.shareFolderName || prev.shareFolderName
+      }));
+      setShowManualSourceEditor(false);
+      onSuccess();
+      window.alert('资源链接已更新');
+    } catch (error) {
+      console.error('Failed to replace task source:', error);
+      window.alert('更换资源链接失败');
+    } finally {
+      setReplacingSource(false);
+    }
+  };
+
   const selectedAccount = accounts.find(account => String(account.id) === formData.accountId);
   const modalTitle = isEditing ? '修改任务' : (isBatchMode ? '批量创建任务' : '创建任务');
 
@@ -508,8 +578,95 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
         )}
 
         {isEditing && (
-          <div className="rounded-2xl border border-[#d3e3fd] bg-[#f8fafd] px-4 py-3 text-sm text-slate-600">
-            编辑模式下不会修改分享链接和来源账号，仅更新任务配置和保存目录。
+          <div className="rounded-2xl border border-[#d3e3fd] bg-[#f8fafd] px-4 py-3 text-sm text-slate-600 space-y-3">
+            <div>
+              编辑模式下不会修改分享链接和来源账号，仅更新任务配置和保存目录。
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div className="space-y-1">
+                <div className="font-bold text-[#0b57d0] uppercase tracking-wider">当前资源链接</div>
+                <div className="break-all text-slate-600">{currentSourceLink || '-'}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="font-bold text-[#0b57d0] uppercase tracking-wider">最近一次自动换源</div>
+                <div className="text-slate-600">{formatTaskDateTime(lastSourceRefreshTime)}</div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => setShowManualSourceEditor(prev => !prev)}
+                className="px-4 py-2 bg-white border border-[#d3e3fd] rounded-full text-sm font-medium text-[#0b57d0] hover:bg-[#0b57d0]/5 transition-colors inline-flex items-center gap-2"
+              >
+                <PencilLine size={16} />
+                手动更换资源链接
+              </button>
+            </div>
+            {showManualSourceEditor && (
+              <div className="rounded-2xl border border-[#d3e3fd] bg-white px-4 py-4 space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_180px] gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-[#0b57d0] uppercase tracking-wider">新资源链接</label>
+                    <input
+                      type="text"
+                      value={manualSourceLink}
+                      onChange={e => setManualSourceLink(e.target.value)}
+                      placeholder="输入新的 cloud.189.cn 分享链接"
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-[#0b57d0] uppercase tracking-wider">访问码</label>
+                    <input
+                      type="text"
+                      value={manualAccessCode}
+                      onChange={e => setManualAccessCode(e.target.value)}
+                      placeholder="可选"
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-500 inline-flex items-center gap-2">
+                      <Link2 size={14} />
+                      系统会重新解析新链接，并沿用当前任务的子目录匹配规则。
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer group">
+                      <div
+                        onClick={() => setExecuteAfterReplace(prev => !prev)}
+                        className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                          executeAfterReplace
+                            ? 'bg-[#0b57d0] border-[#0b57d0]'
+                            : 'border-slate-400 group-hover:border-[#0b57d0]'
+                        }`}
+                      >
+                        {executeAfterReplace && <div className="w-2 h-2 bg-white rounded-sm" />}
+                      </div>
+                      <span className="text-xs text-slate-600">替换后立即执行一次任务</span>
+                    </label>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowManualSourceEditor(false)}
+                      className="px-4 py-2 rounded-full text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleReplaceSource}
+                      disabled={replacingSource}
+                      className="px-5 py-2 rounded-full text-sm font-medium bg-[#0b57d0] text-white hover:bg-[#0b57d0]/90 transition-colors disabled:opacity-70 inline-flex items-center gap-2"
+                    >
+                      {replacingSource ? <RefreshCw size={16} className="animate-spin" /> : <PencilLine size={16} />}
+                      立即替换
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

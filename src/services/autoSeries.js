@@ -1,6 +1,8 @@
 const cloudSaverSDK = require('../sdk/cloudsaver/sdk').default;
 const ConfigService = require('./ConfigService');
 const { TMDBService } = require('./tmdb');
+const cloud189Utils = require('../utils/Cloud189Utils');
+const { Cloud189Service } = require('./cloud189');
 
 class AutoSeriesService {
     constructor(taskService, accountRepo, lazyShareStrmService) {
@@ -160,9 +162,9 @@ class AutoSeriesService {
         };
     }
 
-    async _resolveTmdb(title, year) {
+    async _resolveTmdb(title, year, currentEpisodes = 0) {
         try {
-            return await this.tmdbService.searchTV(title, year, 0);
+            return await this.tmdbService.searchTV(title, year, currentEpisodes);
         } catch (error) {
             return null;
         }
@@ -239,7 +241,7 @@ class AutoSeriesService {
         return [];
     }
 
-    async _findBestResource(title, year, tmdbInfo) {
+    async _findBestResource(title, year, tmdbInfo, currentEpisodes = 0) {
         const resources = await this._fetchResources(title, tmdbInfo);
         if (!resources.length) {
             return null;
@@ -255,12 +257,12 @@ class AutoSeriesService {
         return resources
             .map(resource => ({
                 ...resource,
-                _score: this._scoreResource(resource, titleCandidates, targetYear)
+                _score: this._scoreResource(resource, titleCandidates, targetYear, currentEpisodes)
             }))
             .sort((left, right) => right._score - left._score)[0];
     }
 
-    _scoreResource(resource, titleCandidates, targetYear) {
+    _scoreResource(resource, titleCandidates, targetYear, currentEpisodes = 0) {
         const title = String(resource.title || '').toLowerCase();
         let score = 0;
 
@@ -289,7 +291,124 @@ class AutoSeriesService {
         if (/完结|全集|全\d+集/.test(resource.title || '')) {
             score += 10;
         }
+        if (currentEpisodes > 0) {
+            const episodeHint = this._extractEpisodeHint(resource.title || '');
+            if (episodeHint >= currentEpisodes + 1) {
+                score += 30;
+            } else if (episodeHint >= currentEpisodes) {
+                score += 15;
+            } else if (episodeHint > 0) {
+                score -= 20;
+            }
+        }
         return score;
+    }
+
+    _extractEpisodeHint(title = '') {
+        const text = String(title || '');
+        const matches = text.match(/\d{1,3}(?=集)/g) || [];
+        return matches.reduce((max, value) => {
+            const num = Number(value);
+            return num > max ? num : max;
+        }, 0);
+    }
+
+    _safeParseJson(value) {
+        if (!value) {
+            return null;
+        }
+        try {
+            return JSON.parse(value);
+        } catch (error) {
+            return null;
+        }
+    }
+
+    _shouldAutoRefreshTask(task) {
+        const taskGroup = String(task?.taskGroup || '').trim();
+        const totalEpisodes = Number(task?.totalEpisodes || 0);
+        const currentEpisodes = Number(task?.currentEpisodes || 0);
+        return taskGroup.includes('自动追剧') && !task?.enableLazyStrm && (totalEpisodes <= 0 || currentEpisodes < totalEpisodes);
+    }
+
+    _parseTaskDisplayName(task) {
+        const rawName = String(task?.resourceName || '').replace(/\(根\)$/g, '').trim();
+        const yearMatch = rawName.match(/\((19|20)\d{2}\)/);
+        return {
+            title: rawName.replace(/\((19|20)\d{2}\)/g, '').trim(),
+            year: yearMatch ? yearMatch[0].replace(/[()]/g, '') : ''
+        };
+    }
+
+    async maybeRefreshTaskSource(task, reason = 'stale') {
+        if (!this._shouldAutoRefreshTask(task)) {
+            return { updated: false, skipped: true };
+        }
+
+        const tmdbContent = this._safeParseJson(task.tmdbContent);
+        const parsedName = this._parseTaskDisplayName(task);
+        const title = tmdbContent?.title || tmdbContent?.originalTitle || parsedName.title;
+        const year = tmdbContent?.releaseDate
+            ? String(new Date(tmdbContent.releaseDate).getFullYear())
+            : parsedName.year;
+        const tmdbInfo = tmdbContent?.id
+            ? tmdbContent
+            : await this._resolveTmdb(title, year, Number(task.currentEpisodes || 0));
+
+        if (!title) {
+            return { updated: false, skipped: true };
+        }
+
+        const resource = await this._findBestResource(title, year, tmdbInfo, Number(task.currentEpisodes || 0));
+        const rawLink = String(resource?.cloudLinks?.[0]?.link || '').trim();
+        if (!rawLink) {
+            return { updated: false };
+        }
+
+        const { url: parsedShareLink, accessCode } = cloud189Utils.parseCloudShare(rawLink);
+        if (String(task.shareLink || '').trim() === parsedShareLink) {
+            return { updated: false };
+        }
+
+        const account = task.account || await this.accountRepo.findOneBy({ id: task.accountId });
+        if (!account) {
+            throw new Error('账号不存在');
+        }
+        task.account = account;
+
+        const cloud189 = Cloud189Service.getInstance(account);
+        const shareCode = cloud189Utils.parseShareCode(parsedShareLink);
+        const shareInfo = await this.taskService.getShareInfo(cloud189, shareCode);
+
+        let nextShareFolderId = shareInfo.fileId;
+        let nextShareFolderName = task.shareFolderName || '';
+        if (task.shareFolderName) {
+            const shareDir = await cloud189.listShareDir(shareInfo.shareId, shareInfo.fileId, shareInfo.shareMode, accessCode || '');
+            const folderList = shareDir?.fileListAO?.folderList || [];
+            const matchedFolder = folderList.find(folder => String(folder.name || '').trim() === String(task.shareFolderName || '').trim());
+            if (!matchedFolder?.id) {
+                return { updated: false, skipped: true };
+            }
+            nextShareFolderId = matchedFolder.id;
+            nextShareFolderName = matchedFolder.name;
+        }
+
+        task.shareLink = parsedShareLink;
+        task.accessCode = accessCode || '';
+        task.shareId = shareInfo.shareId;
+        task.shareMode = shareInfo.shareMode;
+        task.shareFileId = shareInfo.fileId;
+        task.shareFolderId = nextShareFolderId;
+        task.shareFolderName = nextShareFolderName;
+        task.lastSourceRefreshTime = new Date();
+        await this.taskService.taskRepo.save(task);
+
+        return {
+            updated: true,
+            reason,
+            shareLink: parsedShareLink,
+            resourceTitle: resource.title
+        };
     }
 
     _normalizeMode(mode) {

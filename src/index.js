@@ -33,7 +33,22 @@ const { AutoSeriesService } = require('./services/autoSeries');
 
 const appPort = Number(process.env.PORT || 3000);
 let embyStandaloneProxyServer = null;
-const publicDir = path.join(__dirname, 'public');
+const resolvePublicDir = () => {
+    const candidates = [
+        path.join(__dirname, 'public'),
+        path.join(__dirname, '../src/public')
+    ];
+    for (const dir of candidates) {
+        try {
+            require('fs').accessSync(path.join(dir, 'index.html'));
+            return dir;
+        } catch (error) {
+            continue;
+        }
+    }
+    return candidates[0];
+};
+const publicDir = resolvePublicDir();
 const corsOptions = {
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
@@ -448,6 +463,7 @@ AppDataSource.initialize().then(async () => {
     const streamProxyService = new StreamProxyService(accountRepo);
     const lazyShareStrmService = new LazyShareStrmService(accountRepo, taskService);
     const autoSeriesService = new AutoSeriesService(taskService, accountRepo, lazyShareStrmService);
+    taskService.autoSeriesService = autoSeriesService;
     const tmdbService = new TMDBService();
     const embyService = new EmbyService(taskService)
     const embyPrewarmService = new EmbyPrewarmService(embyService);
@@ -759,6 +775,16 @@ AppDataSource.initialize().then(async () => {
         try {
             const taskId = parseInt(req.params.id);
             const updatedTask = await taskService.updateTask(taskId, req.body);
+            res.json({ success: true, data: updatedTask });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/tasks/:id/replace-source', async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            const updatedTask = await taskService.replaceTaskSource(taskId, req.body || {});
             res.json({ success: true, data: updatedTask });
         } catch (error) {
             res.json({ success: false, error: error.message });

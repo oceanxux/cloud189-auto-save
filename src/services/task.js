@@ -104,13 +104,25 @@ class TaskService {
 
      // 验证并创建目标目录
      async _validateAndCreateTargetFolder(cloud189, taskDto, shareInfo) {
-        if (!this.checkFolderInList(taskDto, '-1')) {
-            return {id: taskDto.targetFolderId, name: '', oldFolder: true}
+        const rootSelected = this.checkFolderInList(taskDto, '-1');
+        if (!rootSelected) {
+            const existingFolder = await cloud189.listFiles(taskDto.targetFolderId);
+            const folderList = existingFolder?.fileListAO?.folderList || [];
+            const matchedFolder = folderList.find(folder => folder.name === shareInfo.fileName);
+            if (matchedFolder?.id) {
+                return {
+                    ...matchedFolder,
+                    oldFolder: true
+                };
+            }
         }
         // 检查目标文件夹是否存在
         await this.checkFolderExists(cloud189, taskDto.targetFolderId, shareInfo.fileName, taskDto.overwriteFolder);
         const targetFolder = await cloud189.createFolder(shareInfo.fileName, taskDto.targetFolderId);
         if (!targetFolder || !targetFolder.id) throw new Error('创建目录失败');
+        if (!rootSelected) {
+            targetFolder.oldFolder = true;
+        }
         return targetFolder;
     }
 
@@ -180,7 +192,6 @@ class TaskService {
                 await this.checkFolderExists(cloud189, rootFolder.id, folder.fileName, taskDto.overwriteFolder);
                 realFolder = await cloud189.createFolder(folder.name, rootFolder.id);
                 if (!realFolder?.id) throw new Error('创建目录失败');
-                rootFolder?.oldFolder && (taskDto.realRootFolderId = realFolder.id);
                 realFolder.name = path.join(rootFolder.name, realFolder.name);
                 const subTask = this.taskRepo.create(
                     this._createTaskConfig(

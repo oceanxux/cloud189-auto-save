@@ -760,27 +760,6 @@ AppDataSource.initialize().then(async () => {
         }
     })
 
-    app.delete('/api/tasks/:id', async (req, res) => {
-        try {
-            const deleteCloud = req.body.deleteCloud;
-            await taskService.deleteTask(parseInt(req.params.id), deleteCloud);
-            res.json({ success: true });
-        } catch (error) {
-            res.json({ success: false, error: error.message });
-        }
-    });
-
-
-    app.put('/api/tasks/:id', async (req, res) => {
-        try {
-            const taskId = parseInt(req.params.id);
-            const updatedTask = await taskService.updateTask(taskId, req.body);
-            res.json({ success: true, data: updatedTask });
-        } catch (error) {
-            res.json({ success: false, error: error.message });
-        }
-    });
-
     app.get('/api/tasks/processed-files', async (req, res) => {
         try {
             const taskIds = String(req.query.taskIds || '')
@@ -807,6 +786,27 @@ AppDataSource.initialize().then(async () => {
                     .filter(Boolean);
             await taskService.resetProcessedRecordsByTaskIds(taskIds);
             res.json({ success: true });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.delete('/api/tasks/:id', async (req, res) => {
+        try {
+            const deleteCloud = req.body.deleteCloud;
+            await taskService.deleteTask(parseInt(req.params.id), deleteCloud);
+            res.json({ success: true });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+
+    app.put('/api/tasks/:id', async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            const updatedTask = await taskService.updateTask(taskId, req.body);
+            res.json({ success: true, data: updatedTask });
         } catch (error) {
             res.json({ success: false, error: error.message });
         }

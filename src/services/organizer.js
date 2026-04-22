@@ -68,6 +68,7 @@ class OrganizerService {
         const resourceFolderId = await this._ensureFolderByName(cloud189, categoryFolderId, libraryInfo.resourceFolderName, categoryCache);
 
         const originalFolderId = String(task.realFolderId);
+        const originalRootFolderId = String(task.realRootFolderId || task.realFolderId || '');
         const originalFolderName = this._normalizePath(task.realFolderName || '');
         const messages = [];
         const targetSummary = `${libraryInfo.categoryName}/${libraryInfo.resourceFolderName}`;
@@ -164,6 +165,8 @@ class OrganizerService {
         }
 
         await this.taskRepo.update(task.id, taskUpdates);
+
+        await this._cleanupStagingFolders(cloud189, originalFolderId, originalRootFolderId, String(task.targetFolderId || ''));
 
         const refreshedFiles = await this.taskService.getFilesByTask(task);
 
@@ -425,6 +428,50 @@ class OrganizerService {
                 parentFolderId: String(targetFolderId)
             });
         }
+    }
+
+    async _cleanupStagingFolders(cloud189, originalFolderId, originalRootFolderId, targetFolderId) {
+        const cleanupCandidates = Array.from(new Set(
+            [originalFolderId, originalRootFolderId]
+                .map(id => String(id || '').trim())
+                .filter(Boolean)
+                .filter(id => id !== String(targetFolderId || '').trim())
+        ));
+
+        for (const folderId of cleanupCandidates) {
+            await this._cleanupEmptyFolderTree(cloud189, folderId, String(targetFolderId || '').trim());
+        }
+    }
+
+    async _cleanupEmptyFolderTree(cloud189, folderId, stopFolderId = '') {
+        const normalizedFolderId = String(folderId || '').trim();
+        if (!normalizedFolderId || normalizedFolderId === stopFolderId) {
+            return false;
+        }
+
+        const folderInfo = await cloud189.listFiles(normalizedFolderId);
+        const fileListAO = folderInfo?.fileListAO;
+        if (!fileListAO) {
+            return false;
+        }
+
+        const childFolders = Array.isArray(fileListAO.folderList) ? fileListAO.folderList : [];
+        for (const folder of childFolders) {
+            await this._cleanupEmptyFolderTree(cloud189, folder.id, stopFolderId);
+        }
+
+        const refreshedInfo = await cloud189.listFiles(normalizedFolderId);
+        const refreshedFileListAO = refreshedInfo?.fileListAO;
+        if (!refreshedFileListAO) {
+            return false;
+        }
+        const fileCount = Array.isArray(refreshedFileListAO.fileList) ? refreshedFileListAO.fileList.length : 0;
+        const folderCount = Array.isArray(refreshedFileListAO.folderList) ? refreshedFileListAO.folderList.length : 0;
+        if (fileCount === 0 && folderCount === 0) {
+            await this.taskService.deleteCloudFile(cloud189, { id: normalizedFolderId, name: '' }, 1);
+            return true;
+        }
+        return false;
     }
 
     _resolveOrganizerRoot(task) {

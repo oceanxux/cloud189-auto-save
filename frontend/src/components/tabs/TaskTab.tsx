@@ -235,9 +235,12 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
       const data = await response.json();
       if (data.success) {
         setProcessedRecords([]);
+      } else {
+        window.alert(`删除失败: ${data.error || '未知错误'}`);
       }
     } catch (error) {
       console.error('Failed to reset processed records:', error);
+      window.alert('删除失败');
     } finally {
       setProcessedResetting(false);
     }

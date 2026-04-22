@@ -182,35 +182,100 @@ class CasService {
      * @returns {Promise<object>} { name, size }
      */
     async restoreFromCas(cloud189, parentFolderId, casInfo, restoreName) {
-    logTaskEvent(`[CAS秒传] 开始: ${restoreName} 大小=${casInfo.size} md5=${casInfo.md5}`);
-
-    const transitFirst = ConfigService.getConfigValue('task.enableFamilyTransitFirst', false);
-    const transitEnabled = ConfigService.getConfigValue('task.enableFamilyTransit', true);
-
-    // 优先走家庭中转
-    if (transitFirst && transitEnabled) {
-        logTaskEvent(`[CAS秒传] 已开启优先家庭中转`);
-        return await this._restoreViaFamily(cloud189, parentFolderId, casInfo, restoreName, null);
+        logTaskEvent(`[CAS秒传] 开始: ${restoreName} 大小=${casInfo.size} md5=${casInfo.md5}`);
+        const strategy = this._resolveRestoreStrategy(cloud189);
+        return await this._executeRestoreStrategy(strategy, cloud189, parentFolderId, casInfo, restoreName);
     }
 
-    // 默认：先个人，失败再家庭
-    try {
-        return await this._restorePersonal(cloud189, parentFolderId, casInfo, restoreName);
-    } catch (personalErr) {
-        const shouldFallback = transitEnabled && this._shouldFallbackToFamily(personalErr);
-        if (!shouldFallback) {
-            throw personalErr;
+    _resolveRestoreStrategy(cloud189) {
+        const transitFirst = ConfigService.getConfigValue('task.enableFamilyTransitFirst', false);
+        const transitEnabled = ConfigService.getConfigValue('task.enableFamilyTransit', true);
+        const isFamilyTarget = typeof cloud189?.isFamilyAccount === 'function' && cloud189.isFamilyAccount();
+
+        if (isFamilyTarget) {
+            return {
+                mode: 'family-direct',
+                logMessage: '[CAS秒传] 当前为家庭目录任务，直接走家庭秒传'
+            };
         }
-        logTaskEvent(`[CAS秒传] 个人秒传失败(${personalErr.message || personalErr})，切换家庭中转`);
-        return await this._restoreViaFamily(cloud189, parentFolderId, casInfo, restoreName, personalErr);
+        if (!isFamilyTarget && transitEnabled) {
+            return {
+                mode: 'family-first-personal-target',
+                logMessage: '[CAS秒传] 当前为个人目录任务，默认先走家庭中转'
+            };
+        }
+        if (transitFirst && transitEnabled) {
+            return {
+                mode: 'family-first',
+                logMessage: '[CAS秒传] 已开启优先家庭中转'
+            };
+        }
+        return {
+            mode: 'personal-first',
+            logMessage: ''
+        };
     }
-}
+
+    async _executeRestoreStrategy(strategy, cloud189, parentFolderId, casInfo, restoreName) {
+        if (strategy?.logMessage) {
+            logTaskEvent(strategy.logMessage);
+        }
+        switch (strategy?.mode) {
+            case 'family-direct':
+                return await this._restoreFamilyDirect(cloud189, parentFolderId, casInfo, restoreName);
+            case 'family-first-personal-target':
+                return await this._restoreFamilyThenPersonal(cloud189, parentFolderId, casInfo, restoreName);
+            case 'family-first':
+                return await this._restoreViaFamily(cloud189, parentFolderId, casInfo, restoreName, null);
+            case 'personal-first':
+            default:
+                return await this._restorePersonalThenMaybeFamily(cloud189, parentFolderId, casInfo, restoreName);
+        }
+    }
+
+    async _restoreFamilyThenPersonal(cloud189, parentFolderId, casInfo, restoreName) {
+        try {
+            return await this._restoreViaFamily(cloud189, parentFolderId, casInfo, restoreName, null);
+        } catch (familyErr) {
+            logTaskEvent(`[CAS秒传] 家庭中转失败(${familyErr.message || familyErr})，回退个人秒传`);
+            return await this._restorePersonal(cloud189, parentFolderId, casInfo, restoreName);
+        }
+    }
+
+    async _restoreFamilyDirect(cloud189, parentFolderId, casInfo, restoreName) {
+        const familyInfo = await cloud189.getFamilyInfo();
+        if (!familyInfo?.familyId) {
+            throw new Error('家庭秒传不可用: 当前账号没有家庭组');
+        }
+        const familyId = String(familyInfo.familyId);
+        const familyFolderId = parentFolderId === '-11' ? '' : String(parentFolderId || '');
+
+        logTaskEvent(`[家庭秒传] familyId=${familyId} targetFolderId=${familyFolderId || '(根)'}`);
+        await this._familyRapidUpload(cloud189, familyId, familyFolderId, casInfo, restoreName);
+        logTaskEvent(`[家庭秒传] 成功: ${restoreName}`);
+        return { name: restoreName, size: casInfo.size };
+    }
+
+    async _restorePersonalThenMaybeFamily(cloud189, parentFolderId, casInfo, restoreName) {
+        const transitEnabled = ConfigService.getConfigValue('task.enableFamilyTransit', true);
+        try {
+            return await this._restorePersonal(cloud189, parentFolderId, casInfo, restoreName);
+        } catch (personalErr) {
+            const shouldFallback = transitEnabled && this._shouldFallbackToFamily(personalErr);
+            if (!shouldFallback) {
+                throw personalErr;
+            }
+            logTaskEvent(`[CAS秒传] 个人秒传失败(${personalErr.message || personalErr})，切换家庭中转`);
+            return await this._restoreViaFamily(cloud189, parentFolderId, casInfo, restoreName, personalErr);
+        }
+    }
+
     // 判断是否应触发家庭中转回退：黑名单/风控/403 情形
     _shouldFallbackToFamily(err) {
         if (!err) return false;
         if (err.isBlacklisted) return true;
         const msg = String(err.message || '');
-        if (/InfoSecurityErrorCode|black list|风控|黑名单|InvalidPartSize|invalid part ?size/i.test(msg)) return true;
+        if (/InfoSecurityErrorCode|black list|风控|黑名单|InvalidPartSize|invalid part ?size|UserDayFlowOverLimited|data flow is out|FlowOverLimited|流量超限/i.test(msg)) return true;
         const status = err?.response?.statusCode;
         if (status === 403) return true;
         return false;
@@ -606,13 +671,28 @@ class CasService {
             const response = await got(url, requestOptions);
             const result = response.body || {};
             lastStatus = result.taskStatus ?? lastStatus;
+            const successedCount = Number(result?.successedCount ?? result?.data?.successedCount ?? 0);
+            const failedCount = Number(result?.failedCount ?? result?.data?.failedCount ?? 0);
+            const skipCount = Number(result?.skipCount ?? result?.data?.skipCount ?? 0);
+            const subTaskCount = Number(result?.subTaskCount ?? result?.data?.subTaskCount ?? 0);
 
             if (lastStatus === 4) {
                 return;
             }
+            if (subTaskCount > 0 && successedCount + failedCount + skipCount >= subTaskCount) {
+                if (failedCount > 0) {
+                    throw new Error(`家庭中转批量任务失败 type=${type} failedCount=${failedCount}`);
+                }
+                return;
+            }
             if (lastStatus === 2) {
-                // 冲突，记录但继续等，由上层覆盖策略处理
-                logTaskEvent(`[家庭中转] 批量任务检测到冲突(taskStatus=2), 继续等待...`);
+                throw new Error(`家庭中转批量任务冲突 type=${type}: 目标目录存在同名文件`);
+            }
+            if (lastStatus != null && lastStatus < 0) {
+                throw new Error(`家庭中转批量任务失败 type=${type} taskStatus=${lastStatus}`);
+            }
+            if (lastStatus != null && ![0, 1, 3, 4].includes(Number(lastStatus))) {
+                throw new Error(`家庭中转批量任务异常 type=${type} taskStatus=${lastStatus}`);
             }
         }
         throw new Error(`家庭中转批量任务超时 taskStatus=${lastStatus}`);
@@ -620,7 +700,7 @@ class CasService {
 
     async _safeDeleteFamilyFile(cloud189, familyId, fileId, fileName = '') {
         try {
-            await cloud189.request('/api/open/batch/createBatchTask.action', {
+            const deleteResult = await cloud189.request('/api/open/batch/createBatchTask.action', {
                 method: 'POST',
                 form: {
                     type: 'DELETE',
@@ -629,6 +709,24 @@ class CasService {
                     familyId: String(familyId)
                 }
             });
+            const deleteTaskId = deleteResult?.taskId || deleteResult?.data?.taskId || deleteResult?.taskID || deleteResult?.data?.taskID;
+            if (deleteTaskId) {
+                await this._waitForBatchTask(cloud189, 'DELETE', deleteTaskId);
+            }
+
+            const clearResult = await cloud189.request('/api/open/batch/createBatchTask.action', {
+                method: 'POST',
+                form: {
+                    type: 'CLEAR_RECYCLE',
+                    taskInfos: JSON.stringify([{ fileId: String(fileId), fileName: fileName || '', isFolder: 0 }]),
+                    targetFolderId: '',
+                    familyId: String(familyId)
+                }
+            });
+            const clearTaskId = clearResult?.taskId || clearResult?.data?.taskId || clearResult?.taskID || clearResult?.data?.taskID;
+            if (clearTaskId) {
+                await this._waitForBatchTask(cloud189, 'CLEAR_RECYCLE', clearTaskId);
+            }
             logTaskEvent(`[家庭中转] 已清理家庭残留文件: ${fileName || fileId}`);
         } catch (err) {
             logTaskEvent(`[家庭中转] 清理家庭残留失败(${fileId}): ${err.message}`);

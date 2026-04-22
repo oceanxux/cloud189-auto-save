@@ -1053,6 +1053,67 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
+    app.post('/api/file-manager/batch-rename', async (req, res) => {
+        try {
+            const accountId = parseInt(req.body.accountId);
+            const files = Array.isArray(req.body.files) ? req.body.files : [];
+            if (!accountId) {
+                throw new Error('账号ID不能为空');
+            }
+            if (!files.length) {
+                throw new Error('未选择需要重命名的文件');
+            }
+
+            const normalizedFiles = files.map((file) => ({
+                fileId: String(file?.fileId || '').trim(),
+                oldName: String(file?.oldName || '').trim(),
+                destFileName: String(file?.destFileName || '').trim()
+            })).filter((file) => file.fileId && file.destFileName);
+
+            if (!normalizedFiles.length) {
+                throw new Error('未生成有效的重命名计划');
+            }
+
+            const duplicateName = normalizedFiles.find((file, index) =>
+                normalizedFiles.findIndex((item) => item.destFileName === file.destFileName) !== index
+            );
+            if (duplicateName) {
+                throw new Error(`目标文件名重复: ${duplicateName.destFileName}`);
+            }
+
+            const account = await accountRepo.findOneBy({ id: accountId });
+            if (!account) {
+                throw new Error('账号不存在');
+            }
+
+            const cloud189 = Cloud189Service.getInstance(account);
+            const failures = [];
+            let successCount = 0;
+
+            for (const file of normalizedFiles) {
+                const renameResult = await cloud189.renameFile(file.fileId, file.destFileName);
+                if (!renameResult || (renameResult.res_code && renameResult.res_code !== 0)) {
+                    failures.push(`${file.oldName || file.fileId} -> ${file.destFileName}: ${renameResult?.res_msg || '重命名失败'}`);
+                    continue;
+                }
+                successCount++;
+            }
+
+            folderCache.clearPrefix('folders_');
+            res.json({
+                success: failures.length === 0,
+                data: {
+                    successCount,
+                    failureCount: failures.length,
+                    failures
+                },
+                error: failures.length ? '部分文件重命名失败' : undefined
+            });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
     app.post('/api/file-manager/delete', async (req, res) => {
         try {
             const accountId = parseInt(req.body.accountId);

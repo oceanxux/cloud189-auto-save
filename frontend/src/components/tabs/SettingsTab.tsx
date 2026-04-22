@@ -566,7 +566,7 @@ const SettingsTab: React.FC = () => {
               </div>
               <div>
                 <span className="text-sm font-medium text-slate-900">启用家庭云中转</span>
-                <p className="text-[10px] text-slate-400">个人秒传失败时允许回退到家庭云中转</p>
+                <p className="text-[10px] text-slate-400">个人目录任务默认先走家庭秒传中转，再复制回当前个人目录</p>
               </div>
             </label>
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">
@@ -580,7 +580,7 @@ const SettingsTab: React.FC = () => {
               </div>
               <div>
                 <span className="text-sm font-medium text-slate-900">家庭云转存优先</span>
-                <p className="text-[10px] text-slate-400">优先尝试家庭云转存，失败后再回退其他方式</p>
+                <p className="text-[10px] text-slate-400">兼容旧策略开关；当前个人目录任务开启家庭中转后已默认优先走家庭链路</p>
               </div>
             </label>
             <label className="flex items-center gap-3 cursor-pointer group p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors">

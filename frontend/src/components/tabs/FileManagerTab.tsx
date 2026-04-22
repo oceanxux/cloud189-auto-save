@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Files, ChevronRight, Search, LayoutGrid, MoreVertical, RefreshCw, ArrowLeft, FolderPlus, Move, Trash2, ExternalLink, Copy, FileText, Folder } from 'lucide-react';
+import { Plus, Files, ChevronRight, Search, MoreVertical, RefreshCw, ArrowLeft, Move, Trash2, ExternalLink, Copy, FileText, Folder, PencilLine } from 'lucide-react';
 import FolderSelector, { SelectedFolder } from '../FolderSelector';
+import Modal from '../Modal';
 
 interface Account {
   id: number;
@@ -25,6 +26,12 @@ interface PathSegment {
   name: string;
 }
 
+interface RenamePlan {
+  fileId: string;
+  oldName: string;
+  destFileName: string;
+}
+
 const formatBytes = (bytes: number) => {
   if (!bytes || isNaN(bytes)) return '0B';
   if (bytes < 0) return '-' + formatBytes(-bytes);
@@ -46,6 +53,14 @@ const FileManagerTab: React.FC = () => {
   const [driveLabel, setDriveLabel] = useState('');
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
   const [openFileMenuId, setOpenFileMenuId] = useState<string | null>(null);
+  const [isBatchRenameOpen, setIsBatchRenameOpen] = useState(false);
+  const [batchRenameMode, setBatchRenameMode] = useState<'template' | 'regex'>('template');
+  const [templateValue, setTemplateValue] = useState('{name} - S01E{n}{ext}');
+  const [templateStart, setTemplateStart] = useState('1');
+  const [templatePadding, setTemplatePadding] = useState('2');
+  const [regexSource, setRegexSource] = useState('');
+  const [regexTarget, setRegexTarget] = useState('');
+  const [batchRenameSubmitting, setBatchRenameSubmitting] = useState(false);
 
   const fetchAccounts = async () => {
     try {
@@ -218,6 +233,132 @@ const FileManagerTab: React.FC = () => {
     }
   };
 
+  const visibleEntries = entries.filter(e => 
+    e.name.toLowerCase().includes(filterKeyword.toLowerCase())
+  );
+
+  const selectedEntries = entries.filter(e => selectedIds.has(e.id));
+  const selectedAccount = accounts.find(a => String(a.id) === selectedAccountId);
+  const selectedFileEntries = selectedEntries.filter(entry => !entry.isFolder);
+  const selectedFolderCount = selectedEntries.length - selectedFileEntries.length;
+
+  const buildBatchRenamePlans = (): RenamePlan[] => {
+    const files = [...selectedEntries]
+      .filter(entry => !entry.isFolder)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+    if (batchRenameMode === 'regex') {
+      if (!regexSource.trim()) return [];
+      let regex: RegExp;
+      try {
+        regex = new RegExp(regexSource);
+      } catch {
+        return [];
+      }
+      return files
+        .map(entry => {
+          const destFileName = entry.name.replace(regex, regexTarget);
+          return {
+            fileId: entry.id,
+            oldName: entry.name,
+            destFileName
+          };
+        })
+        .filter(plan => plan.destFileName && plan.destFileName !== plan.oldName);
+    }
+
+    const start = Number.parseInt(templateStart, 10);
+    const padding = Math.max(1, Number.parseInt(templatePadding, 10) || 1);
+    const safeStart = Number.isFinite(start) ? start : 1;
+
+    return files
+      .map((entry, index) => {
+        const extIndex = entry.name.lastIndexOf('.');
+        const ext = extIndex > 0 ? entry.name.slice(extIndex) : '';
+        const baseName = extIndex > 0 ? entry.name.slice(0, extIndex) : entry.name;
+        const n = String(safeStart + index).padStart(padding, '0');
+        const destFileName = templateValue
+          .replaceAll('{name}', baseName)
+          .replaceAll('{ext}', ext)
+          .replaceAll('{n}', n)
+          .trim();
+        return {
+          fileId: entry.id,
+          oldName: entry.name,
+          destFileName
+        };
+      })
+      .filter(plan => plan.destFileName && plan.destFileName !== plan.oldName);
+  };
+
+  const batchRenamePlans = buildBatchRenamePlans();
+
+  const handleOpenBatchRename = () => {
+    if (selectedFileEntries.length === 0) {
+      alert('请选择至少一个文件进行批量重命名');
+      return;
+    }
+    setIsBatchRenameOpen(true);
+  };
+
+  const handleBatchRenameSubmit = async () => {
+    if (selectedFileEntries.length === 0) {
+      alert('请选择至少一个文件进行批量重命名');
+      return;
+    }
+    if (batchRenameMode === 'regex') {
+      if (!regexSource.trim()) {
+        alert('请输入源正则表达式');
+        return;
+      }
+      try {
+        new RegExp(regexSource);
+      } catch (error) {
+        alert('源正则表达式无效');
+        return;
+      }
+    } else if (!templateValue.trim()) {
+      alert('请输入重命名模板');
+      return;
+    }
+    if (batchRenamePlans.length === 0) {
+      alert('没有生成可执行的重命名计划，请检查规则');
+      return;
+    }
+
+    setBatchRenameSubmitting(true);
+    try {
+      const response = await fetch('/api/file-manager/batch-rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId: selectedAccountId,
+          files: batchRenamePlans
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setIsBatchRenameOpen(false);
+        fetchFiles(path[path.length - 1].id);
+        alert(`批量重命名成功，共 ${data.data?.successCount ?? batchRenamePlans.length} 个文件`);
+        return;
+      }
+
+      if (data.data?.failureCount) {
+        const failureText = Array.isArray(data.data.failures) ? data.data.failures.slice(0, 8).join('\n') : '';
+        alert(`批量重命名部分失败，成功 ${data.data.successCount} 个，失败 ${data.data.failureCount} 个${failureText ? `\n\n${failureText}` : ''}`);
+        setIsBatchRenameOpen(false);
+        fetchFiles(path[path.length - 1].id);
+        return;
+      }
+      alert('批量重命名失败: ' + data.error);
+    } catch (error) {
+      alert('批量重命名失败');
+    } finally {
+      setBatchRenameSubmitting(false);
+    }
+  };
+
   const handleMove = async (targetFolderId: string) => {
     try {
       const entriesToMove = selectedEntries.map(e => ({ id: e.id, name: e.name, isFolder: e.isFolder }));
@@ -279,13 +420,6 @@ const FileManagerTab: React.FC = () => {
     }
   };
 
-  const visibleEntries = entries.filter(e => 
-    e.name.toLowerCase().includes(filterKeyword.toLowerCase())
-  );
-
-  const selectedEntries = entries.filter(e => selectedIds.has(e.id));
-  const selectedAccount = accounts.find(a => String(a.id) === selectedAccountId);
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -327,6 +461,13 @@ const FileManagerTab: React.FC = () => {
             className="bg-[#0b57d0] text-white px-5 py-2.5 rounded-full text-sm font-medium hover:bg-[#0b57d0]/90 transition-all flex items-center gap-2 shadow-sm disabled:opacity-50"
           >
             <Plus size={18} /> 新建目录
+          </button>
+          <button 
+            onClick={handleOpenBatchRename}
+            disabled={selectedFileEntries.length === 0 || loading}
+            className="bg-white border border-slate-300 px-5 py-2.5 rounded-full text-sm font-medium hover:bg-slate-50 transition-all flex items-center gap-2 text-slate-700 disabled:opacity-50"
+          >
+            <PencilLine size={18} /> 批量重命名
           </button>
           <button 
             onClick={() => setIsFolderSelectorOpen(true)}
@@ -525,6 +666,126 @@ const FileManagerTab: React.FC = () => {
           handleMove(folder.id);
         }}
       />
+
+      <Modal
+        isOpen={isBatchRenameOpen}
+        onClose={() => !batchRenameSubmitting && setIsBatchRenameOpen(false)}
+        title="批量重命名"
+        footer={
+          <div className="px-8 py-6 flex items-center justify-between gap-3">
+            <div className="text-sm text-slate-500">
+              选中文件 {selectedFileEntries.length} 个{selectedFolderCount > 0 ? `，已忽略文件夹 ${selectedFolderCount} 个` : ''}
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setIsBatchRenameOpen(false)}
+                disabled={batchRenameSubmitting}
+                className="px-6 py-2.5 rounded-full text-sm font-medium text-[#0b57d0] hover:bg-[#0b57d0]/10 transition-colors disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleBatchRenameSubmit}
+                disabled={batchRenameSubmitting || batchRenamePlans.length === 0}
+                className="px-6 py-2.5 rounded-full text-sm font-medium bg-[#0b57d0] text-white hover:bg-[#0b57d0]/90 transition-colors shadow-sm disabled:opacity-50"
+              >
+                {batchRenameSubmitting ? '执行中...' : `确认重命名 ${batchRenamePlans.length} 项`}
+              </button>
+            </div>
+          </div>
+        }
+      >
+        <div className="space-y-6 pt-6">
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => setBatchRenameMode('template')}
+              className={`px-4 py-2 rounded-full text-sm border transition-colors ${batchRenameMode === 'template' ? 'bg-[#0b57d0] text-white border-[#0b57d0]' : 'border-slate-300 text-slate-700 hover:bg-slate-50'}`}
+            >
+              模板编号
+            </button>
+            <button
+              type="button"
+              onClick={() => setBatchRenameMode('regex')}
+              className={`px-4 py-2 rounded-full text-sm border transition-colors ${batchRenameMode === 'regex' ? 'bg-[#0b57d0] text-white border-[#0b57d0]' : 'border-slate-300 text-slate-700 hover:bg-slate-50'}`}
+            >
+              正则替换
+            </button>
+          </div>
+
+          {batchRenameMode === 'template' ? (
+            <div className="grid gap-4 md:grid-cols-3">
+              <label className="md:col-span-3 space-y-2 text-sm">
+                <span className="text-slate-600">重命名模板</span>
+                <input
+                  value={templateValue}
+                  onChange={e => setTemplateValue(e.target.value)}
+                  placeholder="例如：八千里路云和月 - S01E{n}{ext}"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                />
+                <p className="text-xs text-slate-400">可用变量：{`{name}`}、{`{n}`}、{`{ext}`}</p>
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="text-slate-600">起始编号</span>
+                <input
+                  value={templateStart}
+                  onChange={e => setTemplateStart(e.target.value)}
+                  inputMode="numeric"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="text-slate-600">补零位数</span>
+                <input
+                  value={templatePadding}
+                  onChange={e => setTemplatePadding(e.target.value)}
+                  inputMode="numeric"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="space-y-2 text-sm">
+                <span className="text-slate-600">源正则</span>
+                <input
+                  value={regexSource}
+                  onChange={e => setRegexSource(e.target.value)}
+                  placeholder="例如：S\\d+E(\\d+)"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                />
+              </label>
+              <label className="space-y-2 text-sm">
+                <span className="text-slate-600">替换结果</span>
+                <input
+                  value={regexTarget}
+                  onChange={e => setRegexTarget(e.target.value)}
+                  placeholder="例如：第$1集"
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+                />
+              </label>
+            </div>
+          )}
+
+          <div className="rounded-3xl border border-slate-200 overflow-hidden">
+            <div className="px-5 py-3 bg-slate-50 text-sm font-medium text-slate-700">
+              重命名预览
+            </div>
+            <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
+              {batchRenamePlans.length === 0 ? (
+                <div className="px-5 py-6 text-sm text-slate-500">当前规则还没有生成可执行计划</div>
+              ) : (
+                batchRenamePlans.map(plan => (
+                  <div key={plan.fileId} className="px-5 py-3 text-sm flex flex-col gap-1">
+                    <span className="text-slate-500 break-all">{plan.oldName}</span>
+                    <span className="text-slate-900 font-medium break-all">{plan.destFileName}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

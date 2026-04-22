@@ -781,6 +781,37 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
+    app.get('/api/tasks/processed-files', async (req, res) => {
+        try {
+            const taskIds = String(req.query.taskIds || '')
+                .split(',')
+                .map(id => parseInt(id))
+                .filter(id => Number.isInteger(id) && id > 0);
+            if (taskIds.length === 0) throw new Error('任务ID不能为空');
+            const records = await taskService.getProcessedRecordsByTaskIds(taskIds, {
+                status: String(req.query.status || 'all'),
+                search: String(req.query.search || '').trim()
+            });
+            res.json({ success: true, data: records });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.delete('/api/tasks/processed-files', async (req, res) => {
+        try {
+            const taskIds = Array.isArray(req.body?.taskIds)
+                ? req.body.taskIds
+                : String(req.query.taskIds || '')
+                    .split(',')
+                    .filter(Boolean);
+            await taskService.resetProcessedRecordsByTaskIds(taskIds);
+            res.json({ success: true });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
     app.post('/api/tasks/:id/replace-source', async (req, res) => {
         try {
             const taskId = parseInt(req.params.id);

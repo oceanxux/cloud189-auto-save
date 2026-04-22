@@ -69,6 +69,9 @@ class TaskService {
             accountId: taskDto.accountId,
             shareLink: taskDto.shareLink,
             targetFolderId: taskDto.targetFolderId,
+            targetFolderName: taskDto.targetFolder || taskDto.targetFolderName || '',
+            organizerTargetFolderId: taskDto.organizerTargetFolderId || taskDto.targetFolderId,
+            organizerTargetFolderName: taskDto.organizerTargetFolderName || taskDto.targetFolder || '',
             realFolderId:realFolder.id,
             realFolderName:realFolder.name,
             status: 'pending',
@@ -350,9 +353,62 @@ class TaskService {
         });
     }
 
+    async getProcessedRecordsByTaskIds(taskIds, options = {}) {
+        const normalizedTaskIds = Array.from(new Set(
+            (Array.isArray(taskIds) ? taskIds : [])
+                .map(id => Number(id))
+                .filter(id => Number.isInteger(id) && id > 0)
+        ));
+        if (normalizedTaskIds.length === 0) {
+            throw new Error('任务ID不能为空');
+        }
+
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        const where = { taskId: In(normalizedTaskIds) };
+        if (options.status && options.status !== 'all') {
+            where.status = options.status;
+        }
+        if (options.search) {
+            return await taskProcessedFileRepo.find({
+                where: [
+                    { ...where, sourceFileName: Like(`%${options.search}%`) },
+                    { ...where, restoredFileName: Like(`%${options.search}%`) },
+                    { ...where, sourceMd5: Like(`%${options.search}%`) }
+                ],
+                order: {
+                    updatedAt: 'DESC',
+                    id: 'DESC'
+                }
+            });
+        }
+        return await taskProcessedFileRepo.find({
+            where,
+            order: {
+                updatedAt: 'DESC',
+                id: 'DESC'
+            }
+        });
+    }
+
     async resetProcessedRecords(taskId) {
         const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
         await taskProcessedFileRepo.delete({ taskId });
+    }
+
+    async resetProcessedRecordsByTaskIds(taskIds) {
+        const normalizedTaskIds = Array.from(new Set(
+            (Array.isArray(taskIds) ? taskIds : [])
+                .map(id => Number(id))
+                .filter(id => Number.isInteger(id) && id > 0)
+        ));
+        if (normalizedTaskIds.length === 0) {
+            throw new Error('任务ID不能为空');
+        }
+
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        await taskProcessedFileRepo.delete({
+            taskId: In(normalizedTaskIds)
+        });
     }
 
     async deleteProcessedRecord(taskId, recordId) {
@@ -1004,7 +1060,7 @@ class TaskService {
             new StrmService().deleteDir(path.join(task.account.localStrmPrefix, folderName))
         }
         // 只允许更新特定字段
-        const allowedFields = ['resourceName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm', 'enableOrganizer'];
+        const allowedFields = ['resourceName', 'targetFolderId', 'targetFolderName', 'organizerTargetFolderId', 'organizerTargetFolderName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm', 'enableOrganizer'];
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
                 task[field] = updates[field];

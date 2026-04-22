@@ -79,6 +79,15 @@ export class Task {
     targetFolderId!: string;
 
     @Column('text', { nullable: true })
+    targetFolderName!: string;
+
+    @Column('text', { nullable: true })
+    organizerTargetFolderId!: string;
+
+    @Column('text', { nullable: true })
+    organizerTargetFolderName!: string;
+
+    @Column('text', { nullable: true })
     videoType!: string;
 
     @Column('text', { default: 'pending' })

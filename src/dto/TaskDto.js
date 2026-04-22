@@ -10,6 +10,9 @@ class CreateTaskDto {
         this.accountId = data.accountId;
         this.shareLink = data.shareLink;
         this.targetFolderId = data.targetFolderId;
+        this.targetFolderName = data.targetFolderName;
+        this.organizerTargetFolderId = data.organizerTargetFolderId;
+        this.organizerTargetFolderName = data.organizerTargetFolderName;
         this.totalEpisodes = data.totalEpisodes;
         this.accessCode = data.accessCode;
         this.matchPattern = data.matchPattern;

@@ -31,6 +31,8 @@ interface TaskInitialData {
   currentEpisodes?: string | number | null;
   targetFolderId?: string;
   targetFolder?: string;
+  organizerTargetFolderId?: string;
+  organizerTargetFolderName?: string;
   shareFolderId?: string;
   shareFolderName?: string;
   taskGroup?: string;
@@ -72,6 +74,8 @@ interface TaskFormData {
   currentEpisodes: string;
   targetFolderId: string;
   targetFolder: string;
+  organizerTargetFolderId: string;
+  organizerTargetFolderName: string;
   shareFolderId: string;
   shareFolderName: string;
   taskGroup: string;
@@ -115,6 +119,8 @@ const EMPTY_FORM_DATA: TaskFormData = {
   currentEpisodes: '0',
   targetFolderId: '',
   targetFolder: '',
+  organizerTargetFolderId: '',
+  organizerTargetFolderName: '',
   shareFolderId: '',
   shareFolderName: '',
   taskGroup: '',
@@ -157,7 +163,9 @@ const createInitialFormData = (initialData?: TaskInitialData | null): TaskFormDa
   const savedTarget = readLastTargetFolder();
   const baseData: TaskFormData = {
     ...EMPTY_FORM_DATA,
-    ...(savedTarget || {})
+    ...(savedTarget || {}),
+    organizerTargetFolderId: savedTarget?.targetFolderId || '',
+    organizerTargetFolderName: savedTarget?.targetFolder || ''
   };
 
   if (!initialData) {
@@ -174,6 +182,8 @@ const createInitialFormData = (initialData?: TaskInitialData | null): TaskFormDa
     currentEpisodes: initialData.currentEpisodes !== undefined && initialData.currentEpisodes !== null ? String(initialData.currentEpisodes) : '0',
     targetFolderId: initialData.targetFolderId || baseData.targetFolderId,
     targetFolder: initialData.targetFolder || baseData.targetFolder,
+    organizerTargetFolderId: initialData.organizerTargetFolderId || initialData.targetFolderId || baseData.organizerTargetFolderId || baseData.targetFolderId,
+    organizerTargetFolderName: initialData.organizerTargetFolderName || initialData.targetFolder || baseData.organizerTargetFolderName || baseData.targetFolder,
     shareFolderId: initialData.shareFolderId || '',
     shareFolderName: initialData.shareFolderName || '',
     taskGroup: initialData.taskGroup || '',
@@ -214,6 +224,7 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
+  const [folderSelectorMode, setFolderSelectorMode] = useState<'target' | 'organizer'>('target');
   const [formData, setFormData] = useState<TaskFormData>(() => createInitialFormData(initialData));
   const [showManualSourceEditor, setShowManualSourceEditor] = useState(false);
   const [manualSourceLink, setManualSourceLink] = useState('');
@@ -434,8 +445,10 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
         method = 'PUT';
         body = {
           resourceName: formData.taskName.trim(),
-          realFolderId: formData.targetFolderId,
-          realFolderName: formData.targetFolder || formData.targetFolderId,
+          targetFolderId: formData.targetFolderId,
+          targetFolderName: formData.targetFolder || formData.targetFolderId,
+          organizerTargetFolderId: formData.organizerTargetFolderId || formData.targetFolderId,
+          organizerTargetFolderName: formData.organizerTargetFolderName || formData.targetFolder || formData.targetFolderId,
           currentEpisodes: Number(formData.currentEpisodes || 0),
           totalEpisodes: normalizedTotalEpisodes,
           status: formData.status,
@@ -858,7 +871,10 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
                 />
                 <button
                   type="button"
-                  onClick={() => setIsFolderSelectorOpen(true)}
+                  onClick={() => {
+                    setFolderSelectorMode('target');
+                    setIsFolderSelectorOpen(true);
+                  }}
                   className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors"
                 >
                   <Files size={20} />
@@ -876,6 +892,34 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
               />
             </div>
           </div>
+
+          {formData.enableOrganizer && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">整理目录</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={formData.organizerTargetFolderName || formData.organizerTargetFolderId}
+                  readOnly
+                  placeholder="默认与保存目录一致"
+                  className="flex-1 px-5 py-3 bg-slate-100 border border-slate-300 rounded-2xl text-sm outline-none text-slate-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFolderSelectorMode('organizer');
+                    setIsFolderSelectorOpen(true);
+                  }}
+                  className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors"
+                >
+                  <Files size={20} />
+                </button>
+              </div>
+              <div className="text-xs text-slate-500">
+                开启自动整理后，文件会归档到这个目录下，再按类型生成二级目录，例如 `电视剧/剧名`。
+              </div>
+            </div>
+          )}
 
           <div className="space-y-2">
             <label className="text-sm font-medium text-slate-700">备注</label>
@@ -1063,12 +1107,30 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
         accountId={Number(formData.accountId)}
         accountName={selectedAccount?.username || ''}
         onSelect={(folder: SelectedFolder) => {
-          setFormData(prev => ({
-            ...prev,
-            accountId: String(folder.accountId),
-            targetFolderId: folder.id,
-            targetFolder: folder.name
-          }));
+          setFormData(prev => {
+            if (folderSelectorMode === 'organizer') {
+              return {
+                ...prev,
+                accountId: String(folder.accountId),
+                organizerTargetFolderId: folder.id,
+                organizerTargetFolderName: folder.name
+              };
+            }
+
+            const shouldSyncOrganizer = !prev.organizerTargetFolderId || prev.organizerTargetFolderId === prev.targetFolderId;
+            return {
+              ...prev,
+              accountId: String(folder.accountId),
+              targetFolderId: folder.id,
+              targetFolder: folder.name,
+              ...(shouldSyncOrganizer
+                ? {
+                    organizerTargetFolderId: folder.id,
+                    organizerTargetFolderName: folder.name
+                  }
+                : {})
+            };
+          });
         }}
       />
     </Modal>

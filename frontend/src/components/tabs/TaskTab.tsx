@@ -19,6 +19,9 @@ interface Task {
   taskGroup?: string;
   shareLink: string;
   targetFolderId: string;
+  targetFolderName?: string;
+  organizerTargetFolderId?: string;
+  organizerTargetFolderName?: string;
   realFolderName?: string;
   realFolderId?: string;
   currentEpisodes: number;
@@ -47,6 +50,7 @@ interface TaskTabProps {
 
 interface ProcessedRecord {
   id: number;
+  taskId: number;
   sourceFileId: string;
   sourceFileName?: string;
   sourceMd5?: string;
@@ -65,7 +69,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
   const [deleteCloud, setDeleteCloud] = useState(false);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [openTaskMenuId, setOpenTaskMenuId] = useState<number | null>(null);
-  const [processedTask, setProcessedTask] = useState<Task | null>(null);
+  const [processedTasks, setProcessedTasks] = useState<Task[]>([]);
   const [processedRecords, setProcessedRecords] = useState<ProcessedRecord[]>([]);
   const [processedLoading, setProcessedLoading] = useState(false);
   const [processedResetting, setProcessedResetting] = useState(false);
@@ -137,8 +141,10 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
       taskName: task.resourceName,
       totalEpisodes: task.totalEpisodes !== null && task.totalEpisodes !== undefined && task.totalEpisodes > 0 ? String(task.totalEpisodes) : '',
       currentEpisodes: String(task.currentEpisodes || 0),
-      targetFolderId: task.realFolderId || task.targetFolderId,
-      targetFolder: task.realFolderName || '',
+      targetFolderId: task.targetFolderId,
+      targetFolder: task.targetFolderName || '',
+      organizerTargetFolderId: task.organizerTargetFolderId || task.targetFolderId,
+      organizerTargetFolderName: task.organizerTargetFolderName || '',
       shareFolderId: task.shareFolderId || '',
       shareFolderName: task.shareFolderName || '',
       taskGroup: task.taskGroup || '',
@@ -177,12 +183,17 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
     }
   };
 
-  const handleOpenProcessedRecords = async (task: Task) => {
-    setProcessedTask(task);
+  const handleOpenProcessedRecords = async (taskList: Task[]) => {
+    if (taskList.length === 0) {
+      window.alert('请选择至少一个任务后再查看已转存记录');
+      return;
+    }
+    setProcessedTasks(taskList);
     setProcessedRecords([]);
     setProcessedLoading(true);
     try {
-      const response = await fetch(`/api/tasks/${task.id}/processed-files`);
+      const query = taskList.map(task => task.id).join(',');
+      const response = await fetch(`/api/tasks/processed-files?taskIds=${encodeURIComponent(query)}`);
       const data = await response.json();
       if (data.success) {
         setProcessedRecords(data.data || []);
@@ -198,24 +209,29 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
   };
 
   const handleOpenSelectedProcessedRecords = async () => {
-    if (selectedTaskIds.length !== 1) {
-      window.alert('请选择一个任务后再查看已转存记录');
+    if (selectedTaskIds.length === 0) {
+      window.alert('请选择至少一个任务后再查看已转存记录');
       return;
     }
-    const task = tasks.find(item => item.id === selectedTaskIds[0]);
-    if (!task) {
+    const selectedTasks = tasks.filter(item => selectedTaskIds.includes(item.id));
+    if (selectedTasks.length === 0) {
       window.alert('所选任务不存在');
       return;
     }
-    await handleOpenProcessedRecords(task);
+    await handleOpenProcessedRecords(selectedTasks);
   };
 
   const handleResetProcessedRecords = async () => {
-    if (!processedTask) return;
-    if (!window.confirm('确定要清空当前任务的已转存记录吗？清空后会允许重新追更。')) return;
+    if (processedTasks.length === 0) return;
+    const targetLabel = processedTasks.length === 1 ? '当前任务' : `选中的 ${processedTasks.length} 个任务`;
+    if (!window.confirm(`确定要删除${targetLabel}的全部已转存记录吗？删除后会允许重新追更。`)) return;
     setProcessedResetting(true);
     try {
-      const response = await fetch(`/api/tasks/${processedTask.id}/processed-files`, { method: 'DELETE' });
+      const response = await fetch('/api/tasks/processed-files', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskIds: processedTasks.map(task => task.id) })
+      });
       const data = await response.json();
       if (data.success) {
         setProcessedRecords([]);
@@ -227,11 +243,10 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
     }
   };
 
-  const handleDeleteProcessedRecord = async (recordId: number) => {
-    if (!processedTask) return;
+  const handleDeleteProcessedRecord = async (taskId: number, recordId: number) => {
     if (!window.confirm('确定要删除这条已转存记录吗？删除后该文件允许重新追更。')) return;
     try {
-      const response = await fetch(`/api/tasks/${processedTask.id}/processed-files/${recordId}`, { method: 'DELETE' });
+      const response = await fetch(`/api/tasks/${taskId}/processed-files/${recordId}`, { method: 'DELETE' });
       const data = await response.json();
       if (data.success) {
         setProcessedRecords(prev => prev.filter(record => record.id !== recordId));
@@ -355,6 +370,17 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
     }
   };
 
+  const processedGroups = processedTasks.map(task => ({
+    task,
+    records: processedRecords.filter(record => record.taskId === task.id)
+  }));
+
+  const processedModalTitle = processedTasks.length === 1
+    ? `${processedTasks[0].resourceName} 已转存记录`
+    : processedTasks.length > 1
+      ? `已转存记录（${processedTasks.length} 个任务）`
+      : '已转存记录';
+
   const handleGenerateStrm = async () => {
     if (selectedTaskIds.length === 0) return;
     const overwrite = window.confirm('是否覆盖已存在的STRM文件');
@@ -386,7 +412,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
           <button
             type="button"
             onClick={handleOpenSelectedProcessedRecords}
-            disabled={selectedTaskIds.length !== 1}
+            disabled={selectedTaskIds.length === 0}
             className="bg-white border border-slate-300 px-6 py-2.5 rounded-full text-sm font-medium hover:bg-slate-50 transition-all flex items-center gap-2 text-slate-700 disabled:opacity-50 disabled:hover:bg-white"
           >
             <Database size={16} /> 已转存记录
@@ -585,7 +611,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                           <button
                             onClick={() => {
                               setOpenTaskMenuId(null);
-                              handleOpenProcessedRecords(task);
+                              handleOpenProcessedRecords([task]);
                             }}
                             className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-sm text-slate-700 transition-colors flex items-center gap-2"
                           >
@@ -628,25 +654,25 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
       </div>
 
       <Modal
-        isOpen={Boolean(processedTask)}
+        isOpen={processedTasks.length > 0}
         onClose={() => {
-          setProcessedTask(null);
+          setProcessedTasks([]);
           setProcessedRecords([]);
         }}
-        title={processedTask ? `${processedTask.resourceName} 已转存记录` : '已转存记录'}
+        title={processedModalTitle}
         footer={
           <div className="px-8 py-6 flex justify-between gap-3">
             <button
               onClick={handleResetProcessedRecords}
-              disabled={!processedTask || processedResetting}
+              disabled={processedTasks.length === 0 || processedResetting}
               className="px-6 py-2.5 rounded-full text-sm font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
             >
               <span className="inline-flex items-center gap-2">
                 <RotateCcw size={16} />
-                {processedResetting ? '清空中...' : '清空记录'}
+                {processedResetting ? '删除中...' : '全部删除'}
               </span>
             </button>
-            <button onClick={() => setProcessedTask(null)} className="px-6 py-2.5 rounded-full text-sm font-medium text-[#0b57d0] hover:bg-[#0b57d0]/10 transition-colors">
+            <button onClick={() => setProcessedTasks([])} className="px-6 py-2.5 rounded-full text-sm font-medium text-[#0b57d0] hover:bg-[#0b57d0]/10 transition-colors">
               关闭
             </button>
           </div>
@@ -655,49 +681,62 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
         <div className="pt-6 space-y-3">
           {processedLoading && <div className="text-sm text-slate-500">加载中...</div>}
           {!processedLoading && processedRecords.length === 0 && (
-            <div className="text-sm text-slate-500 bg-slate-50 rounded-2xl px-4 py-6">当前任务还没有已转存记录。</div>
+            <div className="text-sm text-slate-500 bg-slate-50 rounded-2xl px-4 py-6">所选任务还没有已转存记录。</div>
           )}
-          {!processedLoading && processedRecords.map(record => (
-            <div key={record.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-slate-900 truncate" title={record.sourceFileName || ''}>
-                    {record.sourceFileName || '-'}
-                  </div>
-                  <div className="text-xs text-slate-500 mt-1">
-                    还原文件: {record.restoredFileName || '-'}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getProcessedStatusClass(record.status)}`}>
-                    {getProcessedStatusLabel(record.status)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteProcessedRecord(record.id)}
-                    className="p-1.5 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                    title="删除记录"
-                  >
-                    <X size={14} />
-                  </button>
+          {!processedLoading && processedGroups.map(({ task, records }) => (
+            <div key={task.id} className="space-y-3">
+              <div className="px-1">
+                <div className="text-sm font-semibold text-slate-900">{task.resourceName}</div>
+                <div className="text-xs text-slate-500 mt-1">
+                  {records.length > 0 ? `${records.length} 条记录` : '暂无记录'}
                 </div>
               </div>
-              <div className="mt-2 text-xs text-slate-500 break-all">
-                文件ID: {record.sourceFileId}
-              </div>
-              {record.sourceMd5 && (
-                <div className="mt-1 text-xs text-slate-500 break-all">
-                  MD5: {record.sourceMd5}
-                </div>
+              {records.length === 0 && (
+                <div className="text-sm text-slate-500 bg-slate-50 rounded-2xl px-4 py-4">当前任务还没有已转存记录。</div>
               )}
-              {record.lastError && (
-                <div className="mt-1 text-xs text-red-600 break-all">
-                  错误: {record.lastError}
+              {records.map(record => (
+                <div key={`${task.id}-${record.id}`} className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-900 truncate" title={record.sourceFileName || ''}>
+                        {record.sourceFileName || '-'}
+                      </div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        还原文件: {record.restoredFileName || '-'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getProcessedStatusClass(record.status)}`}>
+                        {getProcessedStatusLabel(record.status)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteProcessedRecord(record.taskId, record.id)}
+                        className="p-1.5 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                        title="删除记录"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-slate-500 break-all">
+                    文件ID: {record.sourceFileId}
+                  </div>
+                  {record.sourceMd5 && (
+                    <div className="mt-1 text-xs text-slate-500 break-all">
+                      MD5: {record.sourceMd5}
+                    </div>
+                  )}
+                  {record.lastError && (
+                    <div className="mt-1 text-xs text-red-600 break-all">
+                      错误: {record.lastError}
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-slate-400">
+                    更新时间: {formatDateTime(record.updatedAt || null)}
+                  </div>
                 </div>
-              )}
-              <div className="mt-1 text-xs text-slate-400">
-                更新时间: {formatDateTime(record.updatedAt || null)}
-              </div>
+              ))}
             </div>
           ))}
         </div>

@@ -60,10 +60,11 @@ class OrganizerService {
 
         const tmdbInfo = await this._resolveTmdbInfo(task, resourceInfo);
         const libraryInfo = this._resolveLibraryInfo(task, resourceInfo, tmdbInfo);
-        const baseFolderPath = this._resolveBaseFolderPath(task);
+        const organizerRoot = this._resolveOrganizerRoot(task);
+        const baseFolderPath = organizerRoot.path;
         const categoryCache = new Map();
         const resourceFolderPath = this._joinPosix(baseFolderPath, libraryInfo.categoryName, libraryInfo.resourceFolderName);
-        const categoryFolderId = await this._ensureFolderByName(cloud189, String(task.targetFolderId), libraryInfo.categoryName, categoryCache);
+        const categoryFolderId = await this._ensureFolderByName(cloud189, organizerRoot.id, libraryInfo.categoryName, categoryCache);
         const resourceFolderId = await this._ensureFolderByName(cloud189, categoryFolderId, libraryInfo.resourceFolderName, categoryCache);
 
         const originalFolderId = String(task.realFolderId);
@@ -424,6 +425,22 @@ class OrganizerService {
                 parentFolderId: String(targetFolderId)
             });
         }
+    }
+
+    _resolveOrganizerRoot(task) {
+        const organizerFolderId = String(task.organizerTargetFolderId || task.targetFolderId || '').trim();
+        const organizerFolderPath = this._normalizePath(task.organizerTargetFolderName || task.targetFolderName || '');
+        if (organizerFolderId) {
+            return {
+                id: organizerFolderId,
+                path: organizerFolderPath
+            };
+        }
+
+        return {
+            id: String(task.targetFolderId || '').trim(),
+            path: this._resolveBaseFolderPath(task)
+        };
     }
 
     _resolveBaseFolderPath(task) {

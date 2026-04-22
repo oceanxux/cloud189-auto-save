@@ -1010,6 +1010,72 @@ class TaskService {
         });
     }
 
+    async syncTaskProgressFromProcessedRecords(tasks = []) {
+        const taskList = Array.isArray(tasks) ? tasks.filter(task => task?.id) : [];
+        if (taskList.length === 0) {
+            return taskList;
+        }
+
+        const taskIds = taskList.map(task => task.id);
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        const rawStats = await taskProcessedFileRepo
+            .createQueryBuilder('record')
+            .select('record.taskId', 'taskId')
+            .addSelect('COUNT(DISTINCT record.sourceFileId)', 'recordCount')
+            .addSelect('MAX(record.updatedAt)', 'lastUpdatedAt')
+            .where('record.taskId IN (:...taskIds)', { taskIds })
+            .andWhere('record.status IN (:...statuses)', { statuses: ['processing', 'done'] })
+            .groupBy('record.taskId')
+            .getRawMany();
+
+        const statsByTaskId = new Map(
+            rawStats.map(item => [
+                Number(item.taskId),
+                {
+                    recordCount: Number(item.recordCount) || 0,
+                    lastUpdatedAt: item.lastUpdatedAt ? new Date(item.lastUpdatedAt) : null
+                }
+            ])
+        );
+
+        const pendingUpdates = [];
+
+        for (const task of taskList) {
+            const stats = statsByTaskId.get(task.id);
+            if (!stats) {
+                continue;
+            }
+
+            const currentEpisodes = Number(task.currentEpisodes) || 0;
+            const nextEpisodes = Math.max(currentEpisodes, stats.recordCount);
+            let changed = false;
+
+            if (nextEpisodes !== currentEpisodes) {
+                task.currentEpisodes = nextEpisodes;
+                changed = true;
+            }
+
+            if (!task.lastFileUpdateTime && stats.lastUpdatedAt) {
+                task.lastFileUpdateTime = stats.lastUpdatedAt;
+                changed = true;
+            }
+
+            if (changed) {
+                pendingUpdates.push({
+                    id: task.id,
+                    currentEpisodes: task.currentEpisodes,
+                    lastFileUpdateTime: task.lastFileUpdateTime
+                });
+            }
+        }
+
+        if (pendingUpdates.length > 0) {
+            await this.taskRepo.save(pendingUpdates);
+        }
+
+        return taskList;
+    }
+
     // 获取待处理任务
     async getPendingTasks(ignore = false, taskIds = []) {
         const conditions = [
@@ -1345,7 +1411,7 @@ class TaskService {
                 name: newName
             });
         }
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 150));
     }
 
     // 检查任务状态

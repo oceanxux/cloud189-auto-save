@@ -40,9 +40,16 @@ interface Task {
   enableLazyStrm: boolean;
   enableOrganizer: boolean;
   enableCron: boolean;
+  lastOrganizedAt?: string | null;
+  lastOrganizeError?: string | null;
 }
 
 const isAutoRefreshTask = (task: Task) => String(task.taskGroup || '').includes('自动追剧') && !task.enableLazyStrm;
+const stripRootSuffix = (value?: string | null) => String(value || '').replace(/\(根\)$/u, '').trim();
+const getDisplayTaskName = (task: Task) => {
+  const resourceName = stripRootSuffix(task.resourceName) || 'Unknown Resource';
+  return task.shareFolderName ? `${resourceName}/${task.shareFolderName}` : resourceName;
+};
 
 interface TaskTabProps {
   onCreateTask: (initialData?: any) => void;
@@ -529,7 +536,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
       <div className="grid grid-cols-1 gap-4">
         {Array.isArray(tasks) && tasks.map(task => {
           if (!task) return null;
-          const taskName = task.shareFolderName ? `${task.resourceName}/${task.shareFolderName}` : (task.resourceName || 'Unknown Resource');
+          const taskName = getDisplayTaskName(task);
           const progress = (task.totalEpisodes && task.totalEpisodes > 0) ? (task.currentEpisodes / task.totalEpisodes) * 100 : 0;
           const isSelected = selectedTaskIds.includes(task.id);
 
@@ -579,6 +586,13 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                         最近换源: {formatDateTime(task.lastSourceRefreshTime)}
                       </div>
                     )}
+                    {task.enableOrganizer && (
+                      <div className={`mt-2 text-xs ${task.lastOrganizeError ? 'text-red-500' : 'text-slate-400'}`}>
+                        {task.lastOrganizeError
+                          ? `最近整理失败: ${task.lastOrganizeError}`
+                          : `最近整理: ${formatDateTime(task.lastOrganizedAt || null)}`}
+                      </div>
+                    )}
                   </div>
                 </div>
                 
@@ -592,6 +606,9 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                         className={`h-full ${getStatusColorClass(task.status)} rounded-full`}
                       />
                     </div>
+                    {task.enableOrganizer && task.lastOrganizeError && (
+                      <div className="mt-2 text-[11px] font-medium text-red-500">整理异常</div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <button 

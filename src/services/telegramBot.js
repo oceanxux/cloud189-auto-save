@@ -6,6 +6,7 @@ const { EmbyService } = require('./emby');
 const { Cloud189Service } = require('./cloud189');
 const { TMDBService } = require('./tmdb');
 const { AutoSeriesService } = require('./autoSeries');
+const { OrganizerService } = require('./organizer');
 const path = require('path');
 const { default: cloudSaverSDK } = require('../sdk/cloudsaver/sdk');
 const ProxyUtil = require('../utils/ProxyUtil');
@@ -21,6 +22,7 @@ class TelegramBotService {
         this.commonFolderRepo = AppDataSource.getRepository(CommonFolder);
         this.taskRepo = AppDataSource.getRepository(Task);
         this.taskService = new TaskService(this.taskRepo, this.accountRepo);
+        this.organizerService = new OrganizerService(this.taskService, this.taskRepo);
         this.lazyShareStrmService = new LazyShareStrmService(this.accountRepo, this.taskService);
         this.autoSeriesService = new AutoSeriesService(this.taskService, this.accountRepo, this.lazyShareStrmService);
         this.currentAccountId = null;
@@ -101,6 +103,7 @@ class TelegramBotService {
             { command: 'accounts', description: '账号列表' },
             { command: 'tasks', description: '任务列表' },
             { command: 'execute_all', description: '执行所有任务' },
+            { command: 'organize', description: '执行任务整理' },
             { command: 'fl', description: '常用目录列表' },
             { command: 'fs', description: '添加常用目录' },
             { command: 'rename', description: '批量剧集重命名' },
@@ -167,6 +170,7 @@ class TelegramBotService {
                 '📝 任务操作：\n' +
                 '/execute_[ID] - 执行指定任务\n' +
                 '/execute_all - 执行所有任务\n' +
+                '/organize_[ID] - 执行指定任务整理\n' +
                 '/strm_[ID] - 生成STRM文件\n' +
                 '/emby_[ID] - 通知Emby刷新\n' +
                 '/dt_[ID] - 删除指定任务\n' +
@@ -301,6 +305,36 @@ class TelegramBotService {
                 });
             } catch (e) {
                 await this.bot.editMessageText(`任务执行失败: ${e.message}`, {
+                    chat_id: chatId,
+                    message_id: message.message_id
+                });
+            }
+        });
+
+        this.bot.onText(/^\/organize$/, async (msg) => {
+            const chatId = msg.chat.id;
+            if (!this._checkChatId(chatId)) return
+            if (!this._checkUserId(chatId)) return
+            await this.showOrganizerTasks(chatId);
+        });
+
+        this.bot.onText(/^\/organize_(\d+)$/, async (msg, match) => {
+            const chatId = msg.chat.id;
+            const taskId = match[1];
+            if (!this._checkChatId(chatId)) return
+            if (!this._checkTaskId(taskId)) return;
+            const message = await this.bot.sendMessage(chatId, '开始执行整理...');
+            try {
+                const result = await this.organizerService.organizeTaskById(taskId, {
+                    triggerStrm: true,
+                    force: true
+                });
+                await this.bot.editMessageText(result?.message || '整理完成', {
+                    chat_id: chatId,
+                    message_id: message.message_id
+                });
+            } catch (e) {
+                await this.bot.editMessageText(`整理失败: ${e.message}`, {
                     chat_id: chatId,
                     message_id: message.message_id
                 });
@@ -629,11 +663,12 @@ class TelegramBotService {
         const totalPages = Math.ceil(total / pageSize);
 
         const taskList = tasks.map(task =>
-            `📺 ${task.resourceName}\n` +
+            `📺 ${this._getDisplayTaskName(task)}\n` +
             `⏱ 进度：${task.currentEpisodes}${task.totalEpisodes ? '/' + task.totalEpisodes : ''} 集\n` +
             `🔄 状态：${this.formatStatus(task.status)}\n` +
             `⌚️ 更新：${new Date(task.lastFileUpdateTime).toLocaleString('zh-CN')}\n` +
             `📁 执行: /execute_${task.id}\n` +
+            `🗂 整理：/organize_${task.id}\n` +
             `📁 STRM：/strm_${task.id}\n` +
             `🎬 Emby：/emby_${task.id}\n` +
             `❌ 删除: /dt_${task.id}`
@@ -685,6 +720,29 @@ class TelegramBotService {
             });
             this.globalTaskListMessageId = newMessage.message_id;
         }
+    }
+
+    async showOrganizerTasks(chatId) {
+        const tasks = await this.taskRepo.find({
+            where: {
+                enableOrganizer: true
+            },
+            order: { updatedAt: 'DESC' },
+            take: 10
+        });
+
+        if (!tasks.length) {
+            await this.bot.sendMessage(chatId, '当前没有启用整理器的任务');
+            return;
+        }
+
+        const lines = tasks.map(task =>
+            `📺 ${this._getDisplayTaskName(task)}\n` +
+            `🗂 /organize_${task.id}\n` +
+            `⌚️ 最近整理：${task.lastOrganizedAt ? new Date(task.lastOrganizedAt).toLocaleString('zh-CN') : '从未执行'}${task.lastOrganizeError ? `\n⚠️ ${task.lastOrganizeError}` : ''}`
+        );
+
+        await this.bot.sendMessage(chatId, `整理器任务列表：\n\n${lines.join('\n\n')}`);
     }
 
     formatStatus(status) {
@@ -1190,6 +1248,15 @@ class TelegramBotService {
     // 获取当前已脱敏的用户名
     _getDesensitizedUserName() {
         return this.currentAccount.username.replace(/(.{3}).*(.{4})/, '$1****$2');
+    }
+
+    _stripRootSuffix(value) {
+        return String(value || '').replace(/\(根\)$/u, '').trim();
+    }
+
+    _getDisplayTaskName(task) {
+        const resourceName = this._stripRootSuffix(task?.resourceName) || '未知';
+        return task?.shareFolderName ? `${resourceName}/${task.shareFolderName}` : resourceName;
     }
 
     // 在类的底部添加新的辅助方法

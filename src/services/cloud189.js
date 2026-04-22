@@ -117,6 +117,25 @@ class Cloud189Service {
         }
     }
 
+    async requestWithRetry(action, body = {}, options = {}) {
+        const retries = Number(options.retries ?? 0);
+        const retryDelayMs = Number(options.retryDelayMs ?? 800);
+        const shouldRetry = typeof options.shouldRetry === 'function'
+            ? options.shouldRetry
+            : (result) => result == null;
+
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            const result = await this.request(action, body);
+            if (!shouldRetry(result) || attempt === retries) {
+                return result;
+            }
+            logTaskEvent(`天翼云盘接口请求失败，${Math.round(retryDelayMs / 1000 * 10) / 10} 秒后重试 (${attempt + 1}/${retries})`);
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        }
+
+        return null;
+    }
+
     buildRequestUrl(action) {
         const baseUrl = /^https?:\/\//.test(action) ? action : `${Cloud189Service.CLOUD_WEB_BASE_URL}${action}`;
         const url = new URL(baseUrl);
@@ -218,7 +237,7 @@ class Cloud189Service {
         if (this.isFamilyAccount()) {
             return await this.listFamilyFiles(folderId);
         }
-        return await this.request('/api/open/file/listFiles.action' , {
+        return await this.requestWithRetry('/api/open/file/listFiles.action' , {
             method: 'GET',
             searchParams: { 
                 folderId,
@@ -228,13 +247,16 @@ class Cloud189Service {
                 pageNum: 1,
                 pageSize: 1000
              }
+        }, {
+            retries: 2,
+            retryDelayMs: 1200
         })
     }
 
     async listFamilyFiles(folderId = '') {
         const familyId = await this.resolveFamilyId();
         const normalizedFolderId = folderId === '-11' ? '' : (folderId || '');
-        return await this.request('/api/open/family/file/listFiles.action', {
+        return await this.requestWithRetry('/api/open/family/file/listFiles.action', {
             method: 'GET',
             searchParams: {
                 folderId: normalizedFolderId,
@@ -247,6 +269,9 @@ class Cloud189Service {
                 orderBy: '1',
                 descending: 'false'
             }
+        }, {
+            retries: 2,
+            retryDelayMs: 1200
         });
     }
 
@@ -298,7 +323,7 @@ class Cloud189Service {
     async createFolder(folderName, parentFolderId) {
         if (this.isFamilyAccount()) {
             const familyId = await this.resolveFamilyId();
-            return await this.request('/api/open/family/file/createFolder.action', {
+            return await this.requestWithRetry('/api/open/family/file/createFolder.action', {
                 method: 'POST',
                 searchParams: {
                     folderName,
@@ -306,14 +331,22 @@ class Cloud189Service {
                     familyId,
                     parentId: parentFolderId === '-11' ? '' : (parentFolderId || '')
                 }
+            }, {
+                retries: 2,
+                retryDelayMs: 1200,
+                shouldRetry: (result) => result == null || result?.res_code === 'FileNotFound'
             });
         }
-        return await this.request('/api/open/file/createFolder.action' , {
+        return await this.requestWithRetry('/api/open/file/createFolder.action' , {
             method: 'POST',
             form: {
                 parentFolderId: parentFolderId,
                 folderName: folderName
             },
+        }, {
+            retries: 2,
+            retryDelayMs: 1200,
+            shouldRetry: (result) => result == null || result?.res_code === 'FileNotFound'
         })
     }
 
@@ -358,21 +391,27 @@ class Cloud189Service {
     async renameFile(fileId, destFileName) {
         if (this.isFamilyAccount()) {
             const familyId = await this.resolveFamilyId();
-            return await this.request('/api/open/family/file/renameFile.action', {
+            return await this.requestWithRetry('/api/open/family/file/renameFile.action', {
                 method: 'GET',
                 searchParams: {
                     fileId,
                     destFileName,
                     familyId
                 }
+            }, {
+                retries: 2,
+                retryDelayMs: 1000
             });
         }
-        const response = await this.request('/api/open/file/renameFile.action', {
+        const response = await this.requestWithRetry('/api/open/file/renameFile.action', {
             method: 'POST',
             form: {
                 fileId,
                 destFileName
             },
+        }, {
+            retries: 2,
+            retryDelayMs: 1000
         })
         return response
     }

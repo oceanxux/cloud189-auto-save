@@ -52,6 +52,8 @@ interface SettingsData {
       accountId: string;
       targetFolderId: string;
       targetFolder: string;
+      organizerTargetFolderId: string;
+      organizerTargetFolderName: string;
     }
   };
   wecom: {
@@ -158,7 +160,7 @@ const initialSettings: SettingsData = {
     enableAutoCreateFolder: false,
     enableFamilyTransit: true,
     enableFamilyTransitFirst: false,
-    autoCreate: { accountId: '', targetFolderId: '', targetFolder: '' }
+    autoCreate: { accountId: '', targetFolderId: '', targetFolder: '', organizerTargetFolderId: '', organizerTargetFolderName: '' }
   },
   wecom: { enable: false, webhook: '' },
   telegram: {
@@ -191,6 +193,7 @@ const SettingsTab: React.FC = () => {
 
   // Folder Selector State
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
+  const [folderSelectorMode, setFolderSelectorMode] = useState<'target' | 'organizer'>('target');
 
   // Custom Push Modal State
   const [isPushModalOpen, setIsPushModalOpen] = useState(false);
@@ -629,7 +632,33 @@ const SettingsTab: React.FC = () => {
                   />
                   <button 
                     type="button" 
-                    onClick={() => setIsFolderSelectorOpen(true)}
+                    onClick={() => {
+                      setFolderSelectorMode('target');
+                      setIsFolderSelectorOpen(true);
+                    }}
+                    disabled={!settings.task.autoCreate.accountId}
+                    className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                  >
+                    <Folder size={20} />
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-700">默认整理根目录</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={settings.task.autoCreate.organizerTargetFolderName || settings.task.autoCreate.organizerTargetFolderId}
+                    readOnly
+                    placeholder="默认继承保存目录"
+                    className="flex-1 px-5 py-3 bg-slate-100 border border-slate-300 rounded-2xl text-sm outline-none text-slate-500"
+                  />
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      setFolderSelectorMode('organizer');
+                      setIsFolderSelectorOpen(true);
+                    }}
                     disabled={!settings.task.autoCreate.accountId}
                     className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50"
                   >
@@ -1144,8 +1173,20 @@ const SettingsTab: React.FC = () => {
         title="选择自动追剧默认保存目录"
         onSelect={(folder: SelectedFolder) => {
           updateSettings('task.autoCreate.accountId', String(folder.accountId));
+          if (folderSelectorMode === 'organizer') {
+            updateSettings('task.autoCreate.organizerTargetFolderId', folder.id);
+            updateSettings('task.autoCreate.organizerTargetFolderName', folder.name);
+            return;
+          }
+          const shouldSyncOrganizer =
+            !settings.task.autoCreate.organizerTargetFolderId ||
+            settings.task.autoCreate.organizerTargetFolderId === settings.task.autoCreate.targetFolderId;
           updateSettings('task.autoCreate.targetFolderId', folder.id);
           updateSettings('task.autoCreate.targetFolder', folder.name);
+          if (shouldSyncOrganizer) {
+            updateSettings('task.autoCreate.organizerTargetFolderId', folder.id);
+            updateSettings('task.autoCreate.organizerTargetFolderName', folder.name);
+          }
         }}
       />
     </div>

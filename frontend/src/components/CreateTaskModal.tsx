@@ -260,6 +260,9 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
     setExecuteAfterReplace(true);
     fetchAccounts(nextFormData.accountId);
     fetchRegexPresets();
+    if (!initialData) {
+      fetchTaskDefaults();
+    }
   }, [isOpen, initialData]);
 
   const fetchAccounts = async (preferredAccountId?: string) => {
@@ -299,6 +302,36 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
       }
     } catch (error) {
       console.error('Failed to fetch regex presets:', error);
+    }
+  };
+
+  const fetchTaskDefaults = async () => {
+    try {
+      const response = await fetch('/api/settings');
+      const data = await response.json();
+      if (!data.success) {
+        return;
+      }
+      const autoCreate = data.data?.task?.autoCreate || {};
+      setFormData(prev => {
+        if (initialData?.id) {
+          return prev;
+        }
+        const nextTargetFolderId = prev.targetFolderId || autoCreate.targetFolderId || '';
+        const nextTargetFolder = prev.targetFolder || autoCreate.targetFolder || '';
+        const nextOrganizerTargetFolderId = autoCreate.organizerTargetFolderId || prev.organizerTargetFolderId || nextTargetFolderId;
+        const nextOrganizerTargetFolderName = autoCreate.organizerTargetFolderName || prev.organizerTargetFolderName || nextTargetFolder;
+        return {
+          ...prev,
+          accountId: prev.accountId || String(autoCreate.accountId || ''),
+          targetFolderId: nextTargetFolderId,
+          targetFolder: nextTargetFolder,
+          organizerTargetFolderId: nextOrganizerTargetFolderId,
+          organizerTargetFolderName: nextOrganizerTargetFolderName
+        };
+      });
+    } catch (error) {
+      console.error('Failed to fetch task defaults:', error);
     }
   };
 

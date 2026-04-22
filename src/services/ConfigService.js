@@ -27,7 +27,9 @@ class ConfigService {
         autoCreate: {
           accountId: '',
           targetFolderId: '',
-          targetFolder: ''
+          targetFolder: '',
+          organizerTargetFolderId: '',
+          organizerTargetFolderName: ''
         }
       },
       wecom: {

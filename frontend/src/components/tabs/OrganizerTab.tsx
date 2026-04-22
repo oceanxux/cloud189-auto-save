@@ -17,6 +17,12 @@ interface OrganizerTask {
   lastOrganizeError: string | null;
 }
 
+const stripRootSuffix = (value?: string | null) => String(value || '').replace(/\(根\)$/u, '').trim();
+const getDisplayTaskName = (task: OrganizerTask) => {
+  const resourceName = stripRootSuffix(task.resourceName) || '未知';
+  return task.shareFolderName ? `${resourceName}/${task.shareFolderName}` : resourceName;
+};
+
 const OrganizerTab: React.FC = () => {
   const [tasks, setTasks] = useState<OrganizerTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,7 +120,30 @@ const OrganizerTab: React.FC = () => {
                 </tr>
               ) : (
                 tasks.map(task => {
-                  const taskName = task.shareFolderName ? `${task.resourceName}/${task.shareFolderName}` : task.resourceName || '未知';
+                  const taskName = getDisplayTaskName(task);
+                  const organizerState = task.lastOrganizeError
+                    ? (
+                      <span className="flex items-center gap-1 text-red-600">
+                        <AlertCircle size={14} /> 最近失败
+                      </span>
+                    )
+                    : task.lastOrganizedAt
+                      ? (
+                        <span className="flex items-center gap-1 text-[#146c2e]">
+                          <CheckCircle2 size={14} /> 最近成功
+                        </span>
+                      )
+                      : task.enableOrganizer
+                        ? (
+                          <span className="flex items-center gap-1 text-[#146c2e]">
+                            <CheckCircle2 size={14} /> 已启用
+                          </span>
+                        )
+                        : (
+                          <span className="flex items-center gap-1 text-slate-400">
+                            <Clock size={14} /> 未启用
+                          </span>
+                        );
                   return (
                     <tr key={task.id} className="hover:bg-slate-50/50 transition-colors group">
                       <td className="px-6 py-4">
@@ -132,17 +161,7 @@ const OrganizerTab: React.FC = () => {
                           {task.account.accountType === 'family' ? '家庭' : '个人'}
                         </span>
                       </td>
-                      <td className="px-6 py-4">
-                        {task.enableOrganizer ? (
-                          <span className="flex items-center gap-1 text-[#146c2e]">
-                            <CheckCircle2 size={14} /> 已启用
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-slate-400">
-                            <Clock size={14} /> 未启用
-                          </span>
-                        )}
-                      </td>
+                      <td className="px-6 py-4">{organizerState}</td>
                       <td className="px-6 py-4 text-slate-500">{formatDateTime(task.lastOrganizedAt)}</td>
                       <td className="px-6 py-4">
                         {task.lastOrganizeError ? (

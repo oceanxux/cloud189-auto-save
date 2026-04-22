@@ -666,6 +666,7 @@ AppDataSource.initialize().then(async () => {
             },
             where: whereClause
         });
+        await taskService.syncTaskProgressFromProcessedRecords(tasks);
         // username脱敏
         tasks.forEach(task => {
             task.account.username = task.account.username.replace(/(.{3}).*(.{4})/, '$1****$2');

@@ -29,6 +29,8 @@ class AutoSeriesService {
         const accountId = parseInt(autoCreateConfig.accountId);
         const targetFolderId = String(autoCreateConfig.targetFolderId || '').trim();
         const targetFolder = String(autoCreateConfig.targetFolder || '').trim();
+        const organizerTargetFolderId = String(autoCreateConfig.organizerTargetFolderId || targetFolderId || '').trim();
+        const organizerTargetFolderName = String(autoCreateConfig.organizerTargetFolderName || targetFolder || '').trim();
 
         if (!accountId) {
             throw new Error('请先在系统设置中配置自动追剧默认账号');
@@ -75,6 +77,8 @@ class AutoSeriesService {
             totalEpisodes,
             targetFolderId,
             targetFolder,
+            organizerTargetFolderId,
+            organizerTargetFolderName,
             matchPattern: '',
             matchOperator: 'lt',
             matchValue: '',
@@ -117,6 +121,8 @@ class AutoSeriesService {
 
         const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
         const targetFolder = String(autoCreateConfig.targetFolder || '').trim();
+        const organizerTargetFolderId = String(autoCreateConfig.organizerTargetFolderId || targetFolderId || '').trim();
+        const organizerTargetFolderName = String(autoCreateConfig.organizerTargetFolderName || targetFolder || '').trim();
         const totalEpisodes = Number(tmdbInfo?.totalEpisodes || 0) > 0
             ? Number(tmdbInfo.totalEpisodes)
             : (tmdbInfo?.status === 'Ended'
@@ -129,6 +135,8 @@ class AutoSeriesService {
             totalEpisodes,
             targetFolderId,
             targetFolder,
+            organizerTargetFolderId,
+            organizerTargetFolderName,
             matchPattern: '',
             matchOperator: 'lt',
             matchValue: '',

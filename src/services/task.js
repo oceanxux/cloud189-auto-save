@@ -1,4 +1,4 @@
-const { LessThan, In, IsNull } = require('typeorm');
+const { LessThan, In, IsNull, Like } = require('typeorm');
 const { Cloud189Service } = require('./cloud189');
 const { MessageUtil } = require('./message');
 const { logTaskEvent } = require('../utils/logUtils');
@@ -20,9 +20,10 @@ const { LazyShareStrmService } = require('./lazyShareStrm');
 const { CasService } = require('./casService');
 
 class TaskService {
-    constructor(taskRepo, accountRepo) {
+    constructor(taskRepo, accountRepo, taskProcessedFileRepo) {
         this.taskRepo = taskRepo;
         this.accountRepo = accountRepo;
+        this.taskProcessedFileRepo = taskProcessedFileRepo;
         this.messageUtil = new MessageUtil();
         this.eventService = EventService.getInstance();
         // 如果还没有taskComplete事件的监听器，则添加
@@ -303,6 +304,80 @@ class TaskService {
     async increaseShareFileAccessCount(cloud189, shareId ) {
         await cloud189.increaseShareFileAccessCount(shareId)
     }
+
+    async getProcessedRecords(taskId, options = {}) {
+        const where = { taskId };
+        if (options.status && options.status !== 'all') {
+            where.status = options.status;
+        }
+        if (options.search) {
+            return await this.taskProcessedFileRepo.find({
+                where: [
+                    { ...where, sourceFileName: Like(`%${options.search}%`) },
+                    { ...where, restoredFileName: Like(`%${options.search}%`) },
+                    { ...where, sourceMd5: Like(`%${options.search}%`) }
+                ],
+                order: {
+                    updatedAt: 'DESC',
+                    id: 'DESC'
+                }
+            });
+        }
+        return await this.taskProcessedFileRepo.find({
+            where,
+            order: {
+                updatedAt: 'DESC',
+                id: 'DESC'
+            }
+        });
+    }
+
+    async resetProcessedRecords(taskId) {
+        await this.taskProcessedFileRepo.delete({ taskId });
+    }
+
+    async _getDoneProcessedSourceFileIds(taskId) {
+        const records = await this.taskProcessedFileRepo.find({
+            select: {
+                sourceFileId: true
+            },
+            where: {
+                taskId,
+                status: 'done'
+            }
+        });
+        return new Set(records.map(record => String(record.sourceFileId)));
+    }
+
+    async _saveProcessedFileRecord(task, file, status, errorMessage = '') {
+        const restoredFileName = CasService.isCasFile(file.name)
+            ? CasService.getOriginalFileName(file.name)
+            : file.name;
+        const existingRecord = await this.taskProcessedFileRepo.findOneBy({
+            taskId: task.id,
+            sourceFileId: String(file.id)
+        });
+        if (existingRecord?.status === 'done' && status !== 'done') {
+            return existingRecord;
+        }
+        await this.taskProcessedFileRepo.upsert({
+            taskId: task.id,
+            sourceFileId: String(file.id),
+            sourceFileName: file.name,
+            sourceMd5: file.md5 || '',
+            sourceShareId: task.shareId || '',
+            restoredFileName,
+            status,
+            lastError: errorMessage || ''
+        }, ['taskId', 'sourceFileId']);
+    }
+
+    async _saveProcessedFileRecords(task, files, status, errorMessage = '') {
+        for (const file of files || []) {
+            await this._saveProcessedFileRecord(task, file, status, errorMessage);
+        }
+    }
+
     // 删除任务
     async deleteTask(taskId, deleteCloud) {
         const task = await this.getTaskById(taskId);
@@ -326,6 +401,7 @@ class TaskService {
         if (task.enableCron) {
             SchedulerService.removeTaskJob(task.id)
         }
+        await this.resetProcessedRecords(task.id);
         await this.taskRepo.remove(task);
     }
 
@@ -431,6 +507,8 @@ class TaskService {
         const fileNameList = [];
         let fileCount = 0;
         const casService = new CasService();
+        const normalFiles = [];
+        const casFiles = [];
 
         for (const file of newFiles) {
             if (task.enableSystemProxy) {
@@ -443,6 +521,11 @@ class TaskService {
                     isFolder: 0,
                     md5: file.md5,
                 });
+            }
+            if (CasService.isCasFile(file.name)) {
+                casFiles.push(file);
+            } else {
+                normalFiles.push(file);
             }
             const displayName = CasService.isCasFile(file.name)
                 ? `${file.name} -> ${CasService.getOriginalFileName(file.name)}`
@@ -457,6 +540,7 @@ class TaskService {
         }
         if (taskInfoList.length > 0) {
             if (!task.enableSystemProxy) {
+                await this._saveProcessedFileRecords(task, newFiles, 'processing');
                 const batchTaskDto = new BatchTaskDto({
                     taskInfos: JSON.stringify(taskInfoList),
                     type: 'SHARE_SAVE',
@@ -464,7 +548,10 @@ class TaskService {
                     shareId: task.shareId
                 });
                 await this.createBatchTask(cloud189, batchTaskDto);
-                await this._restoreTransferredCasFiles(task, newFiles, cloud189, casService);
+                if (normalFiles.length > 0) {
+                    await this._saveProcessedFileRecords(task, normalFiles, 'done');
+                }
+                await this._restoreTransferredCasFiles(task, casFiles, cloud189, casService);
             } else {
                 throw new Error('系统代理模式已移除');
             }
@@ -493,6 +580,7 @@ class TaskService {
                 const restoreName = CasService.getOriginalFileName(casFile.name, casInfo);
                 await casService.restoreFromCas(cloud189, task.realFolderId, casInfo, restoreName);
                 await this._waitForFileByName(cloud189, task.realFolderId, restoreName, 30, 1000);
+                await this._saveProcessedFileRecord(task, casFile, 'done');
                 try {
                     await cloud189.deleteFile(transferredCasFile.id, transferredCasFile.name);
                     logTaskEvent(`普通任务已删除CAS文件: ${transferredCasFile.name}`);
@@ -500,6 +588,7 @@ class TaskService {
                     logTaskEvent(`普通任务删除CAS文件失败: ${transferredCasFile.name}, 错误: ${deleteError.message}`);
                 }
             } catch (error) {
+                await this._saveProcessedFileRecord(task, casFile, 'failed', error.message);
                 logTaskEvent(`普通任务恢复CAS文件失败: ${casFile.name}, 错误: ${error.message}`);
                 throw error;
             }
@@ -605,6 +694,7 @@ class TaskService {
     // 执行任务
     async processTask(task) {
         let saveResults = [];
+        let attemptedNewFiles = [];
         try {
             const account = await this.accountRepo.findOneBy({ id: task.accountId });
             if (!account) {
@@ -676,6 +766,12 @@ class TaskService {
                 if (!file.isFolder) {
                     acc.existingFiles.add(file.md5);
                     acc.existingFileNames.add(file.name);
+                    // CAS 任务转存后会恢复为原始文件名，补充一份 .cas 对应名，避免后续把同一集重复识别成新增。
+                    if (!CasService.isCasFile(file.name)) {
+                        acc.existingFileNames.add(`${file.name}.cas`);
+                    } else {
+                        acc.existingFileNames.add(CasService.getOriginalFileName(file.name));
+                    }
                     if ((task.totalEpisodes == null || task.totalEpisodes <= 0) || this._checkFileSuffix(file, true, mediaSuffixs)) {
                         acc.existingMediaCount++;
                     }
@@ -686,6 +782,8 @@ class TaskService {
                 existingFileNames: new Set(), 
                 existingMediaCount: 0 
             });
+            // 始终以目标目录中的现有媒体文件数回填进度，避免首次执行但无新增时进度不刷新。
+            task.currentEpisodes = existingMediaCount;
             let aiFiltered = false;
             if (AIService.isEnabled() && task.matchPattern && task.matchOperator && task.matchValue) {
                 const aiResult = await this._filterFilesWithAI(task, shareFiles)
@@ -694,15 +792,18 @@ class TaskService {
                     aiFiltered = true;
                 }
             }
+            const doneProcessedIds = await this._getDoneProcessedSourceFileIds(task.id);
             
             const newFiles = shareFiles
                 .filter(file => 
                     !file.isFolder && !existingFiles.has(file.md5) 
                    && !existingFileNames.has(file.name)
+                   && !doneProcessedIds.has(String(file.id))
                    && this._checkFileSuffix(file, enableOnlySaveMedia, mediaSuffixs)
                    && (aiFiltered || this._handleMatchMode(task, file))
                    && !this.isHarmonized(file)
                 );
+            attemptedNewFiles = newFiles;
 
             // 处理新文件并保存到数据库和云盘
             if (newFiles.length > 0) {
@@ -731,7 +832,6 @@ class TaskService {
                 if (daysDiff >= ConfigService.getConfigValue('task.taskExpireDays')) {
                     task.status = 'completed';
                 }
-                task.currentEpisodes = existingMediaCount;
                 logTaskEvent(`${task.resourceName} 没有增量剧集`)
             }
             // 检查是否达到总数
@@ -744,6 +844,9 @@ class TaskService {
             await this.taskRepo.save(task);
             return saveResults.join('\n');
         } catch (error) {
+            if (attemptedNewFiles.length > 0) {
+                await this._saveProcessedFileRecords(task, attemptedNewFiles, 'failed', error.message);
+            }
             return await this._handleTaskFailure(task, error);
         }
     }

@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { AppDataSource } = require('./database');
-const { Account, Task, CommonFolder, Subscription, SubscriptionResource, StrmConfig } = require('./entities');
+const { Account, Task, CommonFolder, Subscription, SubscriptionResource, StrmConfig, TaskProcessedFile } = require('./entities');
 const { TaskService } = require('./services/task');
 const { Cloud189Service } = require('./services/cloud189');
 const { MessageUtil } = require('./services/message');
@@ -440,7 +440,8 @@ AppDataSource.initialize().then(async () => {
     const subscriptionRepo = AppDataSource.getRepository(Subscription);
     const subscriptionResourceRepo = AppDataSource.getRepository(SubscriptionResource);
     const strmConfigRepo = AppDataSource.getRepository(StrmConfig);
-    const taskService = new TaskService(taskRepo, accountRepo);
+    const taskProcessedFileRepo = AppDataSource.getRepository(TaskProcessedFile);
+    const taskService = new TaskService(taskRepo, accountRepo, taskProcessedFileRepo);
     const organizerService = new OrganizerService(taskService, taskRepo);
     const subscriptionService = new SubscriptionService(subscriptionRepo, subscriptionResourceRepo, accountRepo);
     const strmConfigService = new StrmConfigService(strmConfigRepo, accountRepo, subscriptionRepo, subscriptionResourceRepo);
@@ -789,6 +790,31 @@ AppDataSource.initialize().then(async () => {
                 messageUtil.sendMessage(result)
             }
             res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.get('/api/tasks/:id/processed-files', async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            if (!taskId) throw new Error('任务ID不能为空');
+            const records = await taskService.getProcessedRecords(taskId, {
+                status: String(req.query.status || 'all'),
+                search: String(req.query.search || '').trim()
+            });
+            res.json({ success: true, data: records });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.delete('/api/tasks/:id/processed-files', async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            if (!taskId) throw new Error('任务ID不能为空');
+            await taskService.resetProcessedRecords(taskId);
+            res.json({ success: true });
         } catch (error) {
             res.json({ success: false, error: error.message });
         }

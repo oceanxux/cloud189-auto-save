@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Index } from 'typeorm';
 
 @Entity()
 export class Account {
@@ -217,6 +217,57 @@ export class Task {
     // 是否是文件夹
     @Column('boolean', { nullable: true, default: true })
     isFolder!: boolean;
+}
+
+@Entity()
+@Index(['taskId', 'sourceFileId'], { unique: true })
+export class TaskProcessedFile {
+    @PrimaryGeneratedColumn()
+    id!: number;
+
+    @Column('integer')
+    taskId!: number;
+
+    @ManyToOne(() => Task, { nullable: false, onDelete: 'CASCADE' })
+    @JoinColumn({ name: 'taskId' })
+    task!: Task;
+
+    @Column('text')
+    sourceFileId!: string;
+
+    @Column('text', { nullable: true })
+    sourceFileName!: string;
+
+    @Column('text', { nullable: true })
+    sourceMd5!: string;
+
+    @Column('text', { nullable: true })
+    sourceShareId!: string;
+
+    @Column('text', { nullable: true })
+    restoredFileName!: string;
+
+    @Column('text', { default: 'processing' })
+    status!: string;
+
+    @Column('text', { nullable: true })
+    lastError!: string;
+
+    @CreateDateColumn({
+        transformer: {
+            from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+            to: (date: Date) => date
+        }
+    })
+    createdAt!: Date;
+
+    @UpdateDateColumn({
+        transformer: {
+            from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+            to: (date: Date) => date
+        }
+    })
+    updatedAt!: Date;
 }
 
 // 常用目录表

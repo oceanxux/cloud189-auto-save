@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, ChevronRight, Filter, Search, RefreshCw, Files, PlayCircle, MoreVertical, CheckCircle2, AlertCircle, Clock, Trash2, ClipboardList, Edit3 } from 'lucide-react';
+import { Plus, ChevronRight, Filter, Search, RefreshCw, Files, PlayCircle, MoreVertical, CheckCircle2, AlertCircle, Clock, Trash2, ClipboardList, Edit3, Database, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import Modal from '../Modal';
 
 interface Account {
   id: number;
@@ -41,6 +42,17 @@ interface TaskTabProps {
   onCreateTask: (initialData?: any) => void;
 }
 
+interface ProcessedRecord {
+  id: number;
+  sourceFileId: string;
+  sourceFileName?: string;
+  sourceMd5?: string;
+  restoredFileName?: string;
+  status: 'processing' | 'done' | 'failed';
+  lastError?: string;
+  updatedAt?: string;
+}
+
 const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,6 +62,10 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
   const [deleteCloud, setDeleteCloud] = useState(false);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [openTaskMenuId, setOpenTaskMenuId] = useState<number | null>(null);
+  const [processedTask, setProcessedTask] = useState<Task | null>(null);
+  const [processedRecords, setProcessedRecords] = useState<ProcessedRecord[]>([]);
+  const [processedLoading, setProcessedLoading] = useState(false);
+  const [processedResetting, setProcessedResetting] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -156,6 +172,39 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
     }
   };
 
+  const handleOpenProcessedRecords = async (task: Task) => {
+    setProcessedTask(task);
+    setProcessedLoading(true);
+    try {
+      const response = await fetch(`/api/tasks/${task.id}/processed-files`);
+      const data = await response.json();
+      if (data.success) {
+        setProcessedRecords(data.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch processed records:', error);
+    } finally {
+      setProcessedLoading(false);
+    }
+  };
+
+  const handleResetProcessedRecords = async () => {
+    if (!processedTask) return;
+    if (!window.confirm('确定要清空当前任务的已转存记录吗？清空后会允许重新追更。')) return;
+    setProcessedResetting(true);
+    try {
+      const response = await fetch(`/api/tasks/${processedTask.id}/processed-files`, { method: 'DELETE' });
+      const data = await response.json();
+      if (data.success) {
+        setProcessedRecords([]);
+      }
+    } catch (error) {
+      console.error('Failed to reset processed records:', error);
+    } finally {
+      setProcessedResetting(false);
+    }
+  };
+
   const handleExecuteAll = async () => {
     if (!window.confirm('确定要执行所有任务吗？')) return;
     try {
@@ -245,6 +294,28 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
       case 'completed': return 'bg-[#c4eed0] text-[#146c2e]';
       case 'failed': return 'bg-[#f9dedc] text-[#b3261e]';
       default: return 'bg-slate-100 text-slate-500';
+    }
+  };
+
+  const getProcessedStatusLabel = (status: ProcessedRecord['status']) => {
+    switch (status) {
+      case 'done':
+        return '已完成';
+      case 'failed':
+        return '失败';
+      default:
+        return '处理中';
+    }
+  };
+
+  const getProcessedStatusClass = (status: ProcessedRecord['status']) => {
+    switch (status) {
+      case 'done':
+        return 'bg-emerald-100 text-emerald-700';
+      case 'failed':
+        return 'bg-red-100 text-red-700';
+      default:
+        return 'bg-amber-100 text-amber-700';
     }
   };
 
@@ -464,6 +535,15 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                           <button
                             onClick={() => {
                               setOpenTaskMenuId(null);
+                              handleOpenProcessedRecords(task);
+                            }}
+                            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-sm text-slate-700 transition-colors flex items-center gap-2"
+                          >
+                            <Database size={14} /> 已转存记录
+                          </button>
+                          <button
+                            onClick={() => {
+                              setOpenTaskMenuId(null);
                               handleEditTask(task);
                             }}
                             className="w-full text-left px-3 py-1.5 hover:bg-slate-50 text-sm text-slate-700 transition-colors flex items-center gap-2"
@@ -496,6 +576,72 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
           </div>
         )}
       </div>
+
+      <Modal
+        isOpen={Boolean(processedTask)}
+        onClose={() => {
+          setProcessedTask(null);
+          setProcessedRecords([]);
+        }}
+        title={processedTask ? `${processedTask.resourceName} 已转存记录` : '已转存记录'}
+        footer={
+          <div className="px-8 py-6 flex justify-between gap-3">
+            <button
+              onClick={handleResetProcessedRecords}
+              disabled={!processedTask || processedResetting}
+              className="px-6 py-2.5 rounded-full text-sm font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              <span className="inline-flex items-center gap-2">
+                <RotateCcw size={16} />
+                {processedResetting ? '清空中...' : '清空记录'}
+              </span>
+            </button>
+            <button onClick={() => setProcessedTask(null)} className="px-6 py-2.5 rounded-full text-sm font-medium text-[#0b57d0] hover:bg-[#0b57d0]/10 transition-colors">
+              关闭
+            </button>
+          </div>
+        }
+      >
+        <div className="pt-6 space-y-3">
+          {processedLoading && <div className="text-sm text-slate-500">加载中...</div>}
+          {!processedLoading && processedRecords.length === 0 && (
+            <div className="text-sm text-slate-500 bg-slate-50 rounded-2xl px-4 py-6">当前任务还没有已转存记录。</div>
+          )}
+          {!processedLoading && processedRecords.map(record => (
+            <div key={record.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-slate-900 truncate" title={record.sourceFileName || ''}>
+                    {record.sourceFileName || '-'}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    还原文件: {record.restoredFileName || '-'}
+                  </div>
+                </div>
+                <span className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-medium ${getProcessedStatusClass(record.status)}`}>
+                  {getProcessedStatusLabel(record.status)}
+                </span>
+              </div>
+              <div className="mt-2 text-xs text-slate-500 break-all">
+                文件ID: {record.sourceFileId}
+              </div>
+              {record.sourceMd5 && (
+                <div className="mt-1 text-xs text-slate-500 break-all">
+                  MD5: {record.sourceMd5}
+                </div>
+              )}
+              {record.lastError && (
+                <div className="mt-1 text-xs text-red-600 break-all">
+                  错误: {record.lastError}
+                </div>
+              )}
+              <div className="mt-1 text-xs text-slate-400">
+                更新时间: {formatDateTime(record.updatedAt || null)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Modal>
     </div>
   );
 };

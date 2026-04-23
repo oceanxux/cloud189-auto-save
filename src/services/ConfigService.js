@@ -19,6 +19,7 @@ class ConfigService {
         lazyFileRetentionHours: 24,
         mediaSuffix: '.mkv;.iso;.ts;.mp4;.avi;.rmvb;.wmv;.m2ts;.mpg;.flv;.rm;.mov;.cas', // 媒体文件后缀
         enableOnlySaveMedia: false, // 只保存媒体文件
+        enableAutoDeleteCompletedTask: false, // 任务完结后自动删除任务记录
         // CAS 秒传走家庭中转（个人空间被风控时自动回退）
         enableFamilyTransit: true,
         enableFamilyTransitFirst: false, 

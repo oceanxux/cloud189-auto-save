@@ -7,6 +7,7 @@ const { Cloud189Service } = require('./cloud189');
 const { TMDBService } = require('./tmdb');
 const { AutoSeriesService } = require('./autoSeries');
 const { OrganizerService } = require('./organizer');
+const ConfigService = require('./ConfigService');
 const path = require('path');
 const { default: cloudSaverSDK } = require('../sdk/cloudsaver/sdk');
 const ProxyUtil = require('../utils/ProxyUtil');
@@ -848,6 +849,7 @@ class TelegramBotService {
     async createTask(chatId, data, messageId) {
         try {
             const targetFolderId = data.f;
+            const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
             // 根据targetFolderId查询出folderName
             const targetFolder = await this.commonFolderRepo.findOne({ where: { id: targetFolderId } });
             if (!targetFolder) {
@@ -864,9 +866,12 @@ class TelegramBotService {
                 shareLink: this.currentShareLink,
                 targetFolderId: targetFolderId,
                 targetFolder: targetFolder.path,
+                organizerTargetFolderId: String(autoCreateConfig.organizerTargetFolderId || targetFolderId || '').trim(),
+                organizerTargetFolderName: String(autoCreateConfig.organizerTargetFolderName || targetFolder.path || '').trim(),
                 tgbot: true,
                 overwriteFolder: data?.o,
-                accessCode: this.currentAccessCode
+                accessCode: this.currentAccessCode,
+                enableOrganizer: true
             };
             const tasks = await this.taskService.createTask(taskDto);
             // 遍历获取task.id

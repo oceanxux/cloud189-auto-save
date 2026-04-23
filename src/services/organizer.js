@@ -53,7 +53,7 @@ class OrganizerService {
         const tmdbInfo = await this._resolveTmdbInfo(task, null);
         const resourceInfo = await this._resolveResourceInfo(task, allFiles, tmdbInfo);
         const libraryInfo = this._resolveLibraryInfo(task, resourceInfo, tmdbInfo);
-        const organizerRoot = this._resolveOrganizerRoot(task);
+        const organizerRoot = this._resolveOrganizerRoot(task, options);
         const baseFolderPath = organizerRoot.path;
         const categoryCache = new Map();
         const resourceFolderPath = this._joinPosix(baseFolderPath, libraryInfo.categoryName, libraryInfo.resourceFolderName);
@@ -186,6 +186,134 @@ class OrganizerService {
             files: refreshedFiles,
             operations: messages,
             libraryInfo
+        };
+    }
+
+    async organizeLooseGroup(params = {}) {
+        const {
+            account,
+            organizerRootId,
+            organizerRootPath = '',
+            sourceFolderPath = '',
+            resourceName = '',
+            files = []
+        } = params;
+
+        if (!account?.id) {
+            throw new Error('账号不存在');
+        }
+        const mediaFiles = Array.isArray(files) ? files.filter(file => file && !file.isFolder) : [];
+        if (mediaFiles.length === 0) {
+            throw new Error('当前目录没有可整理的媒体文件');
+        }
+
+        const cloud189 = Cloud189Service.getInstance(account);
+        const taskLike = {
+            account,
+            accountId: account.id,
+            resourceName: String(resourceName || '').trim() || path.posix.basename(this._normalizePath(sourceFolderPath || '')) || '未命名资源',
+            shareFolderName: '',
+            targetFolderId: String(organizerRootId || '').trim(),
+            targetFolderName: this._normalizePath(organizerRootPath || ''),
+            organizerTargetFolderId: String(organizerRootId || '').trim(),
+            organizerTargetFolderName: this._normalizePath(organizerRootPath || ''),
+            realFolderId: String(mediaFiles[0]?.parentFolderId || '').trim(),
+            realRootFolderId: String(mediaFiles[0]?.parentFolderId || '').trim(),
+            realFolderName: this._normalizePath(sourceFolderPath || ''),
+            tmdbId: '',
+            tmdbContent: '',
+            currentEpisodes: mediaFiles.length,
+            totalEpisodes: 0,
+            enableOrganizer: true,
+            enableLazyStrm: false
+        };
+
+        logTaskEvent(`目录[${taskLike.realFolderName || taskLike.resourceName}]开始执行无任务整理工作流`);
+        const tmdbInfo = await this._resolveTmdbInfo(taskLike, null);
+        const resourceInfo = await this._resolveResourceInfo(taskLike, mediaFiles, tmdbInfo);
+        const libraryInfo = this._resolveLibraryInfo(taskLike, resourceInfo, tmdbInfo);
+        const organizerRoot = {
+            id: String(organizerRootId || '').trim(),
+            path: this._normalizePath(organizerRootPath || '')
+        };
+        if (!organizerRoot.id) {
+            throw new Error('默认整理根目录未配置');
+        }
+
+        const categoryCache = new Map();
+        const nestedFolderCache = new Map();
+        const folderFileCache = new Map();
+        const messages = [];
+        const targetSummary = `${libraryInfo.categoryName}/${libraryInfo.resourceFolderName}`;
+        messages.push(`├─ 媒体库归档 ${targetSummary}`);
+
+        const categoryFolderId = await this._ensureFolderByName(cloud189, organizerRoot.id, libraryInfo.categoryName, categoryCache);
+        const resourceFolderId = await this._ensureFolderByName(cloud189, categoryFolderId, libraryInfo.resourceFolderName, categoryCache);
+        const fileMap = new Map((resourceInfo.episode || []).map(item => [String(item.id), item]));
+
+        for (const file of mediaFiles) {
+            const aiFile = fileMap.get(String(file.id));
+            if (!aiFile) {
+                continue;
+            }
+
+            const template = resourceInfo.type === 'movie'
+                ? ConfigService.getConfigValue('openai.rename.movieTemplate') || '{name} ({year}){ext}'
+                : ConfigService.getConfigValue('openai.rename.template') || '{name} - {se}{ext}';
+            const targetFileName = this.taskService._generateFileName(file, aiFile, resourceInfo, template);
+            const targetRelativeDir = this._buildTargetRelativeDir(file, aiFile, resourceInfo, libraryInfo);
+            const targetFolderId = await this._ensureDirectoryPath(cloud189, resourceFolderId, targetRelativeDir, nestedFolderCache);
+            const currentFolderId = String(file.parentFolderId || '');
+
+            if (file.name !== targetFileName) {
+                const conflictFile = await this._findConflictFile(cloud189, currentFolderId, file.id, targetFileName, folderFileCache);
+                if (conflictFile) {
+                    const conflictType = this._getConflictType(file, conflictFile);
+                    const conflictMessage = conflictType === 'same-md5'
+                        ? `├─ 文件已存在（MD5一致），跳过 ${file.name} -> ${targetFileName}`
+                        : conflictType === 'same-size'
+                            ? `├─ 文件同名且大小一致（疑似重复），跳过 ${file.name} -> ${targetFileName}`
+                            : `├─ 文件同名但内容不同，跳过 ${file.name} -> ${targetFileName}`;
+                    messages.push(conflictMessage);
+                    continue;
+                }
+                const renameResult = await cloud189.renameFile(file.id, targetFileName);
+                if (!renameResult || (renameResult.res_code && renameResult.res_code !== 0)) {
+                    throw new Error(`重命名失败: ${file.name} -> ${targetFileName}`);
+                }
+                this._updateFolderFileCacheAfterRename(folderFileCache, currentFolderId, file.name, {
+                    ...file,
+                    name: targetFileName,
+                    parentFolderId: currentFolderId
+                });
+                messages.push(`├─ 重命名 ${file.name} -> ${targetFileName}`);
+                file.name = targetFileName;
+            }
+
+            if (currentFolderId !== String(targetFolderId)) {
+                await this.taskService.moveCloudFile(cloud189, {
+                    id: file.id,
+                    name: file.name,
+                    isFolder: false
+                }, targetFolderId);
+                this._updateFolderFileCacheAfterMove(folderFileCache, currentFolderId, String(targetFolderId), file);
+                messages.push(`├─ 移动 ${file.name} -> ${targetRelativeDir || '媒体根目录'}`);
+                file.parentFolderId = String(targetFolderId);
+                file.relativeDir = targetRelativeDir;
+                file.relativePath = targetRelativeDir ? `${targetRelativeDir}/${file.name}` : file.name;
+            }
+        }
+
+        if (messages.length > 0) {
+            messages[messages.length - 1] = messages[messages.length - 1].replace(/^├─/, '└─');
+            logTaskEvent(`目录[${taskLike.realFolderName || taskLike.resourceName}]整理完成(${targetSummary}):\n${messages.join('\n')}`);
+        }
+
+        return {
+            message: `${taskLike.resourceName}整理完成，已归档到 ${targetSummary}`,
+            operations: messages,
+            libraryInfo,
+            tmdbInfo
         };
     }
 
@@ -595,9 +723,29 @@ class OrganizerService {
         return false;
     }
 
-    _resolveOrganizerRoot(task) {
-        const organizerFolderId = String(task.organizerTargetFolderId || task.targetFolderId || '').trim();
-        const organizerFolderPath = this._normalizePath(task.organizerTargetFolderName || task.targetFolderName || '');
+    _resolveOrganizerRoot(task, options = {}) {
+        const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
+        const configuredOrganizerFolderId = String(autoCreateConfig.organizerTargetFolderId || '').trim();
+        const configuredOrganizerFolderPath = this._normalizePath(autoCreateConfig.organizerTargetFolderName || '');
+        const currentOrganizerFolderId = String(task.organizerTargetFolderId || '').trim();
+        const currentOrganizerFolderPath = this._normalizePath(task.organizerTargetFolderName || '');
+        const targetFolderId = String(task.targetFolderId || '').trim();
+        const targetFolderPath = this._normalizePath(task.targetFolderName || '');
+
+        const shouldUseConfiguredOrganizerRoot = Boolean(
+            configuredOrganizerFolderId &&
+            options.force &&
+            !task.enableOrganizer &&
+            (!currentOrganizerFolderId || currentOrganizerFolderId === targetFolderId) &&
+            (!currentOrganizerFolderPath || currentOrganizerFolderPath === targetFolderPath)
+        );
+
+        const organizerFolderId = shouldUseConfiguredOrganizerRoot
+            ? configuredOrganizerFolderId
+            : String(currentOrganizerFolderId || targetFolderId || '').trim();
+        const organizerFolderPath = shouldUseConfiguredOrganizerRoot
+            ? configuredOrganizerFolderPath
+            : this._normalizePath(currentOrganizerFolderPath || task.targetFolderName || '');
         if (organizerFolderId) {
             return {
                 id: organizerFolderId,

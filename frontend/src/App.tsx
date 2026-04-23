@@ -15,7 +15,10 @@ import {
   LogOut,
   MessageSquare,
   Moon,
-  Sun
+  Sun,
+  RotateCcw,
+  ChevronDown,
+  Terminal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -49,6 +52,8 @@ export default function App() {
   const [createTaskInitialData, setCreateTaskInitialData] = useState<any>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [taskRefreshKey, setTaskRefreshKey] = useState(0);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     return localStorage.getItem('theme') === 'dark' || 
       (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -63,6 +68,14 @@ export default function App() {
       localStorage.setItem('theme', 'light');
     }
   }, [isDarkMode]);
+
+  useEffect(() => {
+    const handleWindowClick = () => {
+      setIsUserMenuOpen(false);
+    };
+    window.addEventListener('click', handleWindowClick);
+    return () => window.removeEventListener('click', handleWindowClick);
+  }, []);
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
 
@@ -92,6 +105,28 @@ export default function App() {
       window.location.href = '/login';
     } catch (e) {
       window.location.href = '/login';
+    }
+  };
+
+  const handleRestartContainer = async () => {
+    if (isRestarting) return;
+    if (!confirm('确定要重启整个容器吗？服务会短暂中断。')) return;
+    try {
+      setIsRestarting(true);
+      const response = await fetch('/api/system/restart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const responseText = await response.text();
+      const result = responseText ? JSON.parse(responseText) : { success: response.ok };
+      if (!result.success) {
+        throw new Error(result.error || '重启失败');
+      }
+      alert('已发送重启请求，页面将在数秒后断开。');
+      setTimeout(() => window.location.reload(), 4000);
+    } catch (error: any) {
+      alert(`重启失败: ${error.message || '未知错误'}`);
+      setIsRestarting(false);
     }
   };
 
@@ -237,11 +272,55 @@ export default function App() {
             >
               <MessageSquare size={22} />
             </button>
-            <button className="p-2.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-[var(--text-primary)]">
-              <Bell size={22} />
+            <button
+              onClick={() => setIsLogsOpen(true)}
+              className={`p-2.5 rounded-full transition-colors ${
+                isLogsOpen
+                  ? 'bg-[#d3e3fd] text-[#0b57d0]'
+                  : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-[var(--text-primary)]'
+              }`}
+              title="实时日志"
+            >
+              <Terminal size={22} />
             </button>
-            <div className="w-9 h-9 rounded-full bg-[#0b57d0] text-white flex items-center justify-center font-medium text-sm ml-2 cursor-pointer hover:shadow-md transition-shadow">
-              U
+            <div className="relative ml-2" onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={() => setIsUserMenuOpen(prev => !prev)}
+                className="flex items-center gap-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors p-1"
+                title="用户菜单"
+              >
+                <div className="w-9 h-9 rounded-full bg-[#0b57d0] text-white flex items-center justify-center font-medium text-sm cursor-pointer hover:shadow-md transition-shadow">
+                  U
+                </div>
+                <ChevronDown size={16} className="text-[var(--text-secondary)] hidden sm:block" />
+              </button>
+              <AnimatePresence>
+                {isUserMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                    transition={{ duration: 0.16, ease: 'easeOut' }}
+                    className="absolute right-0 top-14 w-52 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-surface)] shadow-xl p-2 z-20"
+                  >
+                    <button
+                      onClick={handleRestartContainer}
+                      disabled={isRestarting}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-[var(--text-primary)] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <RotateCcw size={18} />
+                      {isRestarting ? '重启中...' : '重启容器'}
+                    </button>
+                    <button
+                      onClick={handleLogout}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
+                    >
+                      <LogOut size={18} />
+                      退出登录
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         </header>

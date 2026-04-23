@@ -689,21 +689,29 @@ const MediaTab: React.FC = () => {
         </div>
       </section>
 
-      {/* Save Button */}
-      <div className="flex justify-end pt-4 gap-4 sticky bottom-8 z-10">
-        <button 
-          onClick={fetchData}
-          className="px-8 py-3 bg-white border border-slate-300 text-slate-700 rounded-full font-medium shadow-lg hover:bg-slate-50 transition-all flex items-center gap-2"
-        >
-          <RefreshCw size={20} className={loading ? 'animate-spin' : ''} /> 放弃修改
-        </button>
-        <button 
-          onClick={handleSave}
-          disabled={saving}
-          className="px-10 py-3 bg-[#0b57d0] text-white rounded-full font-medium shadow-lg hover:bg-[#0b57d0]/90 hover:shadow-xl transition-all flex items-center gap-2 disabled:opacity-70"
-        >
-          {saving ? <RefreshCw size={20} className="animate-spin" /> : <Save size={20} />} 保存媒体设置
-        </button>
+      <div className="mt-10 border-t border-slate-200 pt-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm text-slate-500">
+            媒体相关配置修改后会立即保存，并更新当前功能开关与服务参数。
+          </div>
+          <div className="flex gap-3">
+            <button 
+              onClick={fetchData}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition-all hover:bg-slate-50"
+            >
+              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+              放弃修改
+            </button>
+            <button 
+              onClick={handleSave}
+              disabled={saving}
+              className="inline-flex items-center gap-2 rounded-full bg-[#0b57d0] px-6 py-2.5 text-sm font-medium text-white transition-all hover:bg-[#0b57d0]/90 disabled:opacity-70"
+            >
+              {saving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+              保存媒体设置
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Regex Management Modal */}

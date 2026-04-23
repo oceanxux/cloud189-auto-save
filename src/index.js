@@ -414,6 +414,15 @@ app.post('/api/auth/logout', (req, res) => {
     });
 });
 
+app.post('/api/system/restart', authenticateSession, (req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.status(200).send(JSON.stringify({ success: true, message: '重启请求已接受' }));
+    setTimeout(() => {
+        console.log('收到容器重启请求，准备退出进程');
+        process.exit(0);
+    }, 1500);
+});
+
 app.use(express.static(publicDir));
 // 为所有路由添加认证（除了登录页和登录接口）
 app.use((req, res, next) => {
@@ -1614,22 +1623,1029 @@ AppDataSource.initialize().then(async () => {
         }
     })
 
-    app.post('/api/chat', async (req, res) => {
-        const { message } = req.body;
+    const listRecentTasksForChat = async () => {
+        return await taskRepo.find({
+            order: { id: 'DESC' },
+            take: 30
+        });
+    };
+
+    const formatTaskLabel = (task) => {
+        return task.shareFolderName ? `${task.resourceName}/${task.shareFolderName}` : task.resourceName;
+    };
+
+    const summarizeTaskForChat = (task) => {
+        return `#${task.id} ${formatTaskLabel(task)} | 状态:${task.status} | 进度:${task.currentEpisodes || 0}/${task.totalEpisodes || '?'} | 整理器:${task.enableOrganizer ? '开' : '关'}`;
+    };
+
+    const normalizeChatPath = (value = '') => String(value || '').trim().replace(/^\/+|\/+$/g, '');
+    const mediaFilePattern = /\.(mkv|mp4|avi|mov|m2ts|ts|flv|rmvb|wmv|iso|mpg|rm|cas)$/i;
+
+    const resolveChatFolderAlias = (value = '') => {
+        const normalized = normalizeChatPath(value).toLowerCase();
+        if (!normalized) {
+            return '';
+        }
+        if (['未刮削', 'unorganized', 'unscraped', 'unsorted'].includes(normalized)) {
+            return '未刮削';
+        }
+        if (['未整理', 'unprocessed', 'unorganized-media'].includes(normalized)) {
+            return '未整理';
+        }
+        return normalizeChatPath(value);
+    };
+
+    const parseTaskTmdbForChat = (task) => {
         try {
-            let userMessage = message.trim();
-            if(!userMessage) {
-                res.json({ success: true });
-                return
+            return task?.tmdbContent ? JSON.parse(task.tmdbContent) : null;
+        } catch (error) {
+            return null;
+        }
+    };
+
+    const resolveTaskMediaTypeForChat = (task) => {
+        const tmdb = parseTaskTmdbForChat(task);
+        const mediaType = String(tmdb?.type || tmdb?.media_type || task?.videoType || '').toLowerCase();
+        if (mediaType === 'movie') {
+            return 'movie';
+        }
+        if (mediaType === 'tv') {
+            return 'tv';
+        }
+        return Number(task?.totalEpisodes || 0) > 1 ? 'tv' : 'movie';
+    };
+
+    const inferChatMediaType = (text = '') => {
+        const normalized = String(text || '');
+        const hasMovie = /电影/.test(normalized);
+        const hasTv = /电视剧|剧集|连续剧/.test(normalized);
+        if (hasMovie && !hasTv) {
+            return 'movie';
+        }
+        if (hasTv && !hasMovie) {
+            return 'tv';
+        }
+        return 'all';
+    };
+
+    const summarizeFolderTaskForChat = (task) => {
+        const mediaType = resolveTaskMediaTypeForChat(task) === 'tv' ? '电视剧' : '电影';
+        const currentPath = normalizeChatPath(task.realFolderName || '');
+        return `#${task.id} ${formatTaskLabel(task)} | 类型:${mediaType} | 当前目录:${currentPath || '(空)'} | 进度:${task.currentEpisodes || 0}/${task.totalEpisodes || '?'}`;
+    };
+
+    const listTasksInFolderForChat = async (folderName = '', mediaType = 'all') => {
+        const normalizedFolder = resolveChatFolderAlias(folderName);
+        if (!normalizedFolder) {
+            return [];
+        }
+
+        const tasks = await taskRepo.find({
+            order: { id: 'DESC' },
+            take: 200
+        });
+
+        return tasks.filter(task => {
+            const currentPath = normalizeChatPath(task.realFolderName || '');
+            if (!currentPath) {
+                return false;
             }
-            
-            AIService.streamChat(userMessage, async (chunk) => {
-                sendAIMessage(chunk);
-            })
-            res.json({ success: true });
+            const inFolder = currentPath === normalizedFolder || currentPath.startsWith(`${normalizedFolder}/`);
+            if (!inFolder) {
+                return false;
+            }
+            if (mediaType === 'all') {
+                return true;
+            }
+            return resolveTaskMediaTypeForChat(task) === mediaType;
+        });
+    };
+
+    const listCloudMediaInFolderForChat = async (folderName = '', mediaType = 'all') => {
+        const entries = await listCloudMediaEntriesInFolderForChat(folderName, mediaType);
+        return entries.map(item => item.relativePath);
+    };
+
+    const listCloudMediaEntriesInFolderForChat = async (folderName = '', mediaType = 'all') => {
+        const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
+        const accountId = Number(autoCreateConfig.accountId || 0);
+        const rootFolderId = String(autoCreateConfig.targetFolderId || '').trim();
+        const configuredRootName = resolveChatFolderAlias(autoCreateConfig.targetFolder || '');
+        const requestedFolder = resolveChatFolderAlias(folderName || configuredRootName);
+        if (!accountId || !rootFolderId) {
+            return [];
+        }
+
+        const account = await accountRepo.findOneBy({ id: accountId });
+        if (!account) {
+            return [];
+        }
+
+        const cloud189 = Cloud189Service.getInstance(account);
+        const results = [];
+        const visited = new Set();
+        const mediaTypeFilter = ['movie', 'tv'].includes(String(mediaType || '')) ? String(mediaType) : 'all';
+
+        const inferPathMediaType = (pathName = '') => {
+            if (/电视剧|动漫|综艺|纪录片/i.test(pathName)) {
+                return 'tv';
+            }
+            if (/电影/i.test(pathName)) {
+                return 'movie';
+            }
+            return 'all';
+        };
+
+        const walkFolder = async (folderId, currentPath, depth = 0) => {
+            const normalizedFolderId = String(folderId || '').trim();
+            if (!normalizedFolderId || visited.has(normalizedFolderId) || depth > 6 || results.length >= 200) {
+                return;
+            }
+            visited.add(normalizedFolderId);
+
+            const response = await cloud189.listFiles(normalizedFolderId);
+            const folderList = response?.fileListAO?.folderList || [];
+            const fileList = response?.fileListAO?.fileList || [];
+
+            for (const file of fileList) {
+                const fileName = String(file.name || file.fileName || '').trim();
+                if (!fileName || !mediaFilePattern.test(fileName)) {
+                    continue;
+                }
+                const relativePath = normalizeChatPath(`${currentPath}/${fileName}`);
+                const inferredType = inferPathMediaType(relativePath);
+                if (mediaTypeFilter !== 'all' && inferredType !== 'all' && inferredType !== mediaTypeFilter) {
+                    continue;
+                }
+                results.push({
+                    id: String(file.id || file.fileId || '').trim(),
+                    name: fileName,
+                    parentFolderId: normalizedFolderId,
+                    relativePath,
+                    relativeDir: normalizeChatPath(path.posix.dirname(relativePath)),
+                    size: Number(file.size || file.fileSize || 0),
+                    md5: String(file.md5 || '').trim(),
+                    isFolder: false
+                });
+                if (results.length >= 200) {
+                    return;
+                }
+            }
+
+            for (const folder of folderList) {
+                const childId = String(folder.id || '').trim();
+                const childName = String(folder.name || '').trim();
+                if (!childId || !childName) {
+                    continue;
+                }
+                await walkFolder(childId, normalizeChatPath(`${currentPath}/${childName}`), depth + 1);
+                if (results.length >= 200) {
+                    return;
+                }
+            }
+        };
+
+        if (requestedFolder && requestedFolder !== configuredRootName) {
+            return [];
+        }
+
+        await walkFolder(rootFolderId, configuredRootName || requestedFolder || '未刮削', 0);
+        return results;
+    };
+
+    const groupCloudEntriesForWorkflow = (requestedFolder = '', entries = []) => {
+        const normalizedRoot = resolveChatFolderAlias(requestedFolder);
+        const groups = new Map();
+        const skipped = [];
+
+        for (const entry of entries) {
+            const relativePath = normalizeChatPath(entry?.relativePath || '');
+            if (!relativePath) {
+                continue;
+            }
+            const rootPrefix = `${normalizedRoot}/`;
+            const relativeToRoot = relativePath === normalizedRoot
+                ? ''
+                : relativePath.startsWith(rootPrefix)
+                    ? normalizeChatPath(relativePath.slice(rootPrefix.length))
+                    : relativePath;
+            const parts = relativeToRoot.split('/').filter(Boolean);
+            if (parts.length < 2) {
+                skipped.push(relativePath);
+                continue;
+            }
+
+            const groupParts = parts.length >= 3
+                ? parts.slice(0, 2)
+                : parts.slice(0, 2);
+            const groupTail = groupParts.join('/');
+            const groupRootPath = normalizeChatPath(`${normalizedRoot}/${groupTail}`);
+            const fileRelativeToGroup = normalizeChatPath(relativePath.substring(groupRootPath.length + 1));
+            const fileRelativeDir = normalizeChatPath(path.posix.dirname(fileRelativeToGroup));
+            const resourceName = groupParts[groupParts.length - 1] || path.posix.basename(groupRootPath);
+
+            if (!groups.has(groupRootPath)) {
+                groups.set(groupRootPath, {
+                    groupPath: groupRootPath,
+                    resourceName,
+                    files: []
+                });
+            }
+            groups.get(groupRootPath).files.push({
+                ...entry,
+                relativeDir: fileRelativeDir === '.' ? '' : fileRelativeDir,
+                relativePath: fileRelativeToGroup
+            });
+        }
+
+        return {
+            groups: Array.from(groups.values()),
+            skipped
+        };
+    };
+
+    const resolveFolderTargetFromContext = (text = '', history = []) => {
+        const directMatch = text.match(/(未刮削|未整理)(?:目录)?/);
+        if (directMatch) {
+            return directMatch[1];
+        }
+
+        for (let index = history.length - 1; index >= 0; index--) {
+            const item = history[index];
+            const content = String(item?.content || '');
+            const matchedFolder = content.match(/(未刮削|未整理)(?:目录)?/);
+            if (matchedFolder) {
+                return matchedFolder[1];
+            }
+        }
+        return '';
+    };
+
+    const splitChatCommands = (message = '') => {
+        const normalized = String(message || '').trim();
+        if (!normalized) {
+            return [];
+        }
+        return normalized
+            .split(/\s*(?:然后|再|并且|并|接着|之后|随后|,|，|；|;)\s*/g)
+            .map(item => item.trim())
+            .filter(Boolean);
+    };
+
+    const parseChatCommandHeuristically = (message, history = []) => {
+        const text = String(message || '').trim();
+        if (!text) {
+            return null;
+        }
+
+        const taskIdMatch = text.match(/(?:任务\s*#?\s*|#)(\d+)/i) || text.match(/\b(\d{1,8})\b/);
+        const taskId = taskIdMatch ? Number(taskIdMatch[1]) : null;
+        const contextualFolder = resolveFolderTargetFromContext(text, history);
+
+        if (/重启.*(容器|服务)|restart/i.test(text)) {
+            return {
+                mode: 'action',
+                action: 'restart_container',
+                target: { type: 'none', value: '' },
+                reply: '我可以帮你重启当前服务进程。',
+                needsConfirmation: true
+            };
+        }
+
+        if (/列出|查看/.test(text) && /失败任务/.test(text)) {
+            return {
+                mode: 'action',
+                action: 'list_tasks',
+                target: { type: 'status', value: 'failed' },
+                reply: '我来帮你查看失败任务。',
+                needsConfirmation: false
+            };
+        }
+
+        if (/列出|查看/.test(text) && /任务/.test(text)) {
+            return {
+                mode: 'action',
+                action: 'list_tasks',
+                target: { type: 'all', value: '' },
+                reply: '我来帮你查看最近任务。',
+                needsConfirmation: false
+            };
+        }
+
+        const folderQueryMatch = text.match(/(未刮削|未整理)(?:目录)?/);
+        if ((/列出|查看|查询|哪些|有没有|帮我查/.test(text)) && folderQueryMatch && (/(没移动|未移动|没整理|未整理|还在|没有归档|未归档|移动端)/.test(text) || /文件|资源|电影|电视剧|剧集/.test(text))) {
+            const folderName = folderQueryMatch[1];
+            return {
+                mode: 'action',
+                action: 'list_unorganized_media',
+                target: {
+                    type: 'folder_name',
+                    value: folderName,
+                    mediaType: inferChatMediaType(text)
+                },
+                reply: `我来帮你查询 ${folderName} 目录下仍停留在中转目录的媒体任务。`,
+                needsConfirmation: false
+            };
+        }
+
+        if ((/列出|查看|查询|多少|几个|数量|统计|帮我查/.test(text)) && folderQueryMatch && /(文件|资源|电影|电视剧|剧集)/.test(text)) {
+            const folderName = folderQueryMatch[1];
+            return {
+                mode: 'action',
+                action: 'list_unorganized_media',
+                target: {
+                    type: 'folder_name',
+                    value: folderName,
+                    mediaType: inferChatMediaType(text),
+                    countOnly: true
+                },
+                reply: `我来帮你统计 ${folderName} 目录下当前还有多少未归档文件。`,
+                needsConfirmation: false
+            };
+        }
+
+        if (/(刮削|整理|重命名|移动|归档)/.test(text) && (folderQueryMatch || contextualFolder) && !taskId) {
+            const workflowFolder = folderQueryMatch?.[1] || contextualFolder;
+            return {
+                mode: 'action',
+                action: 'organize_folder_workflow',
+                target: {
+                    type: 'folder_name',
+                    value: workflowFolder,
+                    mediaType: inferChatMediaType(text)
+                },
+                reply: `我可以帮你查询 ${workflowFolder} 目录，并让程序按 TMDB 识别、重命名后再移动到默认整理根目录。`,
+                needsConfirmation: true
+            };
+        }
+
+        if (/(刮削|整理|重命名|移动|归档)/.test(text) && contextualFolder && !taskId) {
+            return {
+                mode: 'action',
+                action: 'run_organizer_folder',
+                target: {
+                    type: 'folder_name',
+                    value: contextualFolder,
+                    mediaType: inferChatMediaType(text)
+                },
+                reply: `我可以帮你把 ${contextualFolder} 目录下当前识别到的任务批量执行整理器。`,
+                needsConfirmation: true
+            };
+        }
+
+        if (/默认整理根目录|默认整理目录|整理根目录|默认整理地|默认整理位置|默认整理路径/.test(text) && contextualFolder && !taskId) {
+            return {
+                mode: 'action',
+                action: 'run_organizer_folder',
+                target: {
+                    type: 'folder_name',
+                    value: contextualFolder,
+                    mediaType: inferChatMediaType(text)
+                },
+                reply: `我可以帮你把 ${contextualFolder} 目录下当前识别到的任务移动到默认整理根目录。`,
+                needsConfirmation: true
+            };
+        }
+
+        if (/执行刮削|开始刮削|执行整理器|开始整理器/.test(text) && contextualFolder && !taskId) {
+            return {
+                mode: 'action',
+                action: 'run_organizer_folder',
+                target: {
+                    type: 'folder_name',
+                    value: contextualFolder,
+                    mediaType: inferChatMediaType(text)
+                },
+                reply: `我可以帮你对 ${contextualFolder} 目录执行整理器并移动到默认整理根目录。`,
+                needsConfirmation: true
+            };
+        }
+
+        if (/执行所有任务|运行所有任务/.test(text)) {
+            return {
+                mode: 'action',
+                action: 'run_all_tasks',
+                target: { type: 'all', value: '' },
+                reply: '我可以帮你执行所有待处理任务。',
+                needsConfirmation: true
+            };
+        }
+
+        if (/通知.*emby|刷新.*emby/i.test(text)) {
+            return {
+                mode: 'action',
+                action: 'notify_emby',
+                target: taskId ? { type: 'task_id', value: String(taskId) } : { type: 'task_name', value: text.replace(/通知.*emby|刷新.*emby/ig, '').trim() },
+                reply: '我可以帮你触发 Emby 通知。',
+                needsConfirmation: true
+            };
+        }
+
+        if (/删除.*任务/.test(text)) {
+            return {
+                mode: 'action',
+                action: 'delete_task',
+                target: taskId ? { type: 'task_id', value: String(taskId) } : { type: 'task_name', value: text.replace(/删除.*任务/g, '').trim() },
+                reply: '我可以帮你删除这个任务记录。',
+                needsConfirmation: true
+            };
+        }
+
+        if (/整理|重命名|移动/.test(text)) {
+            return {
+                mode: 'action',
+                action: 'run_organizer',
+                target: taskId ? { type: 'task_id', value: String(taskId) } : /最新/.test(text) ? { type: 'latest', value: '' } : { type: 'task_name', value: text.replace(/帮我|请|执行|运行|整理器|整理|重命名|移动/g, '').trim() },
+                reply: '我可以帮你调用整理器执行整理、重命名和移动。',
+                needsConfirmation: true
+            };
+        }
+
+        if (/执行|运行/.test(text) && /任务/.test(text)) {
+            return {
+                mode: 'action',
+                action: 'run_task',
+                target: taskId ? { type: 'task_id', value: String(taskId) } : /最新/.test(text) ? { type: 'latest', value: '' } : { type: 'task_name', value: text.replace(/帮我|请|执行|运行|任务/g, '').trim() },
+                reply: '我可以帮你执行这个任务。',
+                needsConfirmation: true
+            };
+        }
+
+        return null;
+    };
+
+    const parseChatPlanHeuristically = (message, history = []) => {
+        const fullText = String(message || '').trim();
+        const contextualFolder = resolveFolderTargetFromContext(fullText, history);
+        if (contextualFolder && /(列出|查看|查询|统计|多少|几个|数量|帮我查)/.test(fullText) && /(刮削|整理|重命名|移动|归档)/.test(fullText)) {
+            const mediaType = inferChatMediaType(fullText);
+            return {
+                mode: 'action',
+                action: 'organize_folder_workflow',
+                target: {
+                    type: 'folder_name',
+                    value: contextualFolder,
+                    mediaType,
+                    countOnly: /(多少|几个|数量|统计)/.test(fullText)
+                },
+                reply: `我可以帮你查询 ${contextualFolder} 目录，然后让程序按 TMDB 识别、重命名并移动到默认整理根目录。`,
+                needsConfirmation: true
+            };
+        }
+
+        const directFolderMatch = fullText.match(/(未刮削|未整理)(?:目录)?/);
+        if (directFolderMatch && /(列出|查看|查询|统计|多少|几个|数量|帮我查)/.test(fullText) && /(刮削|整理|重命名|移动|归档)/.test(fullText)) {
+            const mediaType = inferChatMediaType(fullText);
+            return {
+                mode: 'action',
+                action: 'organize_folder_workflow',
+                target: {
+                    type: 'folder_name',
+                    value: directFolderMatch[1],
+                    mediaType,
+                    countOnly: /(多少|几个|数量|统计)/.test(fullText)
+                },
+                reply: `我可以帮你查询 ${directFolderMatch[1]} 目录，然后让程序按 TMDB 识别、重命名并移动到默认整理根目录。`,
+                needsConfirmation: true
+            };
+        }
+
+        const segments = splitChatCommands(message);
+        if (segments.length <= 1) {
+            return parseChatCommandHeuristically(message, history);
+        }
+
+        const actions = [];
+        const planHistory = [...history];
+
+        for (const segment of segments) {
+            const parsed = parseChatCommandHeuristically(segment, planHistory);
+            if (!parsed || parsed.mode !== 'action' || !parsed.action) {
+                return parseChatCommandHeuristically(message, history);
+            }
+            actions.push(parsed);
+            planHistory.push({ role: 'user', content: segment });
+        }
+
+        if (actions.length <= 1) {
+            return actions[0] || parseChatCommandHeuristically(message, history);
+        }
+
+        const hasMutatingAction = actions.some(item => item.needsConfirmation);
+        const canCollapseToWorkflow = actions.some(item => item.action === 'list_unorganized_media')
+            && actions.some(item => item.action === 'run_organizer_folder');
+        if (canCollapseToWorkflow) {
+            const folderTarget = actions.find(item => item.target?.value)?.target?.value || contextualFolder || '';
+            const mediaType = actions.find(item => item.target?.mediaType)?.target?.mediaType || 'all';
+            return {
+                mode: 'action',
+                action: 'organize_folder_workflow',
+                target: {
+                    type: 'folder_name',
+                    value: folderTarget,
+                    mediaType
+                },
+                reply: `我可以帮你查询 ${folderTarget} 目录，然后让程序按 TMDB 识别、重命名并移动到默认整理根目录。`,
+                needsConfirmation: true
+            };
+        }
+
+        const planReply = actions.map((item, index) => `${index + 1}. ${item.reply || item.action}`).join('\n');
+        return {
+            mode: 'plan',
+            reply: `我识别到 ${actions.length} 个连续动作：\n${planReply}`,
+            needsConfirmation: hasMutatingAction,
+            actions
+        };
+    };
+
+    const parseChatCommandWithAI = async (message, tasks = [], history = []) => {
+        if (!AIService.isEnabled()) {
+            return null;
+        }
+
+        const taskContext = tasks.map(task => ({
+            id: task.id,
+            name: formatTaskLabel(task),
+            status: task.status,
+            currentEpisodes: task.currentEpisodes || 0,
+            totalEpisodes: task.totalEpisodes || 0,
+            enableOrganizer: !!task.enableOrganizer
+        }));
+
+        const prompt = [
+            {
+                role: 'system',
+                content: `你是一个“程序动作解释器”，不要读取目录，不要假装执行操作。你的职责只有两件事：
+1. 将用户自然语言解析成程序动作
+2. 返回严格 JSON
+
+允许的 action 只有：
+- list_tasks
+- list_unorganized_media
+- organize_folder_workflow
+- run_organizer_folder
+- run_task
+- run_all_tasks
+- run_organizer
+- notify_emby
+- delete_task
+- restart_container
+
+target.type 只能是：
+- task_id
+- task_name
+- latest
+- all
+- status
+- none
+
+返回格式固定为：
+{
+  "mode": "action" | "reply",
+  "action": "list_tasks" | "list_unorganized_media" | "organize_folder_workflow" | "run_organizer_folder" | "run_task" | "run_all_tasks" | "run_organizer" | "notify_emby" | "delete_task" | "restart_container" | "",
+  "target": { "type": "task_id" | "task_name" | "latest" | "all" | "status" | "none" | "folder_name", "value": "string", "mediaType": "movie" | "tv" | "all", "countOnly": true | false },
+  "reply": "string",
+  "needsConfirmation": true | false
+}
+
+规则：
+- 查询任务列表、失败任务属于 list_tasks，needsConfirmation=false
+- 查询“未刮削/未整理目录下面还有哪些没移动/没归档的电影或电视剧”属于 list_unorganized_media，needsConfirmation=false
+- 查询“未刮削/未整理有多少文件/多少电影/多少电视剧”也属于 list_unorganized_media，needsConfirmation=false
+- 如果用户要求“查询后整理并移动”，优先使用 organize_folder_workflow
+- 如果用户说“帮我移动一下/整理一下/刮削一下”且上下文刚提到“未刮削/未整理”，则使用 run_organizer_folder
+- 一切会改动系统状态的动作 needsConfirmation=true
+- 如果用户意思不明确，mode=reply，action留空，reply里要求用户补充任务编号或任务名
+- 不要输出 markdown，不要输出解释，只输出 JSON`
+            },
+            {
+                role: 'user',
+                content: `最近任务上下文: ${JSON.stringify(taskContext)}\n最近对话上下文: ${JSON.stringify(history)}\n用户输入: ${message}`
+            }
+        ];
+
+        const result = await AIService.chat(prompt, {
+            temperature: 0.1,
+            max_tokens: 600
+        });
+
+        if (!result.success) {
+            return null;
+        }
+
+        try {
+            const parsed = JSON.parse(String(result.data || '').replace(/```(?:json)?|```/g, '').trim());
+            return parsed;
+        } catch (error) {
+            return null;
+        }
+    };
+
+    const resolveTaskTarget = async (target = {}) => {
+        const tasks = await listRecentTasksForChat();
+        const type = String(target.type || '').trim();
+        const value = String(target.value || '').trim();
+
+        if (type === 'task_id' && value) {
+            const task = await taskService.getTaskById(Number(value));
+            if (!task) {
+                throw new Error(`未找到任务 #${value}`);
+            }
+            return task;
+        }
+
+        if (type === 'latest') {
+            const latestTask = tasks[0];
+            if (!latestTask) {
+                throw new Error('当前没有可用任务');
+            }
+            const task = await taskService.getTaskById(latestTask.id);
+            if (!task) {
+                throw new Error('当前没有可用任务');
+            }
+            return task;
+        }
+
+        if (type === 'task_name' && value) {
+            const normalized = value.toLowerCase();
+            const matched = tasks.filter(task => formatTaskLabel(task).toLowerCase().includes(normalized));
+            if (matched.length === 0) {
+                throw new Error(`未找到匹配任务: ${value}`);
+            }
+            if (matched.length > 1) {
+                throw new Error(`匹配到多个任务，请指定编号: ${matched.slice(0, 5).map(task => `#${task.id} ${formatTaskLabel(task)}`).join('；')}`);
+            }
+            const task = await taskService.getTaskById(matched[0].id);
+            if (!task) {
+                throw new Error(`未找到匹配任务: ${value}`);
+            }
+            return task;
+        }
+
+        throw new Error('缺少有效任务目标，请提供任务编号或更明确的任务名');
+    };
+
+    const executeChatAction = async (action, target) => {
+        switch (action) {
+            case 'list_tasks': {
+                const tasks = await listRecentTasksForChat();
+                const filteredTasks = String(target?.type || '') === 'status'
+                    ? tasks.filter(task => task.status === String(target.value || ''))
+                    : tasks;
+                if (filteredTasks.length === 0) {
+                    return '当前没有匹配的任务。';
+                }
+                return `最近任务如下：\n${filteredTasks.slice(0, 10).map(summarizeTaskForChat).join('\n')}`;
+            }
+            case 'list_unorganized_media': {
+                const requestedFolder = resolveChatFolderAlias(target?.value || '')
+                    || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
+                const requestedMediaType = ['movie', 'tv'].includes(String(target?.mediaType || ''))
+                    ? String(target.mediaType)
+                    : 'all';
+                const countOnly = Boolean(target?.countOnly);
+                if (!requestedFolder) {
+                    return '当前没有配置默认中转目录，请先到系统设置里确认默认保存目录。';
+                }
+                const tasks = await listTasksInFolderForChat(requestedFolder, requestedMediaType);
+                const cloudFiles = await listCloudMediaInFolderForChat(requestedFolder, requestedMediaType);
+                const mediaTypeLabel = requestedMediaType === 'movie'
+                    ? '电影'
+                    : requestedMediaType === 'tv'
+                        ? '电视剧'
+                        : '电影和电视剧';
+                if (tasks.length === 0 && cloudFiles.length === 0) {
+                    return `${requestedFolder} 目录下当前没有仍停留在中转目录的${mediaTypeLabel}任务或文件。`;
+                }
+                if (countOnly) {
+                    const taskCount = tasks.length;
+                    const fileCount = cloudFiles.length;
+                    return `${requestedFolder} 目录下当前共有 ${fileCount} 个未归档${mediaTypeLabel}文件，关联任务 ${taskCount} 个。`;
+                }
+                const sections = [];
+                if (tasks.length > 0) {
+                    sections.push(`任务记录：\n${tasks.slice(0, 20).map(summarizeFolderTaskForChat).join('\n')}`);
+                }
+                if (cloudFiles.length > 0) {
+                    sections.push(`真实文件：\n${cloudFiles.slice(0, 20).map(item => `- ${item}`).join('\n')}`);
+                }
+                return `${requestedFolder} 目录下仍未归档的${mediaTypeLabel}如下：\n${sections.join('\n\n')}`;
+            }
+            case 'organize_folder_workflow': {
+                const requestedFolder = resolveChatFolderAlias(target?.value || '')
+                    || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
+                const requestedMediaType = ['movie', 'tv'].includes(String(target?.mediaType || ''))
+                    ? String(target.mediaType)
+                    : 'all';
+                const countOnly = Boolean(target?.countOnly);
+                if (!requestedFolder) {
+                    throw new Error('缺少有效目录目标，请先说明未刮削或未整理目录');
+                }
+
+                const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
+                const organizerRootId = String(autoCreateConfig.organizerTargetFolderId || '').trim();
+                const organizerRootPath = String(autoCreateConfig.organizerTargetFolderName || '').trim();
+                const accountId = Number(autoCreateConfig.accountId || 0);
+                if (!accountId) {
+                    throw new Error('未配置默认账号，无法执行目录整理工作流');
+                }
+                const account = await accountRepo.findOneBy({ id: accountId });
+                if (!account) {
+                    throw new Error('默认账号不存在，无法执行目录整理工作流');
+                }
+                if (!organizerRootId) {
+                    throw new Error('未配置默认整理根目录，无法执行目录整理工作流');
+                }
+
+                const cloudEntries = await listCloudMediaEntriesInFolderForChat(requestedFolder, requestedMediaType);
+                const cloudFiles = cloudEntries.map(item => item.relativePath);
+                const mediaTypeLabel = requestedMediaType === 'movie'
+                    ? '电影'
+                    : requestedMediaType === 'tv'
+                        ? '电视剧'
+                        : '电影和电视剧';
+                const { groups, skipped: groupingSkipped } = groupCloudEntriesForWorkflow(requestedFolder, cloudEntries);
+
+                const summaryLines = [
+                    `${requestedFolder} 目录工作流结果：`,
+                    `- 查询到 ${cloudFiles.length} 个文件`,
+                    `- 按目录分组 ${groups.length} 组`
+                ];
+
+                if (countOnly) {
+                    summaryLines.push(`- 可执行整理 ${groups.length} 组`);
+                    summaryLines.push(`- 因无法分组跳过 ${groupingSkipped.length} 个文件`);
+                    if (groupingSkipped.length > 0) {
+                        summaryLines.push('跳过文件：');
+                        summaryLines.push(...groupingSkipped.slice(0, 20).map(item => `  - ${item}`));
+                    }
+                    return summaryLines.join('\n');
+                }
+
+                if (groups.length === 0) {
+                    summaryLines.push(`- 成功整理 0 组`);
+                    summaryLines.push(`- 因无法分组跳过 ${groupingSkipped.length} 个文件`);
+                    if (groupingSkipped.length > 0) {
+                        summaryLines.push('跳过文件：');
+                        summaryLines.push(...groupingSkipped.slice(0, 20).map(item => `  - ${item}`));
+                    }
+                    summaryLines.push(`当前没有可直接交给程序整理的${mediaTypeLabel}目录分组。`);
+                    return summaryLines.join('\n');
+                }
+
+                const successResults = [];
+                const failedResults = [];
+                for (const group of groups.slice(0, 20)) {
+                    try {
+                        const result = await organizerService.organizeLooseGroup({
+                            account,
+                            organizerRootId,
+                            organizerRootPath,
+                            sourceFolderPath: group.groupPath,
+                            resourceName: group.resourceName,
+                            files: group.files
+                        });
+                        successResults.push(`- ${group.groupPath}: ${result?.message || '整理完成'}`);
+                    } catch (error) {
+                        failedResults.push(`- ${group.groupPath}: 失败，${error.message}`);
+                    }
+                }
+
+                summaryLines.push(`- 成功整理 ${successResults.length} 组`);
+                summaryLines.push(`- 整理失败 ${failedResults.length} 组`);
+                summaryLines.push(`- 因无法分组跳过 ${groupingSkipped.length} 个文件`);
+
+                if (successResults.length > 0) {
+                    summaryLines.push('成功整理：');
+                    summaryLines.push(...successResults);
+                }
+                if (failedResults.length > 0) {
+                    summaryLines.push('整理失败：');
+                    summaryLines.push(...failedResults);
+                }
+                if (groupingSkipped.length > 0) {
+                    summaryLines.push('跳过文件：');
+                    summaryLines.push(...groupingSkipped.slice(0, 20).map(item => `  - ${item}`));
+                }
+
+                return summaryLines.join('\n');
+            }
+            case 'run_organizer_folder': {
+                const requestedFolder = resolveChatFolderAlias(target?.value || '')
+                    || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
+                const requestedMediaType = ['movie', 'tv'].includes(String(target?.mediaType || ''))
+                    ? String(target.mediaType)
+                    : 'all';
+                if (!requestedFolder) {
+                    throw new Error('缺少有效目录目标，请先说明未刮削或未整理目录');
+                }
+                const tasks = await listTasksInFolderForChat(requestedFolder, requestedMediaType);
+                if (tasks.length === 0) {
+                    return `${requestedFolder} 目录下没有可执行整理器的任务记录。`;
+                }
+                const results = [];
+                for (const task of tasks.slice(0, 20)) {
+                    try {
+                        const result = await organizerService.organizeTaskById(task.id, { triggerStrm: true, force: true });
+                        results.push(`- #${task.id} ${formatTaskLabel(task)}: ${result?.message || '整理完成'}`);
+                    } catch (error) {
+                        results.push(`- #${task.id} ${formatTaskLabel(task)}: 失败，${error.message}`);
+                    }
+                }
+                return `${requestedFolder} 目录批量整理结果：\n${results.join('\n')}`;
+            }
+            case 'run_all_tasks': {
+                const result = await taskService.processAllTasks(true);
+                return result && result.length > 0 ? `已执行所有待处理任务：\n${result.join('\n\n')}` : '已执行所有待处理任务，没有新的转存结果。';
+            }
+            case 'run_task': {
+                const task = await resolveTaskTarget(target);
+                const result = await taskService.processTask(task);
+                return result ? `任务已执行：${formatTaskLabel(task)}\n${result}` : `任务已执行：${formatTaskLabel(task)}`;
+            }
+            case 'run_organizer': {
+                const task = await resolveTaskTarget(target);
+                const result = await organizerService.organizeTaskById(task.id, { triggerStrm: true, force: true });
+                return result?.message || `整理器已执行：${formatTaskLabel(task)}`;
+            }
+            case 'notify_emby': {
+                const task = await resolveTaskTarget(target);
+                const embyService = new EmbyService(taskService);
+                await embyService.notify(task);
+                return `已通知 Emby：${formatTaskLabel(task)}`;
+            }
+            case 'delete_task': {
+                const task = await resolveTaskTarget(target);
+                await taskService.deleteTask(task.id, false);
+                return `已删除任务：${formatTaskLabel(task)}`;
+            }
+            case 'restart_container': {
+                setTimeout(() => {
+                    console.log('收到 AI 重启请求，准备退出进程');
+                    process.exit(0);
+                }, 1500);
+                return '已发送重启请求，服务将在数秒后断开并等待容器拉起。';
+            }
+            default:
+                throw new Error('暂不支持该动作');
+        }
+    };
+
+    const executeChatPlan = async (actions = []) => {
+        if (!Array.isArray(actions) || actions.length === 0) {
+            throw new Error('缺少可执行动作');
+        }
+        const results = [];
+        for (const item of actions) {
+            const reply = await executeChatAction(item.action, item.target || {});
+            results.push(reply);
+        }
+        return results.join('\n\n');
+    };
+
+    app.post('/api/chat', async (req, res) => {
+        const { message, executeAction, action, history } = req.body || {};
+        try {
+            if (executeAction && Array.isArray(action?.actions) && action.actions.length > 0) {
+                const reply = await executeChatPlan(action.actions);
+                res.json({ success: true, data: { reply } });
+                return;
+            }
+
+            if (executeAction && action?.action) {
+                const reply = await executeChatAction(action.action, action.target || {});
+                res.json({ success: true, data: { reply } });
+                return;
+            }
+
+            const userMessage = String(message || '').trim();
+            if (!userMessage) {
+                res.json({ success: true, data: { reply: '请输入指令。' } });
+                return;
+            }
+
+            const recentTasks = await listRecentTasksForChat();
+            const normalizedHistory = Array.isArray(history)
+                ? history
+                    .map(item => ({
+                        role: String(item?.role || ''),
+                        content: String(item?.content || '').trim()
+                    }))
+                    .filter(item => item.role && item.content)
+                    .slice(-8)
+                : [];
+            const heuristicAction = parseChatPlanHeuristically(userMessage, normalizedHistory);
+            const parsedAction = heuristicAction || await parseChatCommandWithAI(userMessage, recentTasks, normalizedHistory);
+
+            if (parsedAction?.mode === 'plan' && Array.isArray(parsedAction?.actions) && parsedAction.actions.length > 0) {
+                const previewLines = [];
+                for (const [index, item] of parsedAction.actions.entries()) {
+                    if (['run_task', 'run_organizer', 'notify_emby', 'delete_task'].includes(item.action)) {
+                        const task = await resolveTaskTarget(item.target || {});
+                        previewLines.push(`${index + 1}. ${item.reply || item.action}\n目标任务：#${task.id} ${formatTaskLabel(task)}`);
+                    } else if (item.action === 'organize_folder_workflow') {
+                        const folderLabel = resolveChatFolderAlias(item.target?.value || '')
+                            || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
+                        const folderEntries = await listCloudMediaEntriesInFolderForChat(folderLabel, item.target?.mediaType || 'all');
+                        const grouped = groupCloudEntriesForWorkflow(folderLabel, folderEntries);
+                        previewLines.push(`${index + 1}. ${item.reply || item.action}\n目标目录：${folderLabel}\n真实文件数：${folderEntries.length}\n目录分组数：${grouped.groups.length}`);
+                    } else if (item.action === 'run_organizer_folder') {
+                        const folderLabel = resolveChatFolderAlias(item.target?.value || '')
+                            || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
+                        const folderTasks = await listTasksInFolderForChat(folderLabel, item.target?.mediaType || 'all');
+                        previewLines.push(`${index + 1}. ${item.reply || item.action}\n目标目录：${folderLabel}\n匹配任务数：${folderTasks.length}`);
+                    } else if (item.action === 'run_all_tasks') {
+                        previewLines.push(`${index + 1}. ${item.reply || item.action}\n目标：所有待处理任务`);
+                    } else if (item.action === 'restart_container') {
+                        previewLines.push(`${index + 1}. ${item.reply || item.action}\n目标：当前服务进程`);
+                    } else {
+                        previewLines.push(`${index + 1}. ${item.reply || item.action}`);
+                    }
+                }
+
+                if (!parsedAction.needsConfirmation) {
+                    const reply = await executeChatPlan(parsedAction.actions);
+                    res.json({ success: true, data: { reply } });
+                    return;
+                }
+
+                res.json({
+                    success: true,
+                    data: {
+                        reply: `${parsedAction.reply || '我已识别到一个多步执行计划。'}\n\n${previewLines.join('\n\n')}\n\n确认后我会按顺序执行。`,
+                        action: {
+                            mode: 'plan',
+                            actions: parsedAction.actions
+                        }
+                    }
+                });
+                return;
+            }
+
+            if (parsedAction?.mode === 'action' && parsedAction?.action) {
+                if (!parsedAction.needsConfirmation) {
+                    const reply = await executeChatAction(parsedAction.action, parsedAction.target || {});
+                    res.json({ success: true, data: { reply } });
+                    return;
+                }
+
+                let previewText = parsedAction.reply || '我已识别到一个可执行动作。';
+                try {
+                    if (['run_task', 'run_organizer', 'notify_emby', 'delete_task'].includes(parsedAction.action)) {
+                        const task = await resolveTaskTarget(parsedAction.target || {});
+                        previewText = `${previewText}\n\n目标任务：#${task.id} ${formatTaskLabel(task)}`;
+                    } else if (parsedAction.action === 'organize_folder_workflow') {
+                        const folderLabel = resolveChatFolderAlias(parsedAction.target?.value || '')
+                            || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
+                        const folderEntries = await listCloudMediaEntriesInFolderForChat(folderLabel, parsedAction.target?.mediaType || 'all');
+                        const grouped = groupCloudEntriesForWorkflow(folderLabel, folderEntries);
+                        previewText = `${previewText}\n\n目标目录：${folderLabel}\n真实文件数：${folderEntries.length}\n目录分组数：${grouped.groups.length}`;
+                    } else if (parsedAction.action === 'run_organizer_folder') {
+                        const folderLabel = resolveChatFolderAlias(parsedAction.target?.value || '')
+                            || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
+                        const folderTasks = await listTasksInFolderForChat(folderLabel, parsedAction.target?.mediaType || 'all');
+                        previewText = `${previewText}\n\n目标目录：${folderLabel}\n匹配任务数：${folderTasks.length}`;
+                    } else if (parsedAction.action === 'run_all_tasks') {
+                        previewText = `${previewText}\n\n目标：所有待处理任务`;
+                    } else if (parsedAction.action === 'restart_container') {
+                        previewText = `${previewText}\n\n目标：当前服务进程`;
+                    }
+                } catch (error) {
+                    res.json({ success: true, data: { reply: error.message } });
+                    return;
+                }
+
+                res.json({
+                    success: true,
+                    data: {
+                        reply: `${previewText}\n\n确认后我会直接调用程序执行。`,
+                        action: parsedAction
+                    }
+                });
+                return;
+            }
+
+            const fallback = await AIService.chat([
+                {
+                    role: 'system',
+                    content: '你是天翼自动转存系统助手。优先简洁回答用户关于当前程序功能、任务、配置和使用方式的问题。'
+                },
+                {
+                    role: 'user',
+                    content: userMessage
+                }
+            ]);
+
+            res.json({
+                success: true,
+                data: {
+                    reply: fallback.success ? String(fallback.data || '') : '我暂时无法理解这条指令。你可以直接说“执行任务 123”或“帮我整理任务 123”。'
+                }
+            });
         } catch (error) {
             console.error('处理聊天消息失败:', error);
-            res.status(500).json({ success: false, error: '处理消息失败' });
+            res.status(500).json({ success: false, error: error.message || '处理消息失败' });
         }
     })
 

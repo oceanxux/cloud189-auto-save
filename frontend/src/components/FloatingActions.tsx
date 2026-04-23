@@ -4,10 +4,7 @@ import {
   Plus, 
   Cpu, 
   MessageSquare, 
-  Link2, 
-  Bell, 
-  FileText,
-  Search
+  Link2
 } from 'lucide-react';
 
 interface FloatingActionsProps {
@@ -22,7 +19,6 @@ const FloatingActions: React.FC<FloatingActionsProps> = ({ onAction }) => {
     { id: 'cloudsaver', icon: Cpu, label: 'CloudSaver', color: 'bg-[#d3e3fd] text-[#0b57d0]' },
     { id: 'chat', icon: MessageSquare, label: 'AI Assistant', color: 'bg-[#f3e8ff] text-[#7e22ce]' },
     { id: 'strm', icon: Link2, label: 'STRM 生成', color: 'bg-[#c4eed0] text-[#146c2e]' },
-    { id: 'logs', icon: FileText, label: '实时日志', color: 'bg-slate-200 text-slate-700' },
   ];
 
   const handleAction = (id: string) => {

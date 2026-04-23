@@ -23,6 +23,7 @@ class TaskEventHandler {
             await this._handleAlistCache(taskCompleteEventDto);
             await this._handleMediaScraping(taskCompleteEventDto);
             await this._handleEmbyNotification(taskCompleteEventDto);
+            await this._handleCompletedTaskCleanup(taskCompleteEventDto);
         } catch (error) {
             console.error(error);
             logTaskEvent(`任务完成后处理失败: ${error.message}`);
@@ -148,6 +149,26 @@ class TaskEventHandler {
         } catch (error) {
             console.error(error);
             logTaskEvent(`通知Emby失败: ${error.message}`);
+        }
+    }
+
+    async _handleCompletedTaskCleanup(taskCompleteEventDto) {
+        try {
+            const { task, taskService } = taskCompleteEventDto;
+            if (!task?.id || task.status !== 'completed') {
+                return;
+            }
+            if (!ConfigService.getConfigValue('task.enableAutoDeleteCompletedTask')) {
+                return;
+            }
+
+            const message = `✅ 任务已完结并自动删除: ${task.resourceName} (${task.currentEpisodes}/${task.totalEpisodes || '?'})`;
+            await taskService.deleteTask(task.id, false);
+            logTaskEvent(message);
+            await this.messageUtil.sendMessage(message);
+        } catch (error) {
+            console.error(error);
+            logTaskEvent(`完结任务自动删除失败: ${error.message}`);
         }
     }
 }

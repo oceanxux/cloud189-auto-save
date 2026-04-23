@@ -45,6 +45,7 @@ interface SettingsData {
     lazyFileRetentionHours: number;
     mediaSuffix: string;
     enableOnlySaveMedia: boolean;
+    enableAutoDeleteCompletedTask: boolean;
     enableAutoCreateFolder: boolean;
     enableFamilyTransit: boolean;
     enableFamilyTransitFirst: boolean;
@@ -157,6 +158,7 @@ const initialSettings: SettingsData = {
     lazyFileRetentionHours: 24,
     mediaSuffix: '.mkv;.iso;.ts;.mp4;.avi;.rmvb;.wmv;.m2ts;.mpg;.flv;.rm;.mov;.cas',
     enableOnlySaveMedia: false,
+    enableAutoDeleteCompletedTask: false,
     enableAutoCreateFolder: false,
     enableFamilyTransit: true,
     enableFamilyTransitFirst: false,
@@ -501,6 +503,23 @@ const SettingsTab: React.FC = () => {
                 className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
                 placeholder=".mkv;.mp4;..."
               />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+              <div>
+                <p className="text-sm font-medium text-slate-900">完结后自动删除任务</p>
+                <p className="text-xs text-slate-500 mt-1">任务达到总集数后自动删除任务记录，并同步发送通知</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
+                  checked={settings.task.enableAutoDeleteCompletedTask}
+                  onChange={(e) => updateSettings('task.enableAutoDeleteCompletedTask', e.target.checked)}
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#0b57d0]"></div>
+              </label>
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
@@ -979,22 +998,31 @@ const SettingsTab: React.FC = () => {
         </div>
       </section>
 
-      <div className="flex justify-end pt-4 gap-4 sticky bottom-8 z-10">
-        <button 
-          type="button"
-          onClick={loadSettings}
-          className="px-8 py-3 bg-white border border-slate-300 text-slate-700 rounded-full font-medium shadow-lg hover:bg-slate-50 transition-all flex items-center gap-2"
-        >
-          <RefreshCw size={20} className={loading ? 'animate-spin' : ''} /> 放弃修改
-        </button>
-        <button 
-          type="button"
-          onClick={handleSave}
-          disabled={saving}
-          className="px-10 py-3 bg-[#0b57d0] text-white rounded-full font-medium shadow-lg hover:bg-[#0b57d0]/90 hover:shadow-xl transition-all flex items-center gap-2 disabled:opacity-70"
-        >
-          {saving ? <RefreshCw size={20} className="animate-spin" /> : <Save size={20} />} 保存设置
-        </button>
+      <div className="mt-10 border-t border-slate-200 pt-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm text-slate-500">
+            配置修改后会立即写入系统设置并刷新相关服务状态。
+          </div>
+          <div className="flex gap-3">
+            <button 
+              type="button"
+              onClick={loadSettings}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition-all hover:bg-slate-50"
+            >
+              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+              放弃修改
+            </button>
+            <button 
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="inline-flex items-center gap-2 rounded-full bg-[#0b57d0] px-6 py-2.5 text-sm font-medium text-white transition-all hover:bg-[#0b57d0]/90 disabled:opacity-70"
+            >
+              {saving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+              保存设置
+            </button>
+          </div>
+        </div>
       </div>
 
       <Modal 

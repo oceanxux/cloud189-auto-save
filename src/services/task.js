@@ -2124,7 +2124,11 @@ class TaskService {
     async checkFolderExists(cloud189, targetFolderId, folderName, overwriteFolder = false) {
         const folderInfo = await cloud189.listFiles(targetFolderId);
         if (!folderInfo) {
-            throw new Error('获取文件列表失败');
+            throw new Error('获取文件列表失败: 云盘接口无返回');
+        }
+        if (!folderInfo.fileListAO) {
+            const errorMessage = folderInfo.res_msg || folderInfo.res_message || folderInfo.errorMsg || folderInfo.errorCode || '未知错误';
+            throw new Error(`获取文件列表失败: ${errorMessage}`);
         }
 
         // 检查目标文件夹是否存在

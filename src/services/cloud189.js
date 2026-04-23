@@ -57,6 +57,7 @@ class Cloud189Service {
 
     // 封装统一请求
     async request(action, body = {}) {
+        const method = String(body?.method || 'GET').toUpperCase();
         body.headers = {
             'Accept': 'application/json;charset=UTF-8',
             ...(body.headers || {})
@@ -65,10 +66,11 @@ class Cloud189Service {
             const requestUrl = this.buildRequestUrl(action);
             return await this.client.request(requestUrl, body).json();
         }catch (error) {
-            if (error instanceof got.HTTPError) {
+            const statusCode = Number(error?.response?.statusCode || 0);
+            if (error?.name === 'HTTPError' || statusCode > 0) {
                 let responseBody = null;
                 try {
-                    responseBody = JSON.parse(error.response.body);
+                    responseBody = JSON.parse(error?.response?.body);
                 } catch (parseError) {
                     responseBody = null;
                 }
@@ -101,13 +103,29 @@ class Cloud189Service {
                     if (responseBody.errorCode === 'InvalidSessionKey' && /check ip error/i.test(responseBody.errorMsg || '')) {
                         logTaskEvent('天翼云盘会话失效: 当前出口 IP 与 Cookie 绑定 IP 不一致。若为双栈网络，建议为容器添加环境变量 DNS_LOOKUP_IP_VERSION=ipv4；如账号仅使用 Cookie 登录，请改用账号密码登录或固定代理出口。');
                     }
-                    logTaskEvent('请求天翼云盘接口失败:' + error.response.body);
+                    const message = responseBody.res_msg || responseBody.res_message || responseBody.errorMsg || error.message;
+                    logTaskEvent(`请求天翼云盘接口失败 [HTTP ${statusCode || '未知'} ${method} ${action}]: ${message}`);
+                    return {
+                        ...responseBody,
+                        _requestFailed: true,
+                        _retriable: statusCode >= 500 || statusCode === 429,
+                        _httpStatusCode: statusCode || undefined
+                    };
                 } else {
-                    logTaskEvent('请求天翼云盘接口失败:' + error.response.body);
+                    const responseBodyText = String(error?.response?.body || '').slice(0, 500);
+                    const fallbackMessage = responseBodyText || error.message || 'HTTP请求失败';
+                    logTaskEvent(`请求天翼云盘接口失败 [HTTP ${statusCode || '未知'} ${method} ${action}]: ${fallbackMessage}`);
+                    return {
+                        res_code: `HTTP_${statusCode || 'UNKNOWN'}`,
+                        res_msg: fallbackMessage,
+                        _requestFailed: true,
+                        _retriable: statusCode >= 500 || statusCode === 429,
+                        _httpStatusCode: statusCode || undefined
+                    };
                 }
-            }else if (error instanceof got.TimeoutError) {
+            }else if (error?.name === 'TimeoutError' || error instanceof got.TimeoutError) {
                 logTaskEvent('请求天翼云盘接口失败: 请求超时, 请检查是否能访问天翼云盘');
-            }else if(error instanceof got.RequestError) {
+            }else if(error?.name === 'RequestError' || error instanceof got.RequestError) {
                 logTaskEvent('请求天翼云盘接口异常: ' + error.message);
             }else{
                 logTaskEvent('其他异常:' + error.message)
@@ -122,14 +140,22 @@ class Cloud189Service {
         const retryDelayMs = Number(options.retryDelayMs ?? 800);
         const shouldRetry = typeof options.shouldRetry === 'function'
             ? options.shouldRetry
-            : (result) => result == null;
+            : (result) => {
+                if (result == null) {
+                    return true;
+                }
+                if (result?._requestFailed) {
+                    return Boolean(result._retriable);
+                }
+                return false;
+            };
 
         for (let attempt = 0; attempt <= retries; attempt++) {
             const result = await this.request(action, body);
             if (!shouldRetry(result) || attempt === retries) {
                 return result;
             }
-            logTaskEvent(`天翼云盘接口请求失败，${Math.round(retryDelayMs / 1000 * 10) / 10} 秒后重试 (${attempt + 1}/${retries})`);
+            logTaskEvent(`天翼云盘接口请求失败 [${action}]，${Math.round(retryDelayMs / 1000 * 10) / 10} 秒后重试 (${attempt + 1}/${retries})`);
             await new Promise(resolve => setTimeout(resolve, retryDelayMs));
         }
 

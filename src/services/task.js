@@ -53,6 +53,22 @@ class TaskService {
         throw new Error('TaskProcessedFile 仓库未初始化');
     }
 
+    _getAiMode() {
+        if (!AIService.isEnabled()) {
+            return 'disabled';
+        }
+        const mode = String(ConfigService.getConfigValue('openai.mode', 'fallback') || 'fallback').trim().toLowerCase();
+        return ['advanced', 'fallback'].includes(mode) ? mode : 'fallback';
+    }
+
+    _isAiAdvancedMode() {
+        return this._getAiMode() === 'advanced';
+    }
+
+    _isAiFallbackMode() {
+        return this._getAiMode() === 'fallback';
+    }
+
     // 解析分享链接
     async getShareInfo(cloud189, shareCode) {
          const shareInfo = await cloud189.getShareInfo(shareCode);
@@ -155,7 +171,7 @@ class TaskService {
         if (subFolders.length > 0) {
             taskDto.realRootFolderId = rootFolder.id;
             // 如果启用了 AI 分析，分析子文件夹
-            if (AIService.isEnabled() && subFolders.length > 0) {
+            if (this._isAiAdvancedMode() && subFolders.length > 0) {
                 try {
                     const resourceInfo = await this._analyzeResourceInfo(
                         shareInfo.fileName,
@@ -273,7 +289,7 @@ class TaskService {
             throw new Error('获取分享信息失败');
         }
         // 如果启用了 AI 分析 如果任务名和分享名相同, 则使用AI分析结果更新任务名称
-        if (AIService.isEnabled() && taskDto.taskName == shareInfo.fileName) {
+        if (this._isAiAdvancedMode() && taskDto.taskName == shareInfo.fileName) {
             try {
                 const resourceInfo = await this._analyzeResourceInfo(shareInfo.fileName, [], 'folder');
                 // 使用 AI 分析结果更新任务名称
@@ -720,7 +736,7 @@ class TaskService {
         let aiFiltered = false;
         const mediaSuffixs = ConfigService.getConfigValue('task.mediaSuffix').split(';').map(suffix => suffix.toLowerCase());
 
-        if (AIService.isEnabled() && task.matchPattern && task.matchOperator && task.matchValue) {
+        if (this._isAiAdvancedMode() && task.matchPattern && task.matchOperator && task.matchValue) {
             const aiResult = await this._filterFilesWithAI(task, filteredFiles);
             if (aiResult != null) {
                 filteredFiles = aiResult;
@@ -927,7 +943,7 @@ class TaskService {
             // 始终以目标目录中的现有媒体文件数回填进度，避免首次执行但无新增时进度不刷新。
             task.currentEpisodes = existingMediaCount;
             let aiFiltered = false;
-            if (AIService.isEnabled() && task.matchPattern && task.matchOperator && task.matchValue) {
+            if (this._isAiAdvancedMode() && task.matchPattern && task.matchOperator && task.matchValue) {
                 const aiResult = await this._filterFilesWithAI(task, shareFiles)
                 if (aiResult != null) {
                     shareFiles = aiResult;
@@ -1243,7 +1259,6 @@ class TaskService {
 
     // 自动重命名
     async autoRename(cloud189, task) {
-        if ((!task.sourceRegex || !task.targetRegex) && !AIService.isEnabled()) return [];
         let message = []
         let newFiles = [];
         let files = [];
@@ -1257,24 +1272,52 @@ class TaskService {
         
         // 过滤掉文件夹
         files = files.filter(file => !file.isFolder);
+        if (files.length === 0) return [];
 
-        // 使用 AI 重命名或正则重命名  如果写了正则, 那么优先使用正则
-        if (AIService.isEnabled() && (!task.sourceRegex || !task.targetRegex)) {
-            logTaskEvent(` ${task.resourceName} 开始使用 AI 重命名`);
-            try {
-                const resourceInfo = await this._analyzeResourceInfo(
-                    task.resourceName,
-                    files.map(f => ({ id: f.id, name: f.name })),
-                    'file'
-                );
-                await this._processRename(cloud189, task, files, resourceInfo, message, newFiles);
-            } catch (error) {
-                logTaskEvent('AI 重命名失败，使用正则表达式重命名: ' + error.message);
-                await this._processRegexRename(cloud189, task, files, message, newFiles);
-            }
-        } else {
+        // 用户写了正则时，始终以正则为准
+        if (task.sourceRegex && task.targetRegex) {
             logTaskEvent(` ${task.resourceName} 开始使用正则表达式重命名`);
             await this._processRegexRename(cloud189, task, files, message, newFiles);
+        } else {
+            const aiMode = this._getAiMode();
+            const localResourceInfo = this._buildLocalRenameResourceInfo(task, files);
+            const localRenamableCount = this._countRenamableFiles(files, localResourceInfo);
+
+            if (aiMode === 'advanced') {
+                logTaskEvent(` ${task.resourceName} 开始使用 AI 高级重命名`);
+                try {
+                    const resourceInfo = await this._analyzeResourceInfo(
+                        task.resourceName,
+                        files.map(f => ({ id: f.id, name: f.name })),
+                        'file'
+                    );
+                    await this._processRename(cloud189, task, files, resourceInfo, message, newFiles);
+                } catch (error) {
+                    logTaskEvent(`AI 高级重命名失败，已回退本地解析: ${error.message}`);
+                    await this._processRename(cloud189, task, files, localResourceInfo, message, newFiles);
+                }
+            } else {
+                logTaskEvent(` ${task.resourceName} 开始使用本地规则重命名`);
+                await this._processRename(cloud189, task, files, localResourceInfo, message, newFiles);
+                if (aiMode === 'fallback' && localRenamableCount === 0) {
+                    logTaskEvent(`本地规则未识别到可重命名文件，尝试使用 AI 兜底`);
+                    try {
+                        const aiResourceInfo = await this._analyzeResourceInfo(
+                            task.resourceName,
+                            files.map(f => ({ id: f.id, name: f.name })),
+                            'file'
+                        );
+                        message = [];
+                        newFiles = [];
+                        await this._processRename(cloud189, task, files, aiResourceInfo, message, newFiles);
+                    } catch (error) {
+                        logTaskEvent(`AI 兜底重命名失败，保留本地规则结果: ${error.message}`);
+                        message = [];
+                        newFiles = [];
+                        await this._processRename(cloud189, task, files, localResourceInfo, message, newFiles);
+                    }
+                }
+            }
         }
 
         // 处理消息和保存结果
@@ -1323,6 +1366,108 @@ class TaskService {
         }
         // 清理文件名中的非法字符
         return this._sanitizeFileName(newName);
+    }
+
+    _countRenamableFiles(files, resourceInfo) {
+        const aiNames = Array.isArray(resourceInfo?.episode) ? resourceInfo.episode : [];
+        const template = resourceInfo?.type === 'movie'
+            ? ConfigService.getConfigValue('openai.rename.movieTemplate') || '{name} ({year}){ext}'
+            : ConfigService.getConfigValue('openai.rename.template') || '{name} - {se}{ext}';
+        let count = 0;
+        for (const file of files) {
+            const aiFile = aiNames.find(item => String(item.id) === String(file.id));
+            if (!aiFile) {
+                continue;
+            }
+            const nextName = this._generateFileName(file, aiFile, resourceInfo, template);
+            if (nextName && nextName !== file.name) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    _buildLocalRenameResourceInfo(task, files) {
+        const sortedFiles = [...files].sort((left, right) =>
+            String(left.name || '').localeCompare(String(right.name || ''), 'zh-CN', { numeric: true, sensitivity: 'base' })
+        );
+        const title = this._sanitizeMediaTitle(task.resourceName || '');
+        const year = this._extractYear(task.resourceName || '');
+        const parsedEpisodes = sortedFiles.map((file, index) => {
+            const parsed = this._extractSeasonEpisodeFromFileName(file.name);
+            return {
+                id: String(file.id),
+                name: title,
+                season: parsed.season || '01',
+                episode: parsed.episode || String(index + 1).padStart(2, '0'),
+                extension: path.extname(file.name) || ''
+            };
+        });
+        const hasEpisodeHints = parsedEpisodes.some(item => item.episode && item.episode !== '01');
+        return {
+            name: title,
+            year,
+            type: sortedFiles.length > 1 || hasEpisodeHints ? 'tv' : 'movie',
+            season: '01',
+            episode: parsedEpisodes
+        };
+    }
+
+    _sanitizeMediaTitle(value = '') {
+        return String(value || '')
+            .replace(/\(根\)$/g, '')
+            .replace(/[\[【(（](19|20)\d{2}[\]】)）]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    _extractYear(value = '') {
+        const matched = String(value || '').match(/(19|20)\d{2}/);
+        return matched ? matched[0] : '';
+    }
+
+    _extractSeasonEpisodeFromFileName(fileName = '') {
+        const target = String(fileName || '');
+        let matched = target.match(/S(\d{1,2})E(\d{1,4})/i);
+        if (matched) {
+            return {
+                season: String(parseInt(matched[1], 10)).padStart(2, '0'),
+                episode: this._normalizeEpisodeNumber(matched[2])
+            };
+        }
+        matched = target.match(/(\d{1,2})x(\d{1,4})/i);
+        if (matched) {
+            return {
+                season: String(parseInt(matched[1], 10)).padStart(2, '0'),
+                episode: this._normalizeEpisodeNumber(matched[2])
+            };
+        }
+        matched = target.match(/第\s*([0-9]{1,4})\s*[集话話]/i);
+        if (matched) {
+            return {
+                season: '01',
+                episode: this._normalizeEpisodeNumber(matched[1])
+            };
+        }
+        matched = target.match(/(?:EP?|Episode)\s*0?(\d{1,4})/i);
+        if (matched) {
+            return {
+                season: '01',
+                episode: this._normalizeEpisodeNumber(matched[1])
+            };
+        }
+        return {
+            season: '01',
+            episode: ''
+        };
+    }
+
+    _normalizeEpisodeNumber(value = '') {
+        const normalized = String(parseInt(String(value || '').trim(), 10) || 0);
+        if (!normalized || normalized === '0') {
+            return '';
+        }
+        return normalized.length >= 3 ? normalized : normalized.padStart(2, '0');
     }
 
     buildOrganizerDirectoryName(aiFile, resourceInfo) {

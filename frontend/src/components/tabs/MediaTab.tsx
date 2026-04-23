@@ -46,6 +46,7 @@ interface MediaSettings {
   };
   openai: {
     enable: boolean;
+    mode: string;
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -94,6 +95,7 @@ const initialSettings: MediaSettings = {
   tmdb: { enableScraper: false, tmdbApiKey: '' },
   openai: { 
     enable: false, 
+    mode: 'fallback',
     baseUrl: '', 
     apiKey: '', 
     model: '', 
@@ -315,6 +317,20 @@ const MediaTab: React.FC = () => {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">AI 模式</label>
+              <select
+                value={settings.openai.mode}
+                onChange={e => updateSetting('openai.mode', e.target.value)}
+                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+              >
+                <option value="fallback">兜底模式</option>
+                <option value="advanced">高级模式</option>
+              </select>
+              <p className="text-xs text-slate-500">
+                兜底模式下优先使用 TMDB 和本地规则，AI 仅在本地解析不足时尝试补充；高级模式下启用 AI 重命名、AI 文件过滤等增强能力。
+              </p>
+            </div>
+            <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">模型名称</label>
               <input 
                 type="text" 
@@ -324,7 +340,7 @@ const MediaTab: React.FC = () => {
                 className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
               />
             </div>
-            <div className="md:col-span-2 space-y-2">
+            <div className="space-y-2 md:col-span-2">
               <label className="text-sm font-medium text-slate-700">剧集命名模板</label>
               <input 
                 type="text" 

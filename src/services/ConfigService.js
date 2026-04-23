@@ -121,6 +121,7 @@ class ConfigService {
       },
       openai: {
         enable: false,
+        mode: 'fallback',
         baseUrl: '',
         apiKey: '',
         model: 'GLM-4-Flash-250414',

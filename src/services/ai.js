@@ -564,20 +564,47 @@ class AIService {
                 });
 
                 // 处理流式响应
+                let buffer = '';
                 for await (const chunk of response) {
                     try {
-                        const lines = chunk.toString().split('\n').filter(line => line.trim() !== '');
+                        buffer += chunk.toString();
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
                         for (const line of lines) {
-                            if (line.includes('[DONE]')) continue;
-                            if (line.startsWith('data: ')) {
-                                const data = JSON.parse(line.slice(5));
-                                if (data.choices[0].delta?.content) {
-                                    onChunk(data.choices[0].delta.content);
-                                }
+                            const trimmedLine = line.trim();
+                            if (!trimmedLine || !trimmedLine.startsWith('data: ')) {
+                                continue;
+                            }
+                            if (trimmedLine.includes('[DONE]')) {
+                                continue;
+                            }
+                            const payload = trimmedLine.slice(5).trim();
+                            if (!payload) {
+                                continue;
+                            }
+                            const data = JSON.parse(payload);
+                            const deltaContent = data?.choices?.[0]?.delta?.content;
+                            if (deltaContent) {
+                                onChunk(deltaContent);
                             }
                         }
                     } catch (error) {
                         console.error('处理响应块时出错:', error);
+                    }
+                }
+                const trailingLine = buffer.trim();
+                if (trailingLine.startsWith('data: ') && !trailingLine.includes('[DONE]')) {
+                    try {
+                        const payload = trailingLine.slice(5).trim();
+                        if (payload) {
+                            const data = JSON.parse(payload);
+                            const deltaContent = data?.choices?.[0]?.delta?.content;
+                            if (deltaContent) {
+                                onChunk(deltaContent);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('处理响应尾块时出错:', error);
                     }
                 }
                 // 所有块处理完成后，发送结束标识

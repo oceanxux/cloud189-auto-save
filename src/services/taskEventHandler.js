@@ -22,7 +22,7 @@ class TaskEventHandler {
             await this._handleStrmGeneration(taskCompleteEventDto);
             await this._handleAlistCache(taskCompleteEventDto);
             await this._handleMediaScraping(taskCompleteEventDto);
-            this._handleEmbyNotification(taskCompleteEventDto)
+            await this._handleEmbyNotification(taskCompleteEventDto);
         } catch (error) {
             console.error(error);
             logTaskEvent(`任务完成后处理失败: ${error.message}`);
@@ -102,11 +102,19 @@ class TaskEventHandler {
                     logTaskEvent(`开始刮削tmdbId: ${task.tmdbId}的媒体信息, 路径: ${strmPath}`);
                     const mediaDetails = await scrapeService.scrapeFromDirectory(strmPath, task.tmdbId);
                     if (mediaDetails) {
+                        const taskUpdates = {
+                            tmdbContent: JSON.stringify(mediaDetails)
+                        };
                         if (task.tmdbId != mediaDetails.tmdbId) {
-                            await taskRepo.update(task.id, {
-                                tmdbId: mediaDetails.tmdbId,
-                                tmdbContent: JSON.stringify(mediaDetails)
-                            });
+                            taskUpdates.tmdbId = mediaDetails.tmdbId;
+                        }
+                        const resolvedTotalEpisodes = Number(mediaDetails?.totalEpisodes || 0);
+                        if (resolvedTotalEpisodes > 0 && Number(task.totalEpisodes || 0) !== resolvedTotalEpisodes) {
+                            taskUpdates.totalEpisodes = resolvedTotalEpisodes;
+                            task.totalEpisodes = resolvedTotalEpisodes;
+                        }
+                        if (Object.keys(taskUpdates).length > 0) {
+                            await taskRepo.update(task.id, taskUpdates);
                         }
                         const shortOverview = mediaDetails.overview ? 
                             (mediaDetails.overview.length > 20 ? mediaDetails.overview.substring(0, 50) + '...' : mediaDetails.overview) : 

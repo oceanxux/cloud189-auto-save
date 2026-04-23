@@ -38,9 +38,6 @@ class OrganizerService {
                 files: await this.taskService.getFilesByTask(task)
             };
         }
-        if (!ConfigService.getConfigValue('openai.enable')) {
-            throw new Error('整理器依赖AI功能，请先在媒体设置中启用AI');
-        }
         if (task.enableLazyStrm) {
             throw new Error('懒转存STRM任务暂不支持整理器');
         }
@@ -52,13 +49,8 @@ class OrganizerService {
         }
 
         logTaskEvent(`任务[${task.resourceName}]开始执行整理器`);
-        const resourceInfo = await this.taskService._analyzeResourceInfo(
-            task.resourceName,
-            allFiles.map(file => ({ id: file.id, name: file.name })),
-            'file'
-        );
-
-        const tmdbInfo = await this._resolveTmdbInfo(task, resourceInfo);
+        const tmdbInfo = await this._resolveTmdbInfo(task, null);
+        const resourceInfo = await this._resolveResourceInfo(task, allFiles, tmdbInfo);
         const libraryInfo = this._resolveLibraryInfo(task, resourceInfo, tmdbInfo);
         const organizerRoot = this._resolveOrganizerRoot(task);
         const baseFolderPath = organizerRoot.path;
@@ -163,6 +155,11 @@ class OrganizerService {
             taskUpdates.tmdbContent = JSON.stringify(tmdbInfo);
             task.tmdbContent = taskUpdates.tmdbContent;
         }
+        const resolvedTotalEpisodes = this._resolveTotalEpisodes(tmdbInfo);
+        if (resolvedTotalEpisodes > 0 && Number(task.totalEpisodes || 0) !== resolvedTotalEpisodes) {
+            taskUpdates.totalEpisodes = resolvedTotalEpisodes;
+            task.totalEpisodes = resolvedTotalEpisodes;
+        }
 
         await this.taskRepo.update(task.id, taskUpdates);
 
@@ -189,6 +186,24 @@ class OrganizerService {
             operations: messages,
             libraryInfo
         };
+    }
+
+    async _resolveResourceInfo(task, allFiles, tmdbInfo = null) {
+        const aiEnabled = ConfigService.getConfigValue('openai.enable');
+        if (aiEnabled) {
+            try {
+                const analyzed = await this.taskService._analyzeResourceInfo(
+                    task.resourceName,
+                    allFiles.map(file => ({ id: file.id, name: file.name })),
+                    'file'
+                );
+                return this._normalizeResourceInfo(analyzed, task, tmdbInfo, allFiles);
+            } catch (error) {
+                logTaskEvent(`整理器 AI 解析失败，已切换到 TMDB/文件名回退: ${error.message}`);
+            }
+        }
+
+        return this._buildFallbackResourceInfo(task, allFiles, tmdbInfo);
     }
 
     async markError(taskId, error) {
@@ -243,6 +258,159 @@ class OrganizerService {
             logTaskEvent(`TMDB分类信息获取失败，已回退AI结果: ${error.message}`);
             return cachedTmdb || null;
         }
+    }
+
+    _normalizeResourceInfo(resourceInfo, task, tmdbInfo = null, allFiles = []) {
+        const mediaType = this._resolvePreferredMediaType(resourceInfo, tmdbInfo) || (allFiles.length > 1 ? 'tv' : 'movie');
+        const preferredTitle = this._sanitizePathSegment(
+            tmdbInfo?.title
+            || resourceInfo?.name
+            || this._sanitizeTitle(task.resourceName)
+            || task.resourceName
+        );
+        const year = Number(this._extractYear(tmdbInfo?.releaseDate) || resourceInfo?.year || this._extractYear(task.resourceName) || 0);
+        const fallbackEpisodes = this._buildFallbackEpisodeEntries(allFiles, mediaType, preferredTitle);
+        const aiEpisodes = Array.isArray(resourceInfo?.episode) ? resourceInfo.episode : [];
+        const fallbackEpisodeMap = new Map(fallbackEpisodes.map(item => [String(item.id), item]));
+        const normalizedEpisodes = aiEpisodes.length > 0
+            ? aiEpisodes.map(item => {
+                const fallbackEpisode = fallbackEpisodeMap.get(String(item.id)) || {};
+                return {
+                    ...fallbackEpisode,
+                    ...item,
+                    id: String(item.id),
+                    name: preferredTitle,
+                    season: String(item.season || fallbackEpisode.season || '01').padStart(2, '0'),
+                    episode: String(item.episode || fallbackEpisode.episode || '01').padStart(2, '0'),
+                    extension: item.extension || fallbackEpisode.extension || ''
+                };
+            })
+            : fallbackEpisodes;
+
+        return {
+            ...resourceInfo,
+            name: preferredTitle,
+            year,
+            type: mediaType,
+            episode: normalizedEpisodes
+        };
+    }
+
+    _buildFallbackResourceInfo(task, allFiles, tmdbInfo = null) {
+        const mediaType = tmdbInfo?.type || (allFiles.length > 1 ? 'tv' : 'movie');
+        const preferredTitle = this._sanitizePathSegment(
+            tmdbInfo?.title
+            || this._sanitizeTitle(task.resourceName)
+            || task.resourceName
+        );
+        const year = Number(this._extractYear(tmdbInfo?.releaseDate) || this._extractYear(task.resourceName) || 0);
+
+        return {
+            name: preferredTitle,
+            year,
+            type: mediaType,
+            season: '01',
+            episode: this._buildFallbackEpisodeEntries(allFiles, mediaType, preferredTitle)
+        };
+    }
+
+    _buildFallbackEpisodeEntries(allFiles, mediaType, preferredTitle) {
+        const sortedFiles = [...allFiles].sort((left, right) => {
+            const leftPath = String(left.relativePath || left.name || '');
+            const rightPath = String(right.relativePath || right.name || '');
+            return leftPath.localeCompare(rightPath, 'zh-CN', { numeric: true, sensitivity: 'base' });
+        });
+
+        let fallbackEpisodeNumber = 1;
+        return sortedFiles.map(file => {
+            const parsed = this._extractSeasonEpisode(file);
+            const season = parsed.season || '01';
+            const episode = mediaType === 'movie'
+                ? '01'
+                : (parsed.episode || String(fallbackEpisodeNumber++).padStart(2, '0'));
+            return {
+                id: String(file.id),
+                name: preferredTitle,
+                season,
+                episode,
+                extension: path.extname(file.name) || ''
+            };
+        });
+    }
+
+    _extractSeasonEpisode(file) {
+        const candidates = [
+            String(file?.name || ''),
+            String(file?.relativePath || ''),
+            String(file?.relativeDir || '')
+        ].filter(Boolean);
+
+        let season = '';
+        let episode = '';
+
+        for (const candidate of candidates) {
+            let matched = candidate.match(/S(\d{1,2})E(\d{1,4})/i);
+            if (matched) {
+                return {
+                    season: String(parseInt(matched[1], 10)).padStart(2, '0'),
+                    episode: this._normalizeEpisodeNumber(matched[2])
+                };
+            }
+
+            matched = candidate.match(/(\d{1,2})x(\d{1,4})/i);
+            if (matched) {
+                return {
+                    season: String(parseInt(matched[1], 10)).padStart(2, '0'),
+                    episode: this._normalizeEpisodeNumber(matched[2])
+                };
+            }
+
+            if (!season) {
+                matched = candidate.match(/(?:Season|S|第)\s*0?(\d{1,2})\s*(?:季)?/i);
+                if (matched) {
+                    season = String(parseInt(matched[1], 10)).padStart(2, '0');
+                }
+            }
+
+            if (!episode) {
+                matched = candidate.match(/第\s*([0-9]{1,4})\s*[集话話]/i);
+                if (matched) {
+                    episode = this._normalizeEpisodeNumber(matched[1]);
+                }
+            }
+
+            if (!episode) {
+                matched = candidate.match(/(?:EP?|Episode)\s*0?(\d{1,4})/i);
+                if (matched) {
+                    episode = this._normalizeEpisodeNumber(matched[1]);
+                }
+            }
+        }
+
+        return {
+            season: season || '01',
+            episode
+        };
+    }
+
+    _normalizeEpisodeNumber(value = '') {
+        const normalized = String(parseInt(String(value || '').trim(), 10) || 0);
+        if (!normalized || normalized === '0') {
+            return '';
+        }
+        return normalized.length >= 3 ? normalized : normalized.padStart(2, '0');
+    }
+
+    _resolveTotalEpisodes(tmdbInfo = null) {
+        const totalEpisodes = Number(tmdbInfo?.totalEpisodes || 0);
+        if (totalEpisodes > 0) {
+            return totalEpisodes;
+        }
+        const endedEpisodes = Number(tmdbInfo?.lastEpisodeToAir?.episode_number || 0);
+        if (endedEpisodes > 0 && String(tmdbInfo?.status || '').toLowerCase() === 'ended') {
+            return endedEpisodes;
+        }
+        return 0;
     }
 
     async _fetchTmdbDetailsById(tmdbId, preferredType = '') {

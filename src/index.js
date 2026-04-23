@@ -638,6 +638,7 @@ AppDataSource.initialize().then(async () => {
         // 添加搜索过滤
         if (search) {
             const searchConditions = [
+                { resourceName: Like(`%${search}%`) },
                 { realFolderName: Like(`%${search}%`) },
                 { remark: Like(`%${search}%`) },
                 { taskGroup: Like(`%${search}%`) },

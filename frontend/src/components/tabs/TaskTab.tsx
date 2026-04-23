@@ -543,7 +543,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
           return (
             <div 
               key={task.id}
-              className={`bg-white rounded-3xl border p-6 shadow-sm hover:shadow-md transition-all group relative ${
+              className={`bg-white rounded-3xl border p-4 md:p-6 shadow-sm hover:shadow-md transition-all group relative ${
                 isSelected ? 'border-[#0b57d0] ring-1 ring-[#0b57d0]/20' : 'border-slate-200/60'
               } ${task.status === 'completed' ? 'opacity-80' : ''}`}
             >
@@ -559,14 +559,14 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
               </div>
 
               <div className={`absolute top-0 left-0 w-1.5 h-full ${getStatusColorClass(task.status)}`} />
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pl-6">
-                <div className="flex items-start gap-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pl-6">
+                <div className="flex items-start gap-3 md:gap-4 min-w-0">
                   <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${getStatusBgClass(task.status)}`}>
                     {getStatusIcon(task.status)}
                   </div>
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h3 className="font-bold text-slate-900 text-lg truncate max-w-[300px]" title={taskName}>{taskName}</h3>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2 md:gap-3">
+                      <h3 className="font-bold text-slate-900 text-base md:text-lg break-all md:truncate md:max-w-[300px]" title={taskName}>{taskName}</h3>
                       {getStatusBadge(task.status)}
                       {task.enableLazyStrm && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">懒STRM</span>}
                       {isAutoRefreshTask(task) && <span className="px-2 py-0.5 bg-sky-100 text-sky-700 rounded text-[10px] font-bold">自动换源</span>}
@@ -574,10 +574,10 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                     <p className="text-sm text-slate-500 mt-1">
                       账号: {task.account?.username || '未知账号'} • 分组: {task.taskGroup || '-'}
                     </p>
-                    <div className="flex items-center gap-4 mt-3">
-                      <div className="flex items-center gap-2 text-sm text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg">
+                    <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 mt-3">
+                      <div className="flex items-center gap-2 text-sm text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg min-w-0">
                         <Files size={16} className="text-slate-400" />
-                        <span className="truncate max-w-[250px]">更新目录: {task.realFolderName || task.realFolderId || '-'}</span>
+                        <span className="truncate">更新目录: {task.realFolderName || task.realFolderId || '-'}</span>
                       </div>
                       <span className="text-xs text-slate-400">最后更新: {formatDateTime(task.lastFileUpdateTime)}</span>
                     </div>
@@ -596,10 +596,10 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                   </div>
                 </div>
                 
-                <div className="flex flex-col items-end gap-3">
-                  <div className="text-right">
+                <div className="flex flex-col md:flex-row lg:flex-col md:items-center lg:items-end gap-3">
+                  <div className="text-left md:text-right">
                     <div className="text-sm font-bold text-slate-900">{task.currentEpisodes} / {task.totalEpisodes > 0 ? task.totalEpisodes : '?'} 集</div>
-                    <div className="w-36 h-2 bg-slate-100 rounded-full mt-2 overflow-hidden">
+                    <div className="w-full md:w-36 h-2 bg-slate-100 rounded-full mt-2 overflow-hidden">
                       <motion.div 
                         initial={{ width: 0 }}
                         animate={{ width: `${progress}%` }}
@@ -610,7 +610,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                       <div className="mt-2 text-[11px] font-medium text-red-500">整理异常</div>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 self-end md:self-auto">
                     <button 
                       onClick={() => handleExecuteTask(task.id)}
                       className="p-2 hover:bg-slate-100 rounded-full text-slate-500 hover:text-[#0b57d0] transition-colors"

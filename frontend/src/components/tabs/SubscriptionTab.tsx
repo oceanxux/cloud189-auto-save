@@ -355,7 +355,10 @@ const SubscriptionTab: React.FC<SubscriptionTabProps> = ({ onTransfer }) => {
         shareLink: resource.shareLink,
         accessCode: resource.accessCode || '',
         taskName: entry?.name || resource.title,
-        shareFolderId: entry?.canSave ? entry.id : null
+        shareFolderId: entry?.canSave ? entry.id : null,
+        shareFolderName: entry?.canSave ? entry.name : '',
+        enableOrganizer: true,
+        executeNow: true
       });
       setIsBrowserOpen(false);
       setIsResModalOpen(false);

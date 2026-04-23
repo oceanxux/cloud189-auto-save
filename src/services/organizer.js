@@ -3,6 +3,7 @@ const ConfigService = require('./ConfigService');
 const { Cloud189Service } = require('./cloud189');
 const { StrmService } = require('./strm');
 const { TMDBService } = require('./tmdb');
+const AIService = require('./ai');
 const { logTaskEvent } = require('../utils/logUtils');
 
 class OrganizerService {
@@ -133,10 +134,10 @@ class OrganizerService {
 
         if (String(originalFolderId) !== String(resourceFolderId) || originalFolderName !== resourceFolderPath) {
             taskUpdates.realFolderId = String(resourceFolderId);
-            taskUpdates.realRootFolderId = String(resourceFolderId);
+            taskUpdates.realRootFolderId = String(categoryFolderId);
             taskUpdates.realFolderName = resourceFolderPath;
             task.realFolderId = String(resourceFolderId);
-            task.realRootFolderId = String(resourceFolderId);
+            task.realRootFolderId = String(categoryFolderId);
             task.realFolderName = resourceFolderPath;
 
             if (ConfigService.getConfigValue('strm.enable') && originalFolderName && originalFolderName !== resourceFolderPath) {
@@ -189,8 +190,11 @@ class OrganizerService {
     }
 
     async _resolveResourceInfo(task, allFiles, tmdbInfo = null) {
-        const aiEnabled = ConfigService.getConfigValue('openai.enable');
-        if (aiEnabled) {
+        const fallbackResourceInfo = this._buildFallbackResourceInfo(task, allFiles, tmdbInfo);
+        const aiMode = this._getAiMode();
+
+        if (aiMode === 'advanced') {
+            logTaskEvent(`整理器启用 AI 高级模式，开始分析资源信息`);
             try {
                 const analyzed = await this.taskService._analyzeResourceInfo(
                     task.resourceName,
@@ -199,11 +203,25 @@ class OrganizerService {
                 );
                 return this._normalizeResourceInfo(analyzed, task, tmdbInfo, allFiles);
             } catch (error) {
-                logTaskEvent(`整理器 AI 解析失败，已切换到 TMDB/文件名回退: ${error.message}`);
+                logTaskEvent(`整理器 AI 解析失败，已切换到 TMDB 顺序编号回退: ${error.message}`);
             }
         }
 
-        return this._buildFallbackResourceInfo(task, allFiles, tmdbInfo);
+        if (aiMode === 'fallback' && this._shouldUseAiFallback(task, allFiles, tmdbInfo, fallbackResourceInfo)) {
+            logTaskEvent(`整理器 TMDB 信息不足，尝试使用 AI 兜底`);
+            try {
+                const analyzed = await this.taskService._analyzeResourceInfo(
+                    task.resourceName,
+                    allFiles.map(file => ({ id: file.id, name: file.name })),
+                    'file'
+                );
+                return this._normalizeResourceInfo(analyzed, task, tmdbInfo, allFiles);
+            } catch (error) {
+                logTaskEvent(`整理器 AI 兜底失败，保留 TMDB 顺序编号结果: ${error.message}`);
+            }
+        }
+
+        return fallbackResourceInfo;
     }
 
     async markError(taskId, error) {
@@ -323,82 +341,17 @@ class OrganizerService {
 
         let fallbackEpisodeNumber = 1;
         return sortedFiles.map(file => {
-            const parsed = this._extractSeasonEpisode(file);
-            const season = parsed.season || '01';
             const episode = mediaType === 'movie'
                 ? '01'
-                : (parsed.episode || String(fallbackEpisodeNumber++).padStart(2, '0'));
+                : String(fallbackEpisodeNumber++).padStart(2, '0');
             return {
                 id: String(file.id),
                 name: preferredTitle,
-                season,
+                season: '01',
                 episode,
                 extension: path.extname(file.name) || ''
             };
         });
-    }
-
-    _extractSeasonEpisode(file) {
-        const candidates = [
-            String(file?.name || ''),
-            String(file?.relativePath || ''),
-            String(file?.relativeDir || '')
-        ].filter(Boolean);
-
-        let season = '';
-        let episode = '';
-
-        for (const candidate of candidates) {
-            let matched = candidate.match(/S(\d{1,2})E(\d{1,4})/i);
-            if (matched) {
-                return {
-                    season: String(parseInt(matched[1], 10)).padStart(2, '0'),
-                    episode: this._normalizeEpisodeNumber(matched[2])
-                };
-            }
-
-            matched = candidate.match(/(\d{1,2})x(\d{1,4})/i);
-            if (matched) {
-                return {
-                    season: String(parseInt(matched[1], 10)).padStart(2, '0'),
-                    episode: this._normalizeEpisodeNumber(matched[2])
-                };
-            }
-
-            if (!season) {
-                matched = candidate.match(/(?:Season|S|第)\s*0?(\d{1,2})\s*(?:季)?/i);
-                if (matched) {
-                    season = String(parseInt(matched[1], 10)).padStart(2, '0');
-                }
-            }
-
-            if (!episode) {
-                matched = candidate.match(/第\s*([0-9]{1,4})\s*[集话話]/i);
-                if (matched) {
-                    episode = this._normalizeEpisodeNumber(matched[1]);
-                }
-            }
-
-            if (!episode) {
-                matched = candidate.match(/(?:EP?|Episode)\s*0?(\d{1,4})/i);
-                if (matched) {
-                    episode = this._normalizeEpisodeNumber(matched[1]);
-                }
-            }
-        }
-
-        return {
-            season: season || '01',
-            episode
-        };
-    }
-
-    _normalizeEpisodeNumber(value = '') {
-        const normalized = String(parseInt(String(value || '').trim(), 10) || 0);
-        if (!normalized || normalized === '0') {
-            return '';
-        }
-        return normalized.length >= 3 ? normalized : normalized.padStart(2, '0');
     }
 
     _resolveTotalEpisodes(tmdbInfo = null) {
@@ -656,6 +609,41 @@ class OrganizerService {
             id: String(task.targetFolderId || '').trim(),
             path: this._resolveBaseFolderPath(task)
         };
+    }
+
+    _getAiMode() {
+        if (!AIService.isEnabled()) {
+            return 'disabled';
+        }
+        const mode = String(ConfigService.getConfigValue('openai.mode', 'fallback') || 'fallback').trim().toLowerCase();
+        return ['advanced', 'fallback'].includes(mode) ? mode : 'fallback';
+    }
+
+    _shouldUseAiFallback(task, allFiles, tmdbInfo, fallbackResourceInfo) {
+        if (!allFiles.length) {
+            return false;
+        }
+
+        if (!tmdbInfo?.id) {
+            return true;
+        }
+
+        const episodes = Array.isArray(fallbackResourceInfo?.episode) ? fallbackResourceInfo.episode : [];
+        if (episodes.length !== allFiles.length) {
+            return true;
+        }
+
+        const hasSuspiciousEpisode = episodes.some(item => {
+            const episode = String(item?.episode || '').trim();
+            return !episode || episode === '00';
+        });
+        if (hasSuspiciousEpisode) {
+            return true;
+        }
+
+        const normalizedTaskTitle = this._sanitizePathSegment(this._sanitizeTitle(task.resourceName) || task.resourceName || '');
+        const normalizedResolvedTitle = this._sanitizePathSegment(fallbackResourceInfo?.name || '');
+        return Boolean(normalizedTaskTitle && normalizedResolvedTitle && normalizedTaskTitle !== normalizedResolvedTitle && !tmdbInfo?.title);
     }
 
     _resolveBaseFolderPath(task) {

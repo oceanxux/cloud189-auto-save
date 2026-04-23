@@ -147,6 +147,7 @@ class TaskService {
         const result = await cloud189.listShareDir(shareInfo.shareId, shareInfo.fileId, shareInfo.shareMode, taskDto.accessCode);
         if (!result?.fileListAO) return;
         const { fileList: rootFiles = [], folderList: subFolders = [] } = result.fileListAO;
+        const selectedSubFolders = subFolders.filter(folder => this.checkFolderInList(taskDto, folder.id));
         // 处理根目录文件 如果用户选择了根目录, 则生成根目录任务
         if (rootFiles.length > 0 && !rootFolder?.oldFolder) {
             const enableOnlySaveMedia = ConfigService.getConfigValue('task.enableOnlySaveMedia');
@@ -191,10 +192,13 @@ class TaskService {
                     logTaskEvent('子文件夹 AI 分析失败，使用原始文件名: ' + error.message);
                 }
             }
+            const shouldReuseRootFolder = selectedSubFolders.length === 1
+                && !this.checkFolderInList(taskDto, '-1')
+                && String(rootFolder.name || '').trim() === String(selectedSubFolders[0]?.name || '').trim();
+
              // 处理子文件夹
             for (const folder of subFolders) {
-                // 检查用户是否选择了该文件夹
-                if (!this.checkFolderInList(taskDto, folder.id)) {
+                if (!selectedSubFolders.some(item => item.id === folder.id)) {
                     continue;
                 }
                 const subFolderContent = await cloud189.listShareDir(shareInfo.shareId, folder.id, shareInfo.shareMode, taskDto.accessCode);
@@ -204,11 +208,17 @@ class TaskService {
                     continue; // 跳到下一个子文件夹
                 }
                 let realFolder;
-                // 检查目标文件夹是否存在
-                await this.checkFolderExists(cloud189, rootFolder.id, folder.fileName, taskDto.overwriteFolder);
-                realFolder = await cloud189.createFolder(folder.name, rootFolder.id);
-                if (!realFolder?.id) throw new Error('创建目录失败');
-                realFolder.name = path.join(rootFolder.name, realFolder.name);
+                if (shouldReuseRootFolder) {
+                    realFolder = {
+                        ...rootFolder,
+                        name: rootFolder.name
+                    };
+                } else {
+                    await this.checkFolderExists(cloud189, rootFolder.id, folder.fileName, taskDto.overwriteFolder);
+                    realFolder = await cloud189.createFolder(folder.name, rootFolder.id);
+                    if (!realFolder?.id) throw new Error('创建目录失败');
+                    realFolder.name = path.join(rootFolder.name, realFolder.name);
+                }
                 const subTask = this.taskRepo.create(
                     this._createTaskConfig(
                         taskDto,
@@ -1280,8 +1290,7 @@ class TaskService {
             await this._processRegexRename(cloud189, task, files, message, newFiles);
         } else {
             const aiMode = this._getAiMode();
-            const localResourceInfo = this._buildLocalRenameResourceInfo(task, files);
-            const localRenamableCount = this._countRenamableFiles(files, localResourceInfo);
+            const fallbackResourceInfo = this._buildLocalRenameResourceInfo(task, files);
 
             if (aiMode === 'advanced') {
                 logTaskEvent(` ${task.resourceName} 开始使用 AI 高级重命名`);
@@ -1293,14 +1302,14 @@ class TaskService {
                     );
                     await this._processRename(cloud189, task, files, resourceInfo, message, newFiles);
                 } catch (error) {
-                    logTaskEvent(`AI 高级重命名失败，已回退本地解析: ${error.message}`);
-                    await this._processRename(cloud189, task, files, localResourceInfo, message, newFiles);
+                    logTaskEvent(`AI 高级重命名失败，已回退 TMDB 顺序编号: ${error.message}`);
+                    await this._processRename(cloud189, task, files, fallbackResourceInfo, message, newFiles);
                 }
             } else {
-                logTaskEvent(` ${task.resourceName} 开始使用本地规则重命名`);
-                await this._processRename(cloud189, task, files, localResourceInfo, message, newFiles);
-                if (aiMode === 'fallback' && localRenamableCount === 0) {
-                    logTaskEvent(`本地规则未识别到可重命名文件，尝试使用 AI 兜底`);
+                logTaskEvent(` ${task.resourceName} 开始使用 TMDB 顺序编号重命名`);
+                await this._processRename(cloud189, task, files, fallbackResourceInfo, message, newFiles);
+                if (aiMode === 'fallback') {
+                    logTaskEvent(`TMDB 顺序编号仅作基础回退，尝试使用 AI 兜底`);
                     try {
                         const aiResourceInfo = await this._analyzeResourceInfo(
                             task.resourceName,
@@ -1311,10 +1320,10 @@ class TaskService {
                         newFiles = [];
                         await this._processRename(cloud189, task, files, aiResourceInfo, message, newFiles);
                     } catch (error) {
-                        logTaskEvent(`AI 兜底重命名失败，保留本地规则结果: ${error.message}`);
+                        logTaskEvent(`AI 兜底重命名失败，保留 TMDB 顺序编号结果: ${error.message}`);
                         message = [];
                         newFiles = [];
-                        await this._processRename(cloud189, task, files, localResourceInfo, message, newFiles);
+                        await this._processRename(cloud189, task, files, fallbackResourceInfo, message, newFiles);
                     }
                 }
             }
@@ -1368,46 +1377,23 @@ class TaskService {
         return this._sanitizeFileName(newName);
     }
 
-    _countRenamableFiles(files, resourceInfo) {
-        const aiNames = Array.isArray(resourceInfo?.episode) ? resourceInfo.episode : [];
-        const template = resourceInfo?.type === 'movie'
-            ? ConfigService.getConfigValue('openai.rename.movieTemplate') || '{name} ({year}){ext}'
-            : ConfigService.getConfigValue('openai.rename.template') || '{name} - {se}{ext}';
-        let count = 0;
-        for (const file of files) {
-            const aiFile = aiNames.find(item => String(item.id) === String(file.id));
-            if (!aiFile) {
-                continue;
-            }
-            const nextName = this._generateFileName(file, aiFile, resourceInfo, template);
-            if (nextName && nextName !== file.name) {
-                count++;
-            }
-        }
-        return count;
-    }
-
     _buildLocalRenameResourceInfo(task, files) {
         const sortedFiles = [...files].sort((left, right) =>
             String(left.name || '').localeCompare(String(right.name || ''), 'zh-CN', { numeric: true, sensitivity: 'base' })
         );
         const title = this._sanitizeMediaTitle(task.resourceName || '');
         const year = this._extractYear(task.resourceName || '');
-        const parsedEpisodes = sortedFiles.map((file, index) => {
-            const parsed = this._extractSeasonEpisodeFromFileName(file.name);
-            return {
-                id: String(file.id),
-                name: title,
-                season: parsed.season || '01',
-                episode: parsed.episode || String(index + 1).padStart(2, '0'),
-                extension: path.extname(file.name) || ''
-            };
-        });
-        const hasEpisodeHints = parsedEpisodes.some(item => item.episode && item.episode !== '01');
+        const parsedEpisodes = sortedFiles.map((file, index) => ({
+            id: String(file.id),
+            name: title,
+            season: '01',
+            episode: String(index + 1).padStart(2, '0'),
+            extension: path.extname(file.name) || ''
+        }));
         return {
             name: title,
             year,
-            type: sortedFiles.length > 1 || hasEpisodeHints ? 'tv' : 'movie',
+            type: sortedFiles.length > 1 ? 'tv' : 'movie',
             season: '01',
             episode: parsedEpisodes
         };
@@ -1424,50 +1410,6 @@ class TaskService {
     _extractYear(value = '') {
         const matched = String(value || '').match(/(19|20)\d{2}/);
         return matched ? matched[0] : '';
-    }
-
-    _extractSeasonEpisodeFromFileName(fileName = '') {
-        const target = String(fileName || '');
-        let matched = target.match(/S(\d{1,2})E(\d{1,4})/i);
-        if (matched) {
-            return {
-                season: String(parseInt(matched[1], 10)).padStart(2, '0'),
-                episode: this._normalizeEpisodeNumber(matched[2])
-            };
-        }
-        matched = target.match(/(\d{1,2})x(\d{1,4})/i);
-        if (matched) {
-            return {
-                season: String(parseInt(matched[1], 10)).padStart(2, '0'),
-                episode: this._normalizeEpisodeNumber(matched[2])
-            };
-        }
-        matched = target.match(/第\s*([0-9]{1,4})\s*[集话話]/i);
-        if (matched) {
-            return {
-                season: '01',
-                episode: this._normalizeEpisodeNumber(matched[1])
-            };
-        }
-        matched = target.match(/(?:EP?|Episode)\s*0?(\d{1,4})/i);
-        if (matched) {
-            return {
-                season: '01',
-                episode: this._normalizeEpisodeNumber(matched[1])
-            };
-        }
-        return {
-            season: '01',
-            episode: ''
-        };
-    }
-
-    _normalizeEpisodeNumber(value = '') {
-        const normalized = String(parseInt(String(value || '').trim(), 10) || 0);
-        if (!normalized || normalized === '0') {
-            return '';
-        }
-        return normalized.length >= 3 ? normalized : normalized.padStart(2, '0');
     }
 
     buildOrganizerDirectoryName(aiFile, resourceInfo) {

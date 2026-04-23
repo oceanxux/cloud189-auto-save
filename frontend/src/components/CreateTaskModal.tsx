@@ -48,6 +48,7 @@ interface TaskInitialData {
   enableTaskScraper?: boolean;
   enableLazyStrm?: boolean;
   enableOrganizer?: boolean;
+  executeNow?: boolean;
   status?: 'pending' | 'processing' | 'completed' | 'failed';
 }
 
@@ -163,9 +164,7 @@ const createInitialFormData = (initialData?: TaskInitialData | null): TaskFormDa
   const savedTarget = readLastTargetFolder();
   const baseData: TaskFormData = {
     ...EMPTY_FORM_DATA,
-    ...(savedTarget || {}),
-    organizerTargetFolderId: savedTarget?.targetFolderId || '',
-    organizerTargetFolderName: savedTarget?.targetFolder || ''
+    ...(savedTarget || {})
   };
 
   if (!initialData) {
@@ -182,8 +181,8 @@ const createInitialFormData = (initialData?: TaskInitialData | null): TaskFormDa
     currentEpisodes: initialData.currentEpisodes !== undefined && initialData.currentEpisodes !== null ? String(initialData.currentEpisodes) : '0',
     targetFolderId: initialData.targetFolderId || baseData.targetFolderId,
     targetFolder: initialData.targetFolder || baseData.targetFolder,
-    organizerTargetFolderId: initialData.organizerTargetFolderId || initialData.targetFolderId || baseData.organizerTargetFolderId || baseData.targetFolderId,
-    organizerTargetFolderName: initialData.organizerTargetFolderName || initialData.targetFolder || baseData.organizerTargetFolderName || baseData.targetFolder,
+    organizerTargetFolderId: initialData.organizerTargetFolderId || initialData.targetFolderId || '',
+    organizerTargetFolderName: initialData.organizerTargetFolderName || initialData.targetFolder || '',
     shareFolderId: initialData.shareFolderId || '',
     shareFolderName: initialData.shareFolderName || '',
     taskGroup: initialData.taskGroup || '',
@@ -319,8 +318,8 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
         }
         const nextTargetFolderId = prev.targetFolderId || autoCreate.targetFolderId || '';
         const nextTargetFolder = prev.targetFolder || autoCreate.targetFolder || '';
-        const nextOrganizerTargetFolderId = autoCreate.organizerTargetFolderId || prev.organizerTargetFolderId || nextTargetFolderId;
-        const nextOrganizerTargetFolderName = autoCreate.organizerTargetFolderName || prev.organizerTargetFolderName || nextTargetFolder;
+        const nextOrganizerTargetFolderId = prev.organizerTargetFolderId || autoCreate.organizerTargetFolderId || nextTargetFolderId;
+        const nextOrganizerTargetFolderName = prev.organizerTargetFolderName || autoCreate.organizerTargetFolderName || nextTargetFolder;
         return {
           ...prev,
           accountId: prev.accountId || String(autoCreate.accountId || ''),
@@ -518,6 +517,7 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
       } else {
         body = {
           ...body,
+          executeNow: Boolean(initialData?.executeNow),
           selectedFolders
         };
       }

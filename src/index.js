@@ -720,8 +720,16 @@ AppDataSource.initialize().then(async () => {
 
     app.post('/api/tasks', async (req, res) => {
         try {
-            const task = await taskService.createTask(req.body);
-            res.json({ success: true, data: task });
+            const tasks = await taskService.createTask(req.body);
+            if (req.body?.executeNow) {
+                for (const createdTask of tasks || []) {
+                    const taskWithAccount = await taskService.getTaskById(createdTask.id);
+                    if (taskWithAccount) {
+                        await taskService.processTask(taskWithAccount);
+                    }
+                }
+            }
+            res.json({ success: true, data: tasks });
         } catch (error) {
             console.log(error)
             res.json({ success: false, error: error.message });

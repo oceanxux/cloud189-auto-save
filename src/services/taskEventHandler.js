@@ -105,8 +105,10 @@ class TaskEventHandler {
                         const taskUpdates = {
                             tmdbContent: JSON.stringify(mediaDetails)
                         };
+                        task.tmdbContent = taskUpdates.tmdbContent;
                         if (task.tmdbId != mediaDetails.tmdbId) {
                             taskUpdates.tmdbId = mediaDetails.tmdbId;
+                            task.tmdbId = mediaDetails.tmdbId;
                         }
                         const resolvedTotalEpisodes = Number(mediaDetails?.totalEpisodes || 0);
                         if (resolvedTotalEpisodes > 0 && Number(task.totalEpisodes || 0) !== resolvedTotalEpisodes) {

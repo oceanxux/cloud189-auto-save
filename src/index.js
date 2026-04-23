@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { AppDataSource } = require('./database');
-const { Account, Task, CommonFolder, Subscription, SubscriptionResource, StrmConfig, TaskProcessedFile } = require('./entities');
+const { Account, Task, CommonFolder, Subscription, SubscriptionResource, StrmConfig, TaskProcessedFile, WorkflowRun } = require('./entities');
 const { TaskService } = require('./services/task');
 const { Cloud189Service } = require('./services/cloud189');
 const { MessageUtil } = require('./services/message');
@@ -30,6 +30,8 @@ const { StreamProxyService } = require('./services/streamProxy');
 const { LazyShareStrmService } = require('./services/lazyShareStrm');
 const { OrganizerService } = require('./services/organizer');
 const { AutoSeriesService } = require('./services/autoSeries');
+const { WorkflowRunner } = require('./services/workflow/WorkflowRunner');
+const { createWorkflowExecutors } = require('./services/workflow/executors');
 
 const appPort = Number(process.env.PORT || 3000);
 let embyStandaloneProxyServer = null;
@@ -465,6 +467,7 @@ AppDataSource.initialize().then(async () => {
     const subscriptionResourceRepo = AppDataSource.getRepository(SubscriptionResource);
     const strmConfigRepo = AppDataSource.getRepository(StrmConfig);
     const taskProcessedFileRepo = AppDataSource.getRepository(TaskProcessedFile);
+    const workflowRunRepo = AppDataSource.getRepository(WorkflowRun);
     const taskService = new TaskService(taskRepo, accountRepo, taskProcessedFileRepo);
     const organizerService = new OrganizerService(taskService, taskRepo);
     const subscriptionService = new SubscriptionService(subscriptionRepo, subscriptionResourceRepo, accountRepo);
@@ -480,6 +483,56 @@ AppDataSource.initialize().then(async () => {
     const messageUtil = new MessageUtil();
     // 机器人管理
     const botManager = TelegramBotManager.getInstance();
+    const workflowExecutors = createWorkflowExecutors({
+        accountRepo,
+        taskRepo,
+        taskService,
+        organizerService
+    });
+    const workflowRunner = new WorkflowRunner(workflowRunRepo, workflowExecutors, {
+        sendConfirmCard: async (run, preview) => {
+            if (run?.source !== 'bot' || !run?.chatId) {
+                return;
+            }
+            const bot = botManager.getBot()?.bot;
+            if (!bot) {
+                return;
+            }
+            await bot.sendMessage(run.chatId, preview || '工作流等待确认，请回复 Y 执行，或 N 取消。');
+        },
+        sendResult: async (run) => {
+            if (run?.source !== 'bot' || !run?.chatId) {
+                return;
+            }
+            const bot = botManager.getBot()?.bot;
+            if (!bot) {
+                return;
+            }
+            const resultText = run?.context?.resultSummary || '工作流执行完成。';
+            await bot.sendMessage(run.chatId, resultText);
+        },
+        sendError: async (run, error) => {
+            if (run?.source !== 'bot' || !run?.chatId) {
+                return;
+            }
+            const bot = botManager.getBot()?.bot;
+            if (!bot) {
+                return;
+            }
+            await bot.sendMessage(run.chatId, `工作流执行失败: ${error.message}`);
+        },
+        sendCancelled: async (run) => {
+            if (run?.source !== 'bot' || !run?.chatId) {
+                return;
+            }
+            const bot = botManager.getBot()?.bot;
+            if (!bot) {
+                return;
+            }
+            await bot.sendMessage(run.chatId, '工作流已取消。');
+        }
+    });
+    botManager.setWorkflowRunner(workflowRunner);
     // 初始化机器人
     await botManager.handleBotStatus(
         ConfigService.getConfigValue('telegram.botToken'),
@@ -2504,9 +2557,39 @@ target.type 只能是：
         return results.join('\n\n');
     };
 
+    app.post('/api/workflow/confirm', async (req, res) => {
+        try {
+            const { runId, key, approved } = req.body || {};
+            if (!runId || !key) {
+                throw new Error('runId 和 key 不能为空');
+            }
+            const run = await workflowRunner.confirm(String(runId), String(key), !!approved);
+            if (!run) {
+                throw new Error('工作流不存在或确认已失效');
+            }
+            res.json({ success: true, data: run });
+        } catch (error) {
+            res.status(400).json({ success: false, error: error.message });
+        }
+    });
+
     app.post('/api/chat', async (req, res) => {
         const { message, executeAction, action, history } = req.body || {};
         try {
+            if (executeAction && action?.mode === 'workflow_confirm' && action?.runId && action?.key) {
+                const run = await workflowRunner.confirm(String(action.runId), String(action.key), true);
+                if (!run) {
+                    throw new Error('工作流不存在或确认已失效');
+                }
+                res.json({
+                    success: true,
+                    data: {
+                        reply: run.context?.resultSummary || run.context?.notifySummary || '工作流已执行完成。'
+                    }
+                });
+                return;
+            }
+
             if (executeAction && Array.isArray(action?.actions) && action.actions.length > 0) {
                 const reply = await executeChatPlan(action.actions);
                 res.json({ success: true, data: { reply } });
@@ -2584,6 +2667,40 @@ target.type 只能是：
             }
 
             if (parsedAction?.mode === 'action' && parsedAction?.action) {
+                if (parsedAction.action === 'organize_folder_workflow') {
+                    const runId = await workflowRunner.start('organize_dir', {
+                        folderName: parsedAction.target?.value || '',
+                        mediaType: parsedAction.target?.mediaType || 'all',
+                        countOnly: Boolean(parsedAction.target?.countOnly)
+                    }, {
+                        source: 'web',
+                        chatId: req.sessionID || req.ip || 'web'
+                    });
+                    const run = await workflowRunner.getRun(runId);
+                    if (run?.status === 'awaiting_confirm') {
+                        res.json({
+                            success: true,
+                            data: {
+                                reply: run.context?.preview || '工作流已生成预览，确认后继续执行。',
+                                action: {
+                                    action: 'workflow_confirm',
+                                    mode: 'workflow_confirm',
+                                    runId,
+                                    key: run.confirmKey
+                                }
+                            }
+                        });
+                        return;
+                    }
+                    res.json({
+                        success: true,
+                        data: {
+                            reply: run?.context?.resultSummary || '工作流已执行完成。'
+                        }
+                    });
+                    return;
+                }
+
                 if (!parsedAction.needsConfirmation) {
                     const reply = await executeChatAction(parsedAction.action, parsedAction.target || {});
                     res.json({ success: true, data: { reply } });

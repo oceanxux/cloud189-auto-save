@@ -92,6 +92,17 @@ export default function App() {
   ];
 
   const activeTabLabel = tabs.find(t => t.id === activeTab)?.label || '控制台';
+  const tabDescriptions: Record<TabType, string> = {
+    account: '统一管理账号、容量与目录映射',
+    fileManager: '浏览文件、批量重命名与移动',
+    task: '追更任务、整理状态与执行记录',
+    autoSeries: '自动追剧规则与订阅命中',
+    organizer: '整理器任务与归档状态',
+    subscription: '订阅资源、转存与后续执行',
+    strmConfig: 'STRM 配置、输出路径与代理',
+    media: 'TMDB、Alist、CloudSaver 与 AI 媒体链路',
+    settings: '系统、推送、Bot 与运行参数'
+  };
 
   const handleOpenCreateTask = (initialData?: any) => {
     setCreateTaskInitialData(initialData || null);
@@ -153,7 +164,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[var(--bg-surface)] overflow-hidden font-sans transition-colors duration-200">
+    <div className="flex h-screen overflow-hidden font-sans transition-colors duration-200">
       
       {/* Mobile Navigation Drawer Overlay */}
       <AnimatePresence>
@@ -171,11 +182,14 @@ export default function App() {
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
               transition={{ type: 'spring', bounce: 0, duration: 0.4 }}
-              className="fixed inset-y-0 left-0 w-72 bg-[var(--bg-surface)] flex flex-col z-50 md:hidden shadow-2xl border-r border-[var(--border-color)]"
+              className="fixed inset-y-0 left-0 w-72 flex flex-col z-50 md:hidden border-r border-[var(--border-color)] bg-[var(--bg-elevated)] backdrop-blur-xl shadow-[var(--app-shadow)]"
             >
-              <div className="px-6 py-8">
-                <h1 className="text-2xl font-medium text-[var(--text-primary)]">天翼自动转存</h1>
-                <p className="text-sm text-[var(--text-secondary)] mt-1">Material Design 3</p>
+              <div className="px-6 py-7">
+                <div className="rounded-[28px] border border-[var(--border-color)] bg-[linear-gradient(135deg,rgba(20,89,199,0.12),rgba(255,255,255,0.72))] px-5 py-5 shadow-sm">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--text-secondary)]">Cloud Workflow</p>
+                  <h1 className="mt-2 text-[28px] font-extrabold tracking-tight text-[var(--text-primary)]">天翼自动转存</h1>
+                  <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">任务追更、媒体整理与系统动作统一控制台</p>
+                </div>
               </div>
               <div className="flex-1 px-3 space-y-1 overflow-y-auto custom-scrollbar">
                 {tabs.map(tab => (
@@ -185,11 +199,12 @@ export default function App() {
                       setActiveTab(tab.id);
                       setIsMobileMenuOpen(false);
                     }}
-                    className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-full text-sm font-medium transition-colors ${
+                    className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-sm font-semibold transition-all ${
                       activeTab === tab.id 
-                        ? 'bg-[var(--nav-active-bg)] text-[var(--nav-active-text)]' 
-                        : 'text-[var(--text-primary)] hover:bg-slate-200/50 dark:hover:bg-slate-800/50'
+                        ? 'text-[var(--nav-active-text)] shadow-sm'
+                        : 'text-[var(--text-primary)] hover:bg-white/60 dark:hover:bg-slate-800/50'
                     }`}
+                    style={activeTab === tab.id ? { background: 'var(--nav-active-bg)' } : undefined}
                   >
                     <tab.icon size={22} className={activeTab === tab.id ? 'text-[var(--nav-active-text)]' : 'text-[var(--text-secondary)]'} />
                     {tab.label}
@@ -211,21 +226,25 @@ export default function App() {
       </AnimatePresence>
 
       {/* Desktop Navigation Drawer */}
-      <nav className="w-72 bg-[var(--bg-surface)] flex flex-col hidden md:flex z-10 border-r border-[var(--border-color)]">
-        <div className="px-8 py-8">
-          <h1 className="text-2xl font-medium text-[var(--text-primary)]">天翼自动转存</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">Material Design 3</p>
+      <nav className="hidden w-72 flex-col border-r border-[var(--border-color)] bg-[var(--bg-elevated)] backdrop-blur-xl md:flex">
+        <div className="px-6 py-7">
+          <div className="rounded-[28px] border border-[var(--border-color)] bg-[linear-gradient(135deg,rgba(20,89,199,0.12),rgba(255,255,255,0.72))] px-5 py-5 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--text-secondary)]">Cloud Workflow</p>
+            <h1 className="mt-2 text-[28px] font-extrabold tracking-tight text-[var(--text-primary)]">天翼自动转存</h1>
+            <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">任务追更、媒体整理与系统动作统一控制台</p>
+          </div>
         </div>
         <div className="flex-1 px-3 space-y-1 overflow-y-auto pb-6 custom-scrollbar">
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-4 px-5 py-3.5 rounded-full text-sm font-medium transition-colors ${
+              className={`w-full flex items-center gap-4 px-5 py-3.5 rounded-2xl text-sm font-semibold transition-all ${
                 activeTab === tab.id 
-                  ? 'bg-[var(--nav-active-bg)] text-[var(--nav-active-text)]' 
-                  : 'text-[var(--text-primary)] hover:bg-slate-200/50 dark:hover:bg-slate-800/50'
+                  ? 'text-[var(--nav-active-text)] shadow-sm' 
+                  : 'text-[var(--text-primary)] hover:bg-white/60 dark:hover:bg-slate-800/50'
               }`}
+              style={activeTab === tab.id ? { background: 'var(--nav-active-bg)' } : undefined}
             >
               <tab.icon size={22} className={activeTab === tab.id ? 'text-[var(--nav-active-text)]' : 'text-[var(--text-secondary)]'} />
               {tab.label}
@@ -244,10 +263,10 @@ export default function App() {
       </nav>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 h-screen relative bg-[var(--bg-main)] rounded-tl-3xl shadow-sm border-l border-t border-[var(--border-color)] transition-colors duration-200">
+      <main className="relative m-3 flex h-[calc(100vh-1.5rem)] min-w-0 flex-1 flex-col overflow-hidden rounded-[32px] border border-[var(--border-color)] bg-[var(--bg-elevated)] shadow-[var(--app-shadow)] backdrop-blur-xl transition-colors duration-200">
         
         {/* Top App Bar */}
-        <header className="h-16 flex items-center justify-between px-4 md:px-8 bg-[var(--bg-main)]/80 backdrop-blur-md z-10 sticky top-0 rounded-tl-3xl transition-colors duration-200">
+        <header className="sticky top-0 z-10 flex min-h-[84px] items-center justify-between border-b border-[var(--border-color)] bg-[var(--bg-elevated)]/90 px-4 md:px-8 backdrop-blur-xl transition-colors duration-200">
           <div className="flex items-center gap-4">
             <button 
               onClick={() => setIsMobileMenuOpen(true)}
@@ -255,7 +274,10 @@ export default function App() {
             >
               <Menu size={24} />
             </button>
-            <h2 className="text-2xl font-normal text-[var(--text-primary)]">{activeTabLabel}</h2>
+            <div>
+              <h2 className="text-[30px] font-extrabold tracking-tight text-[var(--text-primary)]">{activeTabLabel}</h2>
+              <p className="mt-1 text-sm text-[var(--text-secondary)] hidden md:block">{tabDescriptions[activeTab]}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button 
@@ -286,10 +308,10 @@ export default function App() {
             <div className="relative ml-2" onClick={(e) => e.stopPropagation()}>
               <button
                 onClick={() => setIsUserMenuOpen(prev => !prev)}
-                className="flex items-center gap-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors p-1"
-                title="用户菜单"
-              >
-                <div className="w-9 h-9 rounded-full bg-[#0b57d0] text-white flex items-center justify-center font-medium text-sm cursor-pointer hover:shadow-md transition-shadow">
+              className="flex items-center gap-1 rounded-full border border-[var(--border-color)] bg-white/70 p-1 pr-2 transition-colors hover:bg-white dark:bg-slate-900/40 dark:hover:bg-slate-900/60"
+              title="用户菜单"
+            >
+                <div className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full bg-[var(--app-accent)] text-sm font-bold text-white transition-shadow hover:shadow-md">
                   U
                 </div>
                 <ChevronDown size={16} className="text-[var(--text-secondary)] hidden sm:block" />
@@ -301,7 +323,7 @@ export default function App() {
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -8, scale: 0.98 }}
                     transition={{ duration: 0.16, ease: 'easeOut' }}
-                    className="absolute right-0 top-14 w-52 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-surface)] shadow-xl p-2 z-20"
+                    className="absolute right-0 top-14 z-20 w-56 rounded-3xl border border-[var(--border-color)] bg-[var(--bg-elevated)] p-2 shadow-[var(--app-shadow)] backdrop-blur-xl"
                   >
                     <button
                       onClick={handleRestartContainer}
@@ -326,8 +348,8 @@ export default function App() {
         </header>
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-32 custom-scrollbar">
-          <div className="max-w-6xl mx-auto">
+        <div className="flex-1 overflow-y-auto px-4 pb-32 pt-5 md:px-8 custom-scrollbar">
+          <div className="mx-auto max-w-7xl">
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}

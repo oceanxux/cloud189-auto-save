@@ -53,6 +53,30 @@ class TaskService {
         throw new Error('TaskProcessedFile 仓库未初始化');
     }
 
+    _syncTaskCompletionState(task) {
+        if (!task?.id) {
+            return false;
+        }
+        const totalEpisodes = Number(task.totalEpisodes || 0);
+        const currentEpisodes = Number(task.currentEpisodes || 0);
+        if (totalEpisodes > 0 && currentEpisodes >= totalEpisodes && task.status !== 'completed') {
+            task.status = 'completed';
+            return true;
+        }
+        return false;
+    }
+
+    async refreshTaskCompletionState(task) {
+        if (!task?.id) {
+            return false;
+        }
+        const changed = this._syncTaskCompletionState(task);
+        if (changed) {
+            await this.taskRepo.update(task.id, { status: task.status });
+        }
+        return changed;
+    }
+
     _getAiMode() {
         if (!AIService.isEnabled()) {
             return 'disabled';
@@ -1068,29 +1092,31 @@ class TaskService {
 
         for (const task of taskList) {
             const stats = statsByTaskId.get(task.id);
-            if (!stats) {
-                continue;
-            }
-
-            const currentEpisodes = Number(task.currentEpisodes) || 0;
-            const nextEpisodes = Math.max(currentEpisodes, stats.recordCount);
             let changed = false;
 
-            if (nextEpisodes !== currentEpisodes) {
-                task.currentEpisodes = nextEpisodes;
-                changed = true;
+            if (stats) {
+                const currentEpisodes = Number(task.currentEpisodes) || 0;
+                const nextEpisodes = Math.max(currentEpisodes, stats.recordCount);
+
+                if (nextEpisodes !== currentEpisodes) {
+                    task.currentEpisodes = nextEpisodes;
+                    changed = true;
+                }
+
+                if (!task.lastFileUpdateTime && stats.lastUpdatedAt) {
+                    task.lastFileUpdateTime = stats.lastUpdatedAt;
+                    changed = true;
+                }
             }
 
-            if (!task.lastFileUpdateTime && stats.lastUpdatedAt) {
-                task.lastFileUpdateTime = stats.lastUpdatedAt;
-                changed = true;
-            }
+            changed = this._syncTaskCompletionState(task) || changed;
 
             if (changed) {
                 pendingUpdates.push({
                     id: task.id,
                     currentEpisodes: task.currentEpisodes,
-                    lastFileUpdateTime: task.lastFileUpdateTime
+                    lastFileUpdateTime: task.lastFileUpdateTime,
+                    status: task.status
                 });
             }
         }

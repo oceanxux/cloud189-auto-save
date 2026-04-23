@@ -22,6 +22,7 @@ class TaskEventHandler {
             await this._handleStrmGeneration(taskCompleteEventDto);
             await this._handleAlistCache(taskCompleteEventDto);
             await this._handleMediaScraping(taskCompleteEventDto);
+            await this._refreshCompletionState(taskCompleteEventDto);
             await this._handleEmbyNotification(taskCompleteEventDto);
             await this._handleCompletedTaskCleanup(taskCompleteEventDto);
         } catch (error) {
@@ -149,6 +150,19 @@ class TaskEventHandler {
         } catch (error) {
             console.error(error);
             logTaskEvent(`通知Emby失败: ${error.message}`);
+        }
+    }
+
+    async _refreshCompletionState(taskCompleteEventDto) {
+        try {
+            const { task, taskService } = taskCompleteEventDto;
+            const changed = await taskService.refreshTaskCompletionState(task);
+            if (changed) {
+                logTaskEvent(`${task.resourceName} 已达到总集数，状态更新为已完结`);
+            }
+        } catch (error) {
+            console.error(error);
+            logTaskEvent(`刷新任务完结状态失败: ${error.message}`);
         }
     }
 

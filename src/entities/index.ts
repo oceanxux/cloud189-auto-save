@@ -497,5 +497,51 @@ export class StrmConfig {
     updatedAt!: Date;
 }
 
+@Entity()
+export class WorkflowRun {
+    @Column('text', { primary: true })
+    id!: string;
 
-export default { Account, Task, CommonFolder, Subscription, SubscriptionResource, StrmConfig };
+    @Column('text')
+    type!: string;
+
+    @Column('text')
+    status!: string;
+
+    @Column('simple-json')
+    steps!: any[];
+
+    @Column('integer', { default: 0 })
+    current!: number;
+
+    @Column('simple-json', { nullable: true })
+    context!: Record<string, any>;
+
+    @Column('text', { nullable: true })
+    confirmKey!: string | null;
+
+    @Column('text', { nullable: true })
+    source!: string | null;
+
+    @Column('text', { nullable: true })
+    chatId!: string | null;
+
+    @CreateDateColumn({
+        transformer: {
+            from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+            to: (date: Date) => date
+        }
+    })
+    createdAt!: Date;
+
+    @UpdateDateColumn({
+        transformer: {
+            from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+            to: (date: Date) => date
+        }
+    })
+    updatedAt!: Date;
+}
+
+
+export default { Account, Task, CommonFolder, Subscription, SubscriptionResource, StrmConfig, WorkflowRun };

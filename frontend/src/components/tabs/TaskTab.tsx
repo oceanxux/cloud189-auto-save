@@ -46,8 +46,20 @@ interface Task {
 
 const isAutoRefreshTask = (task: Task) => String(task.taskGroup || '').includes('自动追剧') && !task.enableLazyStrm;
 const stripRootSuffix = (value?: string | null) => String(value || '').replace(/\(根\)$/u, '').trim();
+const isSeasonFolderLabel = (value?: string | null) => /^(season\s*\d+|s\d+|第?\d+季)$/iu.test(String(value || '').trim());
+const getVisualTaskStatus = (task: Task): Task['status'] => {
+  const totalEpisodes = Number(task.totalEpisodes || 0);
+  const currentEpisodes = Number(task.currentEpisodes || 0);
+  if (totalEpisodes > 0 && currentEpisodes >= totalEpisodes) {
+    return 'completed';
+  }
+  return task.status;
+};
 const getDisplayTaskName = (task: Task) => {
   const resourceName = stripRootSuffix(task.resourceName) || 'Unknown Resource';
+  if (task.enableOrganizer && isSeasonFolderLabel(task.shareFolderName)) {
+    return resourceName;
+  }
   return task.shareFolderName ? `${resourceName}/${task.shareFolderName}` : resourceName;
 };
 
@@ -537,6 +549,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
         {Array.isArray(tasks) && tasks.map(task => {
           if (!task) return null;
           const taskName = getDisplayTaskName(task);
+          const visualStatus = getVisualTaskStatus(task);
           const progress = (task.totalEpisodes && task.totalEpisodes > 0) ? (task.currentEpisodes / task.totalEpisodes) * 100 : 0;
           const isSelected = selectedTaskIds.includes(task.id);
 
@@ -545,7 +558,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
               key={task.id}
               className={`bg-white rounded-3xl border p-4 md:p-6 shadow-sm hover:shadow-md transition-all group relative ${
                 isSelected ? 'border-[#0b57d0] ring-1 ring-[#0b57d0]/20' : 'border-slate-200/60'
-              } ${task.status === 'completed' ? 'opacity-80' : ''}`}
+              } ${visualStatus === 'completed' ? 'opacity-80' : ''}`}
             >
               <div 
                 className="absolute top-0 left-0 w-8 h-8 cursor-pointer z-10"
@@ -558,16 +571,16 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                 </div>
               </div>
 
-              <div className={`absolute top-0 left-0 w-1.5 h-full ${getStatusColorClass(task.status)}`} />
+              <div className={`absolute top-0 left-0 w-1.5 h-full ${getStatusColorClass(visualStatus)}`} />
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pl-6">
                 <div className="flex items-start gap-3 md:gap-4 min-w-0">
-                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${getStatusBgClass(task.status)}`}>
-                    {getStatusIcon(task.status)}
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${getStatusBgClass(visualStatus)}`}>
+                    {getStatusIcon(visualStatus)}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2 md:gap-3">
                       <h3 className="font-bold text-slate-900 text-base md:text-lg break-all md:truncate md:max-w-[300px]" title={taskName}>{taskName}</h3>
-                      {getStatusBadge(task.status)}
+                      {getStatusBadge(visualStatus)}
                       {task.enableLazyStrm && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">懒STRM</span>}
                       {isAutoRefreshTask(task) && <span className="px-2 py-0.5 bg-sky-100 text-sky-700 rounded text-[10px] font-bold">自动换源</span>}
                     </div>
@@ -603,7 +616,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask }) => {
                       <motion.div 
                         initial={{ width: 0 }}
                         animate={{ width: `${progress}%` }}
-                        className={`h-full ${getStatusColorClass(task.status)} rounded-full`}
+                        className={`h-full ${getStatusColorClass(visualStatus)} rounded-full`}
                       />
                     </div>
                     {task.enableOrganizer && task.lastOrganizeError && (

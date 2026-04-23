@@ -15,10 +15,11 @@ const cloud189Utils = require('../utils/Cloud189Utils');
 const { LazyShareStrmService } = require('./lazyShareStrm');
 
 class TelegramBotService {
-    constructor(token, chatId, proxyDomain) {
+    constructor(token, chatId, proxyDomain, workflowRunner = null) {
         this.token = token;
         this.chatId = chatId;
         this.proxyDomain = proxyDomain || '';
+        this.workflowRunner = workflowRunner || null;
         this.accountRepo = AppDataSource.getRepository(Account);
         this.commonFolderRepo = AppDataSource.getRepository(CommonFolder);
         this.taskRepo = AppDataSource.getRepository(Task);
@@ -59,6 +60,7 @@ class TelegramBotService {
             selectedTitle: null,   // 最终确定的剧名
             plans: [],             // [{ fileId, oldName, newName }]
         };
+        this.aiSessionEnabled = false;
     }
 
     async start() {
@@ -108,6 +110,7 @@ class TelegramBotService {
             { command: 'fl', description: '常用目录列表' },
             { command: 'fs', description: '添加常用目录' },
             { command: 'rename', description: '批量剧集重命名' },
+            { command: 'ai', description: 'AI 工作流助手' },
             { command: 'cancel', description: '取消当前操作' }
         ]);
         // 从数据库中加载默认的账号
@@ -160,6 +163,7 @@ class TelegramBotService {
                 '/search_cs - 搜索CloudSaver资源\n' +
                 '/series 剧名 [年份] - 自动追剧(正常任务)\n' +
                 '/lazy_series 剧名 [年份] - 自动追剧(懒转存STRM)\n' +
+                '/ai 指令 - 通过 AI 工作流执行整理/查询\n' +
                 '/cancel - 取消当前操作\n\n' +
                 '📥 创建任务：\n' +
                 '直接发送天翼云盘分享链接即可创建任务\n' +
@@ -168,6 +172,9 @@ class TelegramBotService {
                 '1. /series 北上 2025\n' +
                 '2. /lazy_series 北上 2025\n' +
                 '3. 使用系统页里配置的默认账号与默认目录\n\n' +
+                '🤖 AI 工作流：\n' +
+                '/ai 帮我查询未刮削目录，然后按 TMDB 识别重命名并移动到默认整理根目录\n' +
+                '/ai 帮我整理未整理目录下的电视剧\n\n' +
                 '📝 任务操作：\n' +
                 '/execute_[ID] - 执行指定任务\n' +
                 '/execute_all - 执行所有任务\n' +
@@ -191,8 +198,31 @@ class TelegramBotService {
             if (!this._checkChatId(chatId)) {
                 return;
             }
+            if (this.workflowRunner && msg.text) {
+                const pendingRun = await this.workflowRunner.getPendingConfirm(chatId, 'bot');
+                if (pendingRun) {
+                    const normalizedReply = String(msg.text || '').trim().toLowerCase();
+                    if (['y', 'yes', '1'].includes(normalizedReply)) {
+                        await this.workflowRunner.confirm(pendingRun.id, pendingRun.confirmKey, true);
+                        return;
+                    }
+                    if (['n', 'no', '2'].includes(normalizedReply)) {
+                        await this.workflowRunner.confirm(pendingRun.id, pendingRun.confirmKey, false);
+                        return;
+                    }
+                    await this.bot.sendMessage(chatId, '当前有待确认工作流，请回复 Y 确认执行，或 N 取消。');
+                    return;
+                }
+            }
             // 忽略命令消息
             if (msg.text?.startsWith('/')) return;
+
+            if (this.aiSessionEnabled && msg.text?.trim()) {
+                const handled = await this._handleAiWorkflow(chatId, msg.text.trim());
+                if (handled) {
+                    return;
+                }
+            }
 
             // ── 批量重命名状态机 ──
             if (this.renameState.step === 'tmdb') {
@@ -449,6 +479,28 @@ class TelegramBotService {
             await this.handleAutoSeriesCommand(msg, match?.[1], 'lazy');
         });
 
+        this.bot.onText(/^\/ai(?:\s+(.+))?$/i, async (msg, match) => {
+            const chatId = msg.chat.id;
+            if (!this._checkChatId(chatId)) return;
+            if (!this._checkUserId(chatId)) return;
+            this.aiSessionEnabled = true;
+            const commandText = String(match?.[1] || '').trim();
+            if (!commandText) {
+                await this.bot.sendMessage(
+                    chatId,
+                    'AI 工作流已开启。\n直接发送自然语言指令即可，例如：\n' +
+                    '• 帮我查询未刮削目录，然后按 TMDB 识别重命名并移动到默认整理根目录\n' +
+                    '• 帮我整理未整理目录下的电视剧\n' +
+                    '输入 /cancel 可退出当前 AI 会话。'
+                );
+                return;
+            }
+            const handled = await this._handleAiWorkflow(chatId, commandText);
+            if (!handled) {
+                await this.bot.sendMessage(chatId, '当前 AI 指令暂不支持。请改用“查询未刮削/未整理 + 整理/移动到默认整理根目录”这类表达。');
+            }
+        });
+
         this.bot.onText(/\/cancel/, async (msg) => {
             const chatId = msg.chat.id;
             if (!this._checkChatId(chatId)) return
@@ -457,6 +509,7 @@ class TelegramBotService {
             this.currentAccessCode = null;
             this.isSearchMode = false;  // 退出搜索模式
             this._resetRenameState();  // 退出重命名模式
+            this.aiSessionEnabled = false;
             try {
                 if (this.lastButtonMessageId) {
                     await this.bot.deleteMessage(chatId, this.lastButtonMessageId);
@@ -1259,9 +1312,63 @@ class TelegramBotService {
         return String(value || '').replace(/\(根\)$/u, '').trim();
     }
 
+    _isSeasonFolderLabel(value) {
+        return /^(season\s*\d+|s\d+|第?\d+季)$/iu.test(String(value || '').trim());
+    }
+
     _getDisplayTaskName(task) {
         const resourceName = this._stripRootSuffix(task?.resourceName) || '未知';
+        if (task?.enableOrganizer && this._isSeasonFolderLabel(task?.shareFolderName)) {
+            return resourceName;
+        }
         return task?.shareFolderName ? `${resourceName}/${task.shareFolderName}` : resourceName;
+    }
+
+    async _handleAiWorkflow(chatId, text) {
+        if (!this.workflowRunner) {
+            await this.bot.sendMessage(chatId, '当前未启用 AI 工作流引擎。');
+            return true;
+        }
+
+        const normalized = String(text || '').trim();
+        if (!normalized) {
+            return false;
+        }
+
+        const wantsOrganize = /(整理|刮削|归档|重命名|移动)/u.test(normalized);
+        const targetFolderName = /未整理/u.test(normalized) ? '未整理' : (/未刮削/u.test(normalized) ? '未刮削' : '');
+        if (!wantsOrganize || !targetFolderName) {
+            return false;
+        }
+
+        const mediaType = /电视剧|剧集|动漫|综艺/u.test(normalized)
+            ? 'tv'
+            : (/电影/u.test(normalized) ? 'movie' : 'all');
+
+        const runId = await this.workflowRunner.start('organize_dir', {
+            folderName: targetFolderName,
+            mediaType
+        }, {
+            source: 'bot',
+            chatId: String(chatId)
+        });
+
+        const run = await this.workflowRunner.getRun(runId);
+        if (!run) {
+            await this.bot.sendMessage(chatId, 'AI 工作流启动失败。');
+            return true;
+        }
+
+        if (run.status === 'awaiting_confirm') {
+            return true;
+        }
+
+        if (['done', 'failed'].includes(String(run.status || ''))) {
+            return true;
+        }
+
+        await this.bot.sendMessage(chatId, '工作流已启动，请稍候。');
+        return true;
     }
 
     // 在类的底部添加新的辅助方法

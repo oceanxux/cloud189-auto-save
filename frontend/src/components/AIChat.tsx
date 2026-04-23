@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bot, Check, Send, Trash2, User } from 'lucide-react';
+import { Bot, Check, Send, Sparkles, Trash2, User, Workflow } from 'lucide-react';
 import Modal from './Modal';
 
 interface PendingAction {
-  mode?: 'action' | 'plan';
+  mode?: 'action' | 'plan' | 'workflow_confirm';
   action: string;
   target?: {
     type?: string;
@@ -12,6 +12,8 @@ interface PendingAction {
     countOnly?: boolean;
   };
   actions?: PendingAction[];
+  runId?: string;
+  key?: string;
 }
 
 interface Message {
@@ -29,12 +31,17 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: '你好，我现在可以直接调用程序动作。你可以试试：执行任务 123、帮我整理任务 123、查看失败任务、查询未刮削目录下还有哪些没归档的电影和电视剧、重启容器。'
+      content: '天翼云小助手已就绪 👋\n你现在是在工作流模式下和系统对话，我会先理解你的指令，再调动程序去查询、整理、通知或执行任务。'
     }
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const suggestions = [
+    '帮我查询未刮削目录，然后按 TMDB 识别重命名并移动到默认整理根目录',
+    '查看失败任务',
+    '执行任务 123'
+  ];
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -135,32 +142,63 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
       title="AI 助手"
       footer={null}
     >
-      <div className="flex flex-col h-[520px]">
+      <div className="flex h-[560px] flex-col">
+        <div className="mb-4 rounded-[24px] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(11,87,208,0.16),_transparent_42%),linear-gradient(180deg,#f8fbff_0%,#f4f7fb_100%)] p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-[#d3e3fd] bg-white/80 px-3 py-1 text-xs font-semibold text-[#0b57d0]">
+                <Sparkles size={14} />
+                Workflow Assistant
+              </div>
+              <h4 className="mt-3 text-lg font-semibold text-slate-900">自然语言触发程序动作</h4>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                直接下指令，程序会按工作流执行查询、整理、通知和系统操作。
+              </p>
+            </div>
+            <div className="hidden rounded-2xl border border-white/70 bg-white/70 p-3 text-[#0b57d0] shadow-sm md:flex">
+              <Workflow size={20} />
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {suggestions.map(item => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setInput(item)}
+                className="rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-[#0b57d0]/30 hover:bg-white hover:text-[#0b57d0]"
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto space-y-4 p-2 custom-scrollbar"
+          className="flex-1 space-y-4 overflow-y-auto rounded-[24px] border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-3 md:p-4 custom-scrollbar"
         >
           {messages.map((msg, i) => (
             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`flex gap-3 max-w-[88%] ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-[#0b57d0] text-white' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+              <div className={`flex max-w-[90%] gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                <div className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${msg.role === 'user' ? 'bg-[#0b57d0] text-white shadow-sm' : 'border border-slate-200 bg-white text-slate-700 shadow-sm'}`}>
                   {msg.role === 'user' ? <User size={16} /> : <Bot size={16} />}
                 </div>
                 <div className="space-y-3">
-                  <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                  <div className={`rounded-3xl px-4 py-3 text-sm leading-7 whitespace-pre-wrap shadow-sm ${
                     msg.role === 'user'
-                      ? 'bg-[#0b57d0] text-white rounded-tr-none'
-                      : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'
+                      ? 'rounded-tr-md bg-[#0b57d0] text-white'
+                      : 'rounded-tl-md border border-slate-200 bg-white text-slate-800'
                   }`}>
                     {msg.content}
                   </div>
                   {msg.role === 'assistant' && msg.action && (
-                    <div className="rounded-2xl border border-[#d3e3fd] bg-[#f7faff] p-3">
-                      <div className="text-xs font-medium text-[#0b57d0] mb-2">待确认动作</div>
+                    <div className="rounded-3xl border border-[#d3e3fd] bg-[linear-gradient(180deg,#f8fbff_0%,#eef5ff_100%)] p-4 shadow-sm">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#0b57d0]">待确认动作</div>
+                      <p className="mb-3 text-sm text-slate-600">已生成可执行工作流，确认后程序会直接继续处理。</p>
                       <button
                         onClick={() => handleExecuteAction(i, msg.action!)}
                         disabled={loading}
-                        className="inline-flex items-center gap-2 rounded-full bg-[#0b57d0] px-4 py-2 text-sm font-medium text-white transition-all hover:bg-[#0b57d0]/90 disabled:opacity-60"
+                        className="inline-flex items-center gap-2 rounded-full bg-[#0b57d0] px-4 py-2 text-sm font-medium text-white transition-all hover:-translate-y-0.5 hover:bg-[#0b57d0]/90 hover:shadow-md disabled:opacity-60"
                       >
                         <Check size={16} />
                         确认执行
@@ -173,37 +211,37 @@ const AIChat: React.FC<AIChatProps> = ({ isOpen, onClose }) => {
           ))}
           {loading && (
             <div className="flex justify-start">
-              <div className="flex gap-3 items-center text-slate-400">
-                <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-400 border border-slate-200 flex items-center justify-center animate-pulse">
+              <div className="flex items-center gap-3 text-slate-400">
+                <div className="flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-400 shadow-sm animate-pulse">
                   <Bot size={16} />
                 </div>
-                <span className="text-xs italic">正在处理...</span>
+                <span className="text-xs italic">正在调度程序工作流...</span>
               </div>
             </div>
           )}
         </div>
 
-        <div className="mt-4 pt-4 border-t border-slate-100 flex gap-2">
+        <div className="mt-4 flex gap-2 border-t border-slate-100 pt-4">
           <button
             onClick={resetChat}
-            className="p-3 text-slate-400 hover:text-red-500 transition-colors"
+            className="rounded-2xl border border-slate-200 bg-white p-3 text-slate-400 shadow-sm transition-colors hover:text-red-500"
             title="清空对话"
           >
             <Trash2 size={20} />
           </button>
-          <div className="flex-1 relative">
+          <div className="relative flex-1">
             <input
               type="text"
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSend()}
-              placeholder="例如：先查未刮削，再说“帮我整理移动一下”"
-              className="w-full pl-4 pr-12 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
+              placeholder="例如：帮我查询未刮削目录，然后按 TMDB 识别重命名并移动到默认整理根目录"
+              className="w-full rounded-[22px] border border-slate-300 bg-white px-4 py-3 pr-12 text-sm shadow-sm outline-none transition focus:border-[#0b57d0]/30 focus:ring-4 focus:ring-[#0b57d0]/10"
             />
             <button
               onClick={handleSend}
               disabled={!input.trim() || loading}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-[#0b57d0] text-white rounded-xl disabled:opacity-50 transition-all hover:shadow-md"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-2xl bg-[#0b57d0] p-2.5 text-white shadow-sm transition-all hover:-translate-y-[55%] hover:shadow-md disabled:opacity-50"
             >
               <Send size={18} />
             </button>

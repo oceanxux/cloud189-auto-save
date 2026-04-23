@@ -5,12 +5,17 @@ class TelegramBotManager {
     static instance = null;
     static bot = null;
     static chatId = null;
+    static workflowRunner = null;
 
     static getInstance() {
         if (!TelegramBotManager.instance) {
             TelegramBotManager.instance = new TelegramBotManager();
         }
         return TelegramBotManager.instance;
+    }
+
+    setWorkflowRunner(workflowRunner) {
+        TelegramBotManager.workflowRunner = workflowRunner;
     }
 
     async handleBotStatus(botToken, chatId, enable, proxyDomain = '') {
@@ -25,7 +30,7 @@ class TelegramBotManager {
         }
 
         if (shouldEnableBot && (!TelegramBotManager.bot || botTokenChanged || chatIdChanged || proxyDomainChanged)) {
-            TelegramBotManager.bot = new TelegramBotService(botToken, chatId, proxyDomain);
+            TelegramBotManager.bot = new TelegramBotService(botToken, chatId, proxyDomain, TelegramBotManager.workflowRunner);
             TelegramBotManager.bot.start()
             .then(() => {
                 logTaskEvent(`Telegram机器人已启动`);

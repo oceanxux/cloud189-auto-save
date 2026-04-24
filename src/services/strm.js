@@ -90,10 +90,10 @@ class StrmService {
      */
     async generate(task, files, overwrite = false, compare = true) {
         if (!this.enable){
-            logTaskEvent(`STRM生成未启用, 请启用后执行`);
+            logTaskEvent(`STRM生成未启用, 请启用后执行`, 'info', 'strm');
             return;
         }
-        logTaskEvent(`${task.resourceName} 开始生成STRM文件, 总文件数: ${files.length}`);
+        logTaskEvent(`${task.resourceName} 开始生成STRM文件, 总文件数: ${files.length}`, 'info', 'strm');
         const results = [];
         let success = 0;
         let failed = 0;
@@ -122,7 +122,7 @@ class StrmService {
             for (const file of files) {
                 // 检查文件是否是媒体文件
                 if (!this._checkFileSuffix(file, mediaSuffixs)) {
-                    // logTaskEvent(`文件不是媒体文件，跳过: ${file.name}`);
+                    // logTaskEvent(`文件不是媒体文件，跳过: ${file.name}`, 'warn', 'strm');
                     skipped++
                     continue;
                 }
@@ -137,7 +137,7 @@ class StrmService {
                     try {
                         await fs.access(strmPath);
                         if (!overwrite) {
-                            // logTaskEvent(`STRM文件已存在，跳过: ${strmPath}`);
+                            // logTaskEvent(`STRM文件已存在，跳过: ${strmPath}`, 'warn', 'strm');
                             skipped++
                             continue;
                         }
@@ -157,21 +157,21 @@ class StrmService {
                         strmFile: path.basename(strmPath),
                         path: strmPath
                     });
-                    logTaskEvent(`生成STRM文件成功: ${strmPath}`);
+                    logTaskEvent(`生成STRM文件成功: ${strmPath}`, 'info', 'strm');
                     success++
                 } catch (error) {
-                    logTaskEvent(`生成STRM文件失败: ${file.name}, 错误: ${error.message}`);
+                    logTaskEvent(`生成STRM文件失败: ${file.name}, 错误: ${error.message}`, 'error', 'strm');
                     failed++
                 }
             }
         } catch (error) {
             console.log(error)
-            logTaskEvent(`生成STRM文件失败: ${error.message}`);
+            logTaskEvent(`生成STRM文件失败: ${error.message}`, 'error', 'strm');
             failed++
         }
         // 记录文件总数, 成功数, 失败数, 跳过数
         const message = `🎉${task.resourceName} 生成STRM文件完成, 总文件数: ${files.length}, 成功数: ${success}, 失败数: ${failed}, 跳过数: ${skipped}`
-        logTaskEvent(message);
+        logTaskEvent(message, 'info', 'strm');
         return message;
     }
 
@@ -186,7 +186,7 @@ class StrmService {
             });
         }
         if (ConfigService.getConfigValue('strm.useStreamProxy') && (!accountId || !file?.id)) {
-            logTaskEvent(`STRM代理模式缺少必要参数，已回退普通路径: ${file?.name || 'unknown'}`);
+            logTaskEvent(`STRM代理模式缺少必要参数，已回退普通路径: ${file?.name || 'unknown'}`, 'info', 'strm');
         }
         const relativeDir = this._normalizeRelativePath(file.relativeDir || '');
         const taskPath = relativeDir
@@ -211,7 +211,7 @@ class StrmService {
 
     async generateCustom(targetRoot, files, contentResolver, overwrite = false, compare = false) {
         if (!this.enable) {
-            logTaskEvent('STRM生成未启用, 请启用后执行');
+            logTaskEvent('STRM生成未启用, 请启用后执行', 'info', 'strm');
             return;
         }
         const mediaSuffixs = ConfigService.getConfigValue('task.mediaSuffix').split(';').map(suffix => suffix.toLowerCase());
@@ -273,15 +273,15 @@ class StrmService {
                 }
                 await fs.chmod(strmPath, 0o777);
                 success++;
-                logTaskEvent(`生成STRM文件成功: ${strmPath}`);
+                logTaskEvent(`生成STRM文件成功: ${strmPath}`, 'info', 'strm');
             } catch (error) {
                 failed++;
-                logTaskEvent(`生成STRM文件失败: ${file.name}, 错误: ${error.message}`);
+                logTaskEvent(`生成STRM文件失败: ${file.name}, 错误: ${error.message}`, 'error', 'strm');
             }
         }
 
         const message = `🎉自定义STRM生成完成, 总文件数: ${files.length}, 成功数: ${success}, 失败数: ${failed}, 跳过数: ${skipped}`;
-        logTaskEvent(message);
+        logTaskEvent(message, 'info', 'strm');
         return message;
     }
 
@@ -334,7 +334,7 @@ class StrmService {
             `成功数: ${stats.success}\n` +
             `失败数: ${stats.failed}\n` +
             `跳过数: ${stats.skipped}`;
-        logTaskEvent(message);
+        logTaskEvent(message, 'info', 'strm');
         return message;
     }
 
@@ -376,11 +376,11 @@ class StrmService {
                               `成功数: ${stats.success}\n` +
                               `失败数: ${stats.failed}\n` +
                               `跳过数: ${stats.skipped}`;
-                logTaskEvent(message);
+                logTaskEvent(message, 'info', 'strm');
                 messages.push(message);
             } catch (error) {
                 const message = `生成STRM文件失败: ${error.message}`;
-                logTaskEvent(message);
+                logTaskEvent(message, 'info', 'strm');
             }
         }
         if (messages.length > 0) {
@@ -406,7 +406,7 @@ class StrmService {
         }
 
         const files = alistResponse.data.content;
-        logTaskEvent(`开始处理目录 ${dirPath}, 文件数量: ${files.length}`);
+        logTaskEvent(`开始处理目录 ${dirPath}, 文件数量: ${files.length}`, 'info', 'strm');
 
         for (const file of files) {
             try {
@@ -452,11 +452,11 @@ class StrmService {
                     await fs.chmod(strmPath, 0o777);
 
                     stats.success++;
-                    logTaskEvent(`生成STRM文件成功: ${strmPath}`);
+                    logTaskEvent(`生成STRM文件成功: ${strmPath}`, 'info', 'strm');
                 }
             } catch (error) {
                 stats.failed++;
-                logTaskEvent(`处理文件失败: ${file.name}, 错误: ${error.message}`);
+                logTaskEvent(`处理文件失败: ${file.name}, 错误: ${error.message}`, 'error', 'strm');
             }
         }
     }
@@ -472,7 +472,7 @@ class StrmService {
 
         const files = alistResponse.data.content;
         stats.processedDirs.add(sourcePath);
-        logTaskEvent(`开始处理指定目录 ${sourcePath}, 文件数量: ${files.length}`);
+        logTaskEvent(`开始处理指定目录 ${sourcePath}, 文件数量: ${files.length}`, 'info', 'strm');
 
         for (const file of files) {
             try {
@@ -523,10 +523,10 @@ class StrmService {
                 }
                 await fs.chmod(strmPath, 0o777);
                 stats.success++;
-                logTaskEvent(`生成STRM文件成功: ${strmPath}`);
+                logTaskEvent(`生成STRM文件成功: ${strmPath}`, 'info', 'strm');
             } catch (error) {
                 stats.failed++;
-                logTaskEvent(`处理文件失败: ${file.name}, 错误: ${error.message}`);
+                logTaskEvent(`处理文件失败: ${file.name}, 错误: ${error.message}`, 'error', 'strm');
             }
         }
     }
@@ -626,10 +626,10 @@ class StrmService {
            try {
                 await fs.access(strmPath);
                 await fs.unlink(strmPath);
-                logTaskEvent(`删除STRM文件成功: ${strmPath}`);
+                logTaskEvent(`删除STRM文件成功: ${strmPath}`, 'info', 'strm');
             } catch (err) {
                 if (err.code !== 'ENOENT') { // 如果不是文件不存在错误，则记录
-                    logTaskEvent(`尝试删除STRM文件失败: ${strmPath}, 错误: ${err.message}`);
+                    logTaskEvent(`尝试删除STRM文件失败: ${strmPath}, 错误: ${err.message}`, 'error', 'strm');
                 }
             }
 
@@ -637,10 +637,10 @@ class StrmService {
             try {
                 await fs.access(nfoPath);
                 await fs.unlink(nfoPath);
-                logTaskEvent(`删除NFO文件成功: ${nfoPath}`);
+                logTaskEvent(`删除NFO文件成功: ${nfoPath}`, 'info', 'strm');
             } catch (err) {
                 if (err.code !== 'ENOENT') { // 如果不是文件不存在错误，则记录
-                    logTaskEvent(`尝试删除NFO文件失败: ${nfoPath}, 错误: ${err.message}`);
+                    logTaskEvent(`尝试删除NFO文件失败: ${nfoPath}, 错误: ${err.message}`, 'error', 'strm');
                 }
             }
 
@@ -648,10 +648,10 @@ class StrmService {
             try {
                 await fs.access(thumbPath);
                 await fs.unlink(thumbPath);
-                logTaskEvent(`删除Thumb图片成功: ${thumbPath}`);
+                logTaskEvent(`删除Thumb图片成功: ${thumbPath}`, 'info', 'strm');
             } catch (err) {
                 if (err.code !== 'ENOENT') { // 如果不是文件不存在错误，则记录
-                    logTaskEvent(`尝试删除Thumb图片失败: ${thumbPath}, 错误: ${err.message}`);
+                    logTaskEvent(`尝试删除Thumb图片失败: ${thumbPath}, 错误: ${err.message}`, 'error', 'strm');
                 }
             }
             
@@ -659,7 +659,7 @@ class StrmService {
             const files = await fs.readdir(targetDir);
             if (files.length === 0) {
                 await fs.rmdir(targetDir);
-                logTaskEvent(`删除空目录: ${targetDir}`);
+                logTaskEvent(`删除空目录: ${targetDir}`, 'info', 'strm');
             }
         } catch (error) {
             if (error.code !== 'ENOENT') {
@@ -676,11 +676,11 @@ class StrmService {
                 await fs.access(targetDir);
             } catch (err) {
                 // 目录不存在，直接返回
-                // logTaskEvent(`STRM目录不存在，跳过删除: ${targetDir}`);
+                // logTaskEvent(`STRM目录不存在，跳过删除: ${targetDir}`, 'warn', 'strm');
                 return;
             }
             await fs.rm(targetDir, { recursive: true });
-            logTaskEvent(`删除STRM目录成功: ${targetDir}`);
+            logTaskEvent(`删除STRM目录成功: ${targetDir}`, 'info', 'strm');
 
             // 检查并删除空的父目录
             const parentDir = path.dirname(targetDir);
@@ -688,13 +688,13 @@ class StrmService {
                 const files = await fs.readdir(parentDir);
                 if (files.length === 0) {
                     await fs.rm(parentDir, { recursive: true });
-                    logTaskEvent(`删除空目录: ${parentDir}`);
+                    logTaskEvent(`删除空目录: ${parentDir}`, 'info', 'strm');
                 }
             } catch (err) {
                 
             }
         } catch (error) {
-            logTaskEvent(`删除STRM目录失败: ${error.message}`);
+            logTaskEvent(`删除STRM目录失败: ${error.message}`, 'error', 'strm');
         }
     }
     // 删除目录下的所有.strm文件
@@ -704,7 +704,7 @@ class StrmService {
             await fs.access(dirPath);
         } catch (err) {
             // 目录不存在，直接返回
-            logTaskEvent(`STRM目录不存在，跳过删除: ${dirPath}`);
+            logTaskEvent(`STRM目录不存在，跳过删除: ${dirPath}`, 'warn', 'strm');
             return;
         }
         const files = await fs.readdir(dirPath, { withFileTypes: true });
@@ -717,9 +717,9 @@ class StrmService {
             if (path.extname(filePath) === '.strm') {
                 try {
                     await fs.unlink(filePath);
-                    logTaskEvent(`删除文件成功: ${filePath}`);
+                    logTaskEvent(`删除文件成功: ${filePath}`, 'info', 'strm');
                 } catch (err) {
-                    logTaskEvent(`删除文件失败: ${err.message}`);
+                    logTaskEvent(`删除文件失败: ${err.message}`, 'error', 'strm');
                 }
             }
         }));
@@ -747,7 +747,7 @@ class StrmService {
         try {
             return new RegExp(pattern, 'i');
         } catch (error) {
-            logTaskEvent(`STRM排除规则无效，已忽略: ${pattern}`);
+            logTaskEvent(`STRM排除规则无效，已忽略: ${pattern}`, 'warn', 'strm');
             return null;
         }
     }

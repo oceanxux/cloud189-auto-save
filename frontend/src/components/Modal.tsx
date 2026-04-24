@@ -1,6 +1,7 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { X } from 'lucide-react';
+import { X, Sparkles } from 'lucide-react';
 
 interface ModalProps {
   isOpen: boolean;
@@ -8,53 +9,95 @@ interface ModalProps {
   title: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  className?: string;
 }
 
-const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer }) => (
-  <AnimatePresence>
-    {isOpen && (
-      <>
-        <motion.div 
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-          className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200]"
-        />
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 20 }}
-          className="fixed left-1/2 top-1/2 z-[201] max-h-[calc(100vh-1rem)] w-[calc(100vw-1rem)] max-w-2xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[30px] border border-[var(--modal-border)] bg-[var(--modal-bg)] text-[var(--text-primary)] shadow-[var(--app-shadow)]"
-        >
-          <div className="flex items-center justify-between gap-3 border-b border-[var(--modal-border)] bg-[linear-gradient(180deg,rgba(20,89,199,0.06),rgba(255,255,255,0))] px-4 py-4 md:px-8 md:py-6">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--text-secondary)]">Workspace Panel</p>
-              <h3 className="mt-1 truncate text-lg font-extrabold tracking-tight text-[var(--text-primary)] md:text-2xl">{title}</h3>
-            </div>
-            <button onClick={onClose} className="p-2 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 rounded-full transition-colors text-[var(--text-secondary)]">
-              <X size={24} />
-            </button>
-          </div>
-          <div className="px-4 pb-4 md:px-8 md:pb-6 max-h-[calc(100vh-9rem)] md:max-h-[60vh] overflow-y-auto">
-            {children}
-          </div>
-          {footer !== undefined ? (
-            footer
-          ) : (
-            <div className="px-4 py-4 md:px-8 md:py-6 flex flex-col-reverse md:flex-row justify-end gap-3">
-              <button onClick={onClose} className="px-6 py-2.5 rounded-full text-sm font-medium text-[#0b57d0] hover:bg-[#0b57d0]/10 transition-colors">
-                取消
+const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer, className = "" }) => {
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[3000] overflow-y-auto p-4 sm:p-10 flex items-center justify-center">
+          {/* Backdrop with enhanced blur */}
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xl dark:bg-slate-950/60"
+          />
+
+          {/* Modal Content */}
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9, y: 30, filter: 'blur(15px)' }}
+            animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, scale: 0.9, y: 30, filter: 'blur(15px)' }}
+            transition={{ type: 'spring', damping: 28, stiffness: 300, mass: 0.8 }}
+            className={`relative flex flex-col w-full max-w-2xl max-h-[90vh] overflow-hidden rounded-[32px] 
+              bg-white/80 dark:bg-slate-900/80 shadow-[0_32px_128px_-16px_rgba(0,0,0,0.3)]
+              border border-white/40 dark:border-white/10 backdrop-blur-3xl transition-all ${className}`}
+          >
+            {/* Glossy Overlay for Header */}
+            <div className="absolute top-0 inset-x-0 h-40 bg-gradient-to-b from-white/40 dark:from-white/5 to-transparent pointer-events-none" />
+
+            {/* Header */}
+            <div className="relative flex items-center justify-between px-10 py-8">
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                   <div className="w-2 h-2 rounded-full bg-[var(--app-accent)] animate-pulse" />
+                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--app-accent)] opacity-80">Workspace Action</p>
+                </div>
+                <h3 className="text-2xl font-black tracking-tight text-[var(--text-primary)] drop-shadow-sm">{title}</h3>
+              </div>
+              <button 
+                onClick={onClose} 
+                className="group relative flex h-12 w-12 items-center justify-center rounded-2xl 
+                  bg-slate-100/50 dark:bg-slate-800/50 hover:bg-red-500 hover:text-white
+                  transition-all duration-300 active:scale-90 overflow-hidden"
+              >
+                <X size={20} strokeWidth={3} className="relative z-10 transition-transform group-hover:rotate-90" />
               </button>
-              <button type="submit" form="modal-form" className="px-6 py-2.5 rounded-full text-sm font-medium bg-[#0b57d0] text-white hover:bg-[#0b57d0]/90 transition-colors shadow-sm">
-                确认提交
-              </button>
             </div>
-          )}
-        </motion.div>
-      </>
-    )}
-  </AnimatePresence>
-);
+
+            {/* Content with subtle scroll indicator */}
+            <div className="relative flex-1 overflow-y-auto px-10 pb-10 pt-2 custom-scrollbar-hidden scroll-smooth">
+              <div className="text-[var(--text-primary)]">
+                {children}
+              </div>
+            </div>
+
+            {/* Footer with high contrast layout */}
+            {footer !== undefined ? (
+              <div className="relative border-t border-slate-200/40 dark:border-white/5 bg-slate-50/30 dark:bg-black/10 px-10 py-6">
+                {footer}
+              </div>
+            ) : (
+              <div className="relative border-t border-slate-200/40 dark:border-white/5 bg-slate-50/30 dark:bg-black/10 px-10 py-6 flex flex-col sm:flex-row justify-end gap-4">
+                <button 
+                  onClick={onClose} 
+                  className="px-6 py-3 rounded-2xl text-xs font-black text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
+                >
+                  取消
+                </button>
+                <button 
+                  type="submit" 
+                  form="modal-form" 
+                  className="px-8 py-3 bg-[var(--app-accent)] text-[var(--bg-main)] rounded-2xl text-xs font-black
+                    shadow-[0_12px_32px_-8px_rgba(var(--app-accent-rgb),0.5)] 
+                    hover:translate-y-[-2px] hover:shadow-[0_16px_40px_-8px_rgba(var(--app-accent-rgb),0.6)]
+                    active:translate-y-0 transition-all duration-300"
+                >
+                  确认并执行
+                </button>
+              </div>
+            )}
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>,
+    document.body
+  );
+};
 
 export default Modal;

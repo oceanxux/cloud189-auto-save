@@ -1,901 +1,166 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Link2, MoreVertical, RefreshCw, Edit2, Trash2, Folder, Play, CheckCircle2, AlertCircle, HelpCircle, ChevronLeft, Search, X, Check, FileText } from 'lucide-react';
+import { Plus, Link2, MoreVertical, RefreshCw, Edit2, Trash2, Folder, Play, CheckCircle2, AlertCircle, HelpCircle, Search, X, Check, FileText, User } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import Modal from '../Modal';
 import FolderSelector, { SelectedFolder } from '../FolderSelector';
-
-interface Account {
-  id: number;
-  username: string;
-  alias: string | null;
-}
-
-interface Subscription {
-  id: number;
-  name: string;
-}
-
-interface StrmDirectory {
-  accountId: number;
-  folderId: string;
-  name: string;
-  path: string;
-}
+import { ToastType } from '../Toast';
 
 interface StrmConfig {
   id: number;
   name: string;
-  type: 'normal' | 'subscription';
-  accountIds: number[];
-  directories: StrmDirectory[];
-  subscriptionId: number | null;
-  resourceIds: number[];
-  localPathPrefix: string | null;
-  excludePattern: string | null;
-  overwriteExisting: boolean;
-  enabled: boolean;
-  enableCron: boolean;
-  cronExpression: string | null;
-  lastCheckTime: string | null;
-  lastRunAt: string | null;
+  sourcePath: string;
+  localPath: string;
+  enable: boolean;
+  accountId?: number;
+  account?: { username: string; alias?: string; };
 }
 
-interface Resource {
-  id: number;
-  title: string;
+interface StrmConfigTabProps {
+  onShowToast?: (message: string, type: ToastType) => void;
 }
 
-interface FolderEntry {
-  id: string;
-  name: string;
-  isFolder: boolean;
-  path: string;
-}
-
-const formatDateTime = (dateStr: string | null) => {
-  if (!dateStr) return '从未';
-  const date = new Date(dateStr);
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-};
-
-const StrmConfigTab: React.FC = () => {
+const StrmConfigTab: React.FC<StrmConfigTabProps> = ({ onShowToast }) => {
   const [configs, setConfigs] = useState<StrmConfig[]>([]);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
-  const [resources, setResources] = useState<Resource[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<StrmConfig | null>(null);
-  const [formData, setFormData] = useState<Partial<StrmConfig>>({
-    name: '',
-    type: 'normal',
-    accountIds: [],
-    directories: [],
-    subscriptionId: null,
-    resourceIds: [],
-    localPathPrefix: '',
-    excludePattern: '',
-    overwriteExisting: false,
-    enabled: true,
-    enableCron: false,
-    cronExpression: ''
-  });
-
-  // Folder Selector State
+  const [accounts, setAccounts] = useState<{id: number, username: string, alias?: string}[]>([]);
+  const [form, setForm] = useState({ name: '', sourcePath: '', localPath: '', accountId: '', enable: true });
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
-  const [selectorAccountId, setSelectorAccountId] = useState<number | null>(null);
-  const [folderStack, setFolderStack] = useState<{ id: string, name: string }[]>([]);
-  const [folderEntries, setFolderEntries] = useState<FolderEntry[]>([]);
-  const [folderLoading, setFolderLoading] = useState(false);
+  const [folderSelectorMode, setFolderSelectorMode] = useState<'source' | 'local'>('source');
 
-  // Lazy Share State
-  const [isLazyModalOpen, setIsLazyModalOpen] = useState(false);
-  const [isLazyFolderSelectorOpen, setIsLazyFolderSelectorOpen] = useState(false);
-  const [lazyFormData, setLazyFormData] = useState({
-    accountId: '',
-    shareLink: '',
-    accessCode: '',
-    targetFolderId: '',
-    targetFolder: '',
-    localPathPrefix: '',
-    overwriteExisting: false
-  });
+  useEffect(() => { fetchConfigs(); fetchAccounts(); }, []);
 
   const fetchConfigs = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/strm/configs');
-      const data = await response.json();
-      if (data.success) {
-        setConfigs(data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch STRM configs:', error);
-    } finally {
-      setLoading(false);
-    }
+      const res = await fetch('/api/strm-configs');
+      const data = await res.json();
+      if (data.success) setConfigs(data.data || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
   };
 
   const fetchAccounts = async () => {
     try {
-      const response = await fetch('/api/accounts');
-      const data = await response.json();
-      if (data.success) {
-        setAccounts(data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch accounts:', error);
-    }
+      const res = await fetch('/api/accounts');
+      const data = await res.json();
+      if (data.success) setAccounts(data.data || []);
+    } catch (e) { console.error(e); }
   };
 
-  const fetchSubscriptions = async () => {
-    try {
-      const response = await fetch('/api/subscriptions');
-      const data = await response.json();
-      if (data.success) {
-        setSubscriptions(data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch subscriptions:', error);
-    }
-  };
-
-  const fetchResources = async (subId: number) => {
-    try {
-      const response = await fetch(`/api/subscriptions/${subId}/resources`);
-      const data = await response.json();
-      if (data.success) {
-        setResources(data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch resources:', error);
-    }
-  };
-
-  useEffect(() => {
-    fetchConfigs();
-    fetchAccounts();
-    fetchSubscriptions();
-  }, []);
-
-  useEffect(() => {
-    if (formData.subscriptionId) {
-      fetchResources(formData.subscriptionId);
-    } else {
-      setResources([]);
-    }
-  }, [formData.subscriptionId]);
-
-  const handleOpenAddModal = () => {
-    setEditingConfig(null);
-    setFormData({
-      name: '',
-      type: 'normal',
-      accountIds: [],
-      directories: [],
-      subscriptionId: null,
-      resourceIds: [],
-      localPathPrefix: '',
-      excludePattern: '',
-      overwriteExisting: false,
-      enabled: true,
-      enableCron: false,
-      cronExpression: ''
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleEditConfig = (config: StrmConfig) => {
-    setEditingConfig(config);
-    setFormData({ ...config });
-    setIsModalOpen(true);
-  };
-
-  const handleDeleteConfig = async (id: number) => {
-    if (!confirm('确定要删除这个STRM配置吗？')) return;
-    try {
-      const response = await fetch(`/api/strm/configs/${id}`, { method: 'DELETE' });
-      const data = await response.json();
-      if (data.success) {
-        fetchConfigs();
-      }
-    } catch (error) {
-      alert('操作失败');
-    }
-  };
-
-  const handleToggleConfig = async (config: StrmConfig) => {
-    try {
-      const response = await fetch(`/api/strm/configs/${config.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !config.enabled })
-      });
-      const data = await response.json();
-      if (data.success) {
-        fetchConfigs();
-      }
-    } catch (error) {
-      alert('操作失败');
-    }
-  };
-
-  const handleRunConfig = async (id: number) => {
-    try {
-      const response = await fetch(`/api/strm/configs/${id}/run`, { method: 'POST' });
-      const data = await response.json();
-      if (data.success) {
-        alert(data.data || '任务已开始执行');
-        fetchConfigs();
-      } else {
-        alert('执行失败: ' + data.error);
-      }
-    } catch (error) {
-      alert('操作失败');
-    }
-  };
-
-  const handleResetTime = async (id: number) => {
-    if (!confirm('确定要重置该订阅配置的增量时间吗？')) return;
-    try {
-      const response = await fetch(`/api/strm/configs/${id}/reset`, { method: 'POST' });
-      const data = await response.json();
-      if (data.success) {
-        alert('已重置增量时间');
-        fetchConfigs();
-      }
-    } catch (error) {
-      alert('操作失败');
-    }
-  };
-
-  const handleSaveConfig = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const url = editingConfig ? `/api/strm-configs/${editingConfig.id}` : '/api/strm-configs';
+    const method = editingConfig ? 'PUT' : 'POST';
     try {
-      const url = editingConfig ? `/api/strm/configs/${editingConfig.id}` : '/api/strm/configs';
-      const response = await fetch(url, {
-        method: editingConfig ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-      });
-      const data = await response.json();
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      const data = await res.json();
+      if (data.success) { 
+        setIsModalOpen(false); 
+        fetchConfigs(); 
+        onShowToast?.('STRM 配置已保存', 'success');
+      } else {
+        onShowToast?.('保存失败: ' + data.error, 'error');
+      }
+    } catch (e) { onShowToast?.('保存失败', 'error'); }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('确定删除此 STRM 配置？')) return;
+    try {
+      const res = await fetch(`/api/strm-configs/${id}`, { method: 'DELETE' });
+      const data = await res.json();
       if (data.success) {
-        setIsModalOpen(false);
         fetchConfigs();
+        onShowToast?.('配置已删除', 'success');
       } else {
-        alert('保存失败: ' + data.error);
+        onShowToast?.('删除失败: ' + data.error, 'error');
       }
-    } catch (error) {
-      alert('操作失败');
-    }
-  };
-
-  const handleLazySubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!lazyFormData.accountId || !lazyFormData.shareLink) {
-      alert('请选择账号并输入分享链接');
-      return;
-    }
-    try {
-      const response = await fetch('/api/strm/lazy-share/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accountId: lazyFormData.accountId,
-          shareLink: lazyFormData.shareLink,
-          accessCode: lazyFormData.accessCode,
-          targetFolderId: lazyFormData.targetFolderId,
-          localPathPrefix: lazyFormData.localPathPrefix,
-          overwriteExisting: lazyFormData.overwriteExisting
-        })
-      });
-      const data = await response.json();
-      if (data.success) {
-        alert('懒转存生成任务已提交后台执行');
-        setIsLazyModalOpen(false);
-        setLazyFormData({
-          accountId: accounts[0]?.id.toString() || '',
-          shareLink: '',
-          accessCode: '',
-          targetFolderId: '',
-          targetFolder: '',
-          localPathPrefix: '',
-          overwriteExisting: false
-        });
-      } else {
-        alert('生成失败: ' + data.error);
-      }
-    } catch (error) {
-      alert('操作失败');
-    }
-  };
-
-  const fetchFolderEntries = async (accountId: number, folderId: string = '') => {
-    setFolderLoading(true);
-    try {
-      const response = await fetch(`/api/file-manager/list?accountId=${accountId}&folderId=${encodeURIComponent(folderId)}`);
-      const data = await response.json();
-      if (data.success) {
-        setFolderEntries((data.data.entries || []).filter((e: any) => e.isFolder));
-      }
-    } catch (error) {
-      console.error('Failed to fetch folders:', error);
-    } finally {
-      setFolderLoading(false);
-    }
-  };
-
-  const handleOpenFolderSelector = (accountId: number) => {
-    setSelectorAccountId(accountId);
-    setFolderStack([]);
-    setFolderEntries([]);
-    setIsFolderSelectorOpen(true);
-    fetchFolderEntries(accountId);
-  };
-
-  const handleEnterFolder = (entry: FolderEntry) => {
-    const newStack = [...folderStack, { id: entry.id, name: entry.name }];
-    setFolderStack(newStack);
-    fetchFolderEntries(selectorAccountId!, entry.id);
-  };
-
-  const handleGoBack = () => {
-    const newStack = [...folderStack];
-    newStack.pop();
-    setFolderStack(newStack);
-    const parentFolder = newStack[newStack.length - 1];
-    fetchFolderEntries(selectorAccountId!, parentFolder?.id || '');
-  };
-
-  const handleSelectFolder = (folder: SelectedFolder) => {
-    const newDirectories = [...(formData.directories || [])];
-    const exists = newDirectories.findIndex(d => d.accountId === folder.accountId && d.folderId === folder.id);
-
-    if (exists === -1) {
-      newDirectories.push({
-        accountId: folder.accountId,
-        folderId: folder.id,
-        name: folder.name,
-        path: folder.path
-      });
-
-      if (!formData.accountIds?.includes(folder.accountId)) {
-        setFormData({
-          ...formData,
-          directories: newDirectories,
-          accountIds: [...(formData.accountIds || []), folder.accountId]
-        });
-      } else {
-        setFormData({ ...formData, directories: newDirectories });
-      }
-    }
-
-    setIsFolderSelectorOpen(false);
-  };
-
-  const removeDirectory = (index: number) => {
-    const newDirs = [...(formData.directories || [])];
-    newDirs.splice(index, 1);
-    setFormData({ ...formData, directories: newDirs });
-  };
-
-  const getAccountLabel = (id: number) => {
-    const acc = accounts.find(a => a.id === id);
-    if (!acc) return `账号${id}`;
-    return acc.alias ? `${acc.username} (${acc.alias})` : acc.username;
+    } catch (e) { onShowToast?.('删除失败', 'error'); }
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex gap-3">
-          <button 
-            onClick={handleOpenAddModal}
-            className="bg-[#0b57d0] text-white px-6 py-2.5 rounded-full text-sm font-medium hover:bg-[#0b57d0]/90 transition-all shadow-sm flex items-center gap-2"
-          >
-            <Plus size={18} /> 新建配置
-          </button>
-          <button 
-            onClick={() => {
-              setLazyFormData(prev => ({ ...prev, accountId: accounts[0]?.id.toString() || '' }));
-              setIsLazyModalOpen(true);
-            }}
-            className="bg-[#d3e3fd] text-[#041e49] px-6 py-2.5 rounded-full text-sm font-medium hover:bg-[#c2e7ff] transition-all shadow-sm flex items-center gap-2"
-          >
-            <FileText size={18} /> 懒转存STRM生成
-          </button>
+    <div className="workbench-page">
+      <section className="workbench-hero">
+        <div className="workbench-hero-header">
+          <div className="workbench-hero-copy">
+            <p className="workbench-kicker mb-2">流媒体映射</p>
+            <h1 className="text-[var(--text-primary)]">STRM 挂载配置</h1>
+            <p>定义云盘路径与本地播放器路径的映射规则，实现 STRM 文件的精准生成与即时播放。</p>
+          </div>
+          <div className="workbench-hero-actions">
+            <button onClick={() => { setEditingConfig(null); setForm({ name: '', sourcePath: '', localPath: '', accountId: '', enable: true }); setIsModalOpen(true); }} className="workbench-primary-button px-8"><Plus size={18} /> 新增配置</button>
+            <button onClick={fetchConfigs} className="workbench-toolbar-button px-6"><RefreshCw size={18} className={loading ? 'animate-spin' : ''} /> 刷新</button>
+          </div>
         </div>
+      </section>
+
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-2">
+        <h2 className="workbench-section-title"><Link2 size={20} className="text-indigo-500" /> 映射方案 ({configs.length})</h2>
       </div>
 
-      <div className="bg-white rounded-3xl border border-slate-200/60 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50/50 border-b border-slate-100">
-              <tr>
-                <th className="px-6 py-4 font-medium text-slate-500">名称</th>
-                <th className="px-6 py-4 font-medium text-slate-500">类型</th>
-                <th className="px-6 py-4 font-medium text-slate-500">目标</th>
-                <th className="px-6 py-4 font-medium text-slate-500">定时</th>
-                <th className="px-6 py-4 font-medium text-slate-500">状态</th>
-                <th className="px-6 py-4 font-medium text-slate-500">最后运行</th>
-                <th className="px-6 py-4 font-medium text-slate-500 text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-4 text-center text-slate-500">加载中...</td>
-                </tr>
-              ) : configs.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-4 text-center text-slate-500">暂无配置</td>
-                </tr>
-              ) : configs.map(config => (
-                <tr key={config.id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-xl ${config.enabled ? 'bg-[#c2e7ff] text-[#001d35]' : 'bg-slate-100 text-slate-400'}`}>
-                        <Link2 size={20} />
-                      </div>
-                      <span className="font-medium text-slate-900">{config.name}</span>
+      <div className="grid grid-cols-1 gap-4">
+        {loading && configs.length === 0 ? (
+          <div className="py-20 text-center workbench-panel"><RefreshCw size={32} className="animate-spin mx-auto mb-4 text-indigo-500" /></div>
+        ) : configs.length === 0 ? (
+          <div className="py-20 text-center workbench-panel border-dashed"><Link2 size={48} className="mx-auto mb-4 text-slate-200" /><p className="text-sm font-bold text-slate-400">暂无挂载规则</p></div>
+        ) : configs.map(config => (
+          <div key={config.id} className="workbench-panel p-6">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+              <div className="flex items-start gap-5 flex-1">
+                <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0"><Link2 size={28} /></div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-3">
+                    <h3 className="text-lg font-black text-[var(--text-primary)]">{config.name}</h3>
+                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${config.enable ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-200 text-slate-500'}`}>{config.enable ? '生效中' : '已停用'}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-[var(--border-color)]">
+                      <p className="text-[9px] font-black uppercase text-slate-400 mb-1">云端来源 (Source)</p>
+                      <p className="text-xs font-bold text-[var(--text-primary)] truncate">{config.sourcePath}</p>
                     </div>
-                  </td>
-                  <td className="px-6 py-4 text-slate-600">
-                    {config.type === 'normal' ? '普通' : '订阅'}
-                  </td>
-                  <td className="px-6 py-4 text-slate-500 text-xs">
-                    {config.type === 'normal' ? (
-                      config.directories?.length ? `${config.accountIds.length} 个账号 / ${config.directories.length} 个目录` : `${config.accountIds.length} 个账号 / 全量`
-                    ) : (
-                      `${subscriptions.find(s => s.id === config.subscriptionId)?.name || config.subscriptionId || '-'} / ${config.resourceIds.length || '全部资源'}`
-                    )}
-                  </td>
-                  <td className="px-6 py-4 text-slate-500 font-mono text-xs">
-                    {config.enableCron ? config.cronExpression : '未启用'}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${config.enabled ? 'bg-[#c4eed0] text-[#0d4f1f]' : 'bg-slate-100 text-slate-500'}`}>
-                      {config.enabled ? '启用' : '停用'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-slate-500">
-                    {formatDateTime(config.lastRunAt)}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button 
-                        onClick={() => handleRunConfig(config.id)}
-                        className="p-2 hover:bg-[#0b57d0]/10 rounded-full text-[#0b57d0] transition-colors"
-                        title="立即执行"
-                      >
-                        <Play size={18} />
-                      </button>
-                      <button 
-                        onClick={() => handleEditConfig(config)}
-                        className="p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors"
-                        title="编辑"
-                      >
-                        <Edit2 size={18} />
-                      </button>
-                      <div className="relative group/menu">
-                        <button className="p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors">
-                          <MoreVertical size={18} />
-                        </button>
-                        <div className="absolute right-0 top-full mt-1 w-32 bg-white rounded-xl shadow-lg border border-slate-100 py-1 hidden group-hover/menu:block z-[210]">
-                          <button 
-                            onClick={() => handleToggleConfig(config)}
-                            className={`w-full px-4 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2 ${config.enabled ? 'text-orange-600' : 'text-green-600'}`}
-                          >
-                            {config.enabled ? '停用' : '启用'}
-                          </button>
-                          {config.type === 'subscription' && (
-                            <button 
-                              onClick={() => handleResetTime(config.id)}
-                              className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2 text-slate-700"
-                            >
-                              <RefreshCw size={14} /> 重置时间
-                            </button>
-                          )}
-                          <button 
-                            onClick={() => handleDeleteConfig(config.id)}
-                            className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2 text-red-600"
-                          >
-                            <Trash2 size={14} /> 删除
-                          </button>
-                        </div>
-                      </div>
+                    <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-[var(--border-color)]">
+                      <p className="text-[9px] font-black uppercase text-slate-400 mb-1">本地映射 (Local)</p>
+                      <p className="text-xs font-bold text-indigo-500 truncate">{config.localPath}</p>
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setEditingConfig(config); setForm({ name: config.name, sourcePath: config.sourcePath, localPath: config.localPath, accountId: String(config.accountId || ''), enable: config.enable }); setIsModalOpen(true); }} className="p-3 workbench-toolbar-button border-none shadow-none"><Edit2 size={20} /></button>
+                <button onClick={() => handleDelete(config.id)} className="p-3 workbench-toolbar-button border-none shadow-none text-red-500"><Trash2 size={20} /></button>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
 
-      <Modal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        title={editingConfig ? "编辑STRM配置" : "新建STRM配置"}
-        footer={null}
-      >
-        <form onSubmit={handleSaveConfig} className="space-y-6">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700">配置名称</label>
-            <input 
-              type="text" 
-              value={formData.name}
-              onChange={e => setFormData({...formData, name: e.target.value})}
-              required 
-              className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20" 
-              placeholder="例如：电影全量生成"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">生成类型</label>
-              <select 
-                value={formData.type}
-                onChange={e => setFormData({...formData, type: e.target.value as 'normal' | 'subscription'})}
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-              >
-                <option value="normal">普通 (账号/目录)</option>
-                <option value="subscription">订阅 (按资源)</option>
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">本地路径前缀 (可选)</label>
-              <input 
-                type="text" 
-                value={formData.localPathPrefix || ''}
-                onChange={e => setFormData({...formData, localPathPrefix: e.target.value})}
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20" 
-                placeholder="/volume1/media"
-              />
-            </div>
-          </div>
-
-          {formData.type === 'normal' ? (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">选择账号</label>
-                <div className="flex flex-wrap gap-3 p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                  {accounts.map(acc => (
-                    <label key={acc.id} className="flex items-center gap-2 cursor-pointer group">
-                      <div 
-                        onClick={() => {
-                          const newIds = [...(formData.accountIds || [])];
-                          const index = newIds.indexOf(acc.id);
-                          if (index > -1) newIds.splice(index, 1);
-                          else newIds.push(acc.id);
-                          setFormData({...formData, accountIds: newIds});
-                        }}
-                        className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                          formData.accountIds?.includes(acc.id) ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white group-hover:border-[#0b57d0]'
-                        }`}
-                      >
-                        {formData.accountIds?.includes(acc.id) && <Check size={14} className="text-white" />}
-                      </div>
-                      <span className="text-sm text-slate-600">{acc.alias || acc.username}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium text-slate-700">指定目录 (可选)</label>
-                  <div className="flex items-center gap-2">
-                    <select 
-                      className="text-xs border border-slate-300 rounded-full px-3 py-1 bg-white outline-none"
-                      onChange={(e) => {
-                        if (e.target.value) handleOpenFolderSelector(Number(e.target.value));
-                        e.target.value = '';
-                      }}
-                    >
-                      <option value="">点击账号选择目录...</option>
-                      {accounts.filter(a => formData.accountIds?.includes(a.id)).map(acc => (
-                        <option key={acc.id} value={acc.id}>{acc.alias || acc.username}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                  {!formData.directories?.length ? (
-                    <p className="text-xs text-slate-500 italic p-4 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-300">
-                      未选择目录，将按账号媒体目录整体生成。
-                    </p>
-                  ) : (
-                    formData.directories.map((dir, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl group hover:border-[#0b57d0]/30 transition-colors">
-                        <div className="flex flex-col min-w-0">
-                          <span className="text-sm font-medium text-slate-900 truncate">{dir.name}</span>
-                          <span className="text-[10px] text-slate-500 truncate">{getAccountLabel(dir.accountId)} / {dir.path}</span>
-                        </div>
-                        <button 
-                          type="button" 
-                          onClick={() => removeDirectory(idx)}
-                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-full transition-colors"
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">选择订阅</label>
-                <select 
-                  value={formData.subscriptionId || ''}
-                  onChange={e => setFormData({...formData, subscriptionId: Number(e.target.value), resourceIds: []})}
-                  required
-                  className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                >
-                  <option value="">请选择订阅</option>
-                  {subscriptions.map(sub => (
-                    <option key={sub.id} value={sub.id}>{sub.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              {formData.subscriptionId && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-slate-700">选择资源 (可选)</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-4 bg-slate-50 rounded-2xl border border-slate-200 max-h-48 overflow-y-auto custom-scrollbar">
-                    {resources.map(res => (
-                      <label key={res.id} className="flex items-center gap-2 cursor-pointer group">
-                        <div 
-                          onClick={() => {
-                            const newIds = [...(formData.resourceIds || [])];
-                            const index = newIds.indexOf(res.id);
-                            if (index > -1) newIds.splice(index, 1);
-                            else newIds.push(res.id);
-                            setFormData({...formData, resourceIds: newIds});
-                          }}
-                          className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
-                            formData.resourceIds?.includes(res.id) ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 bg-white group-hover:border-[#0b57d0]'
-                          }`}
-                        >
-                          {formData.resourceIds?.includes(res.id) && <Check size={12} className="text-white" />}
-                        </div>
-                        <span className="text-xs text-slate-600 truncate" title={res.title}>{res.title}</span>
-                      </label>
-                    ))}
-                    {resources.length === 0 && <p className="col-span-2 text-center text-xs text-slate-500 py-4">该订阅暂无资源</p>}
-                  </div>
-                  <p className="text-[10px] text-slate-400">不勾选任何资源则生成该订阅下的所有资源。</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">排除模式 (正则, 可选)</label>
-              <input 
-                type="text" 
-                value={formData.excludePattern || ''}
-                onChange={e => setFormData({...formData, excludePattern: e.target.value})}
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20" 
-                placeholder="\.(txt|pdf)$"
-              />
-            </div>
-            <div className="flex items-end pb-3">
-              <label className="flex items-center gap-3 cursor-pointer group">
-                <div 
-                  onClick={() => setFormData({...formData, overwriteExisting: !formData.overwriteExisting})}
-                  className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                    formData.overwriteExisting ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
-                  }`}
-                >
-                  {formData.overwriteExisting && <Check size={14} className="text-white" />}
-                </div>
-                <span className="text-sm font-medium text-slate-700">覆盖已存在的 .strm 文件</span>
-              </label>
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-slate-100">
-            <div className="flex items-center gap-6">
-              <label className="flex items-center gap-3 cursor-pointer group">
-                <div 
-                  onClick={() => setFormData({...formData, enabled: !formData.enabled})}
-                  className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                    formData.enabled ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
-                  }`}
-                >
-                  {formData.enabled && <Check size={14} className="text-white" />}
-                </div>
-                <span className="text-sm font-medium text-slate-700">启用配置</span>
-              </label>
-              <label className="flex items-center gap-3 cursor-pointer group">
-                <div 
-                  onClick={() => setFormData({...formData, enableCron: !formData.enableCron})}
-                  className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                    formData.enableCron ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
-                  }`}
-                >
-                  {formData.enableCron && <Check size={14} className="text-white" />}
-                </div>
-                <span className="text-sm font-medium text-slate-700">定时任务</span>
-              </label>
-            </div>
-          </div>
-
-          {formData.enableCron && (
-            <div className="space-y-2 animate-in slide-in-from-top-2 duration-200">
-              <label className="text-sm font-medium text-slate-700">Cron 表达式</label>
-              <input
-                type="text"
-                value={formData.cronExpression || ''}
-                onChange={e => setFormData({ ...formData, cronExpression: e.target.value })}
-                placeholder="例如：0 0 * * *"
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-              />
-            </div>
-          )}
-
-          <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={() => setIsModalOpen(false)}
-              className="px-6 py-3 bg-white border border-slate-300 text-slate-700 rounded-full font-medium hover:bg-slate-50 transition-all"
-            >
-              取消
-            </button>
-            <button
-              type="submit"
-              className="px-10 py-3 bg-[#0b57d0] text-white rounded-full font-medium shadow-lg hover:bg-[#0b57d0]/90 transition-all flex items-center gap-2"
-            >
-              <Check size={20} /> 保存配置
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal 
-        isOpen={isLazyModalOpen} 
-        onClose={() => setIsLazyModalOpen(false)} 
-        title="懒转存 STRM 生成"
-        footer={null}
-      >
-        <form onSubmit={handleLazySubmit} className="space-y-6">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700">选择账号</label>
-            <select
-              value={lazyFormData.accountId}
-              onChange={e => setLazyFormData({ ...lazyFormData, accountId: e.target.value })}
-              required
-              className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-            >
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingConfig ? "编辑 STRM 映射" : "创建 STRM 映射"}>
+        <form id="modal-form" onSubmit={handleSubmit} className="space-y-6">
+          <div className="workbench-form-item"><label className="workbench-label">配置方案名称</label><input type="text" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="workbench-input" placeholder="配置方案名称" /></div>
+          <div className="workbench-form-item">
+            <label className="workbench-label">绑定账号</label>
+            <select required value={form.accountId} onChange={e => setForm({...form, accountId: e.target.value})} className="workbench-select">
               <option value="">请选择账号...</option>
-              {accounts.map(acc => (
-                <option key={acc.id} value={acc.id}>{acc.alias || acc.username}</option>
-              ))}
+              {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.alias || acc.username}</option>)}
             </select>
           </div>
-
-          <div className="space-y-2">
-             <label className="text-sm font-medium text-slate-700">分享链接</label>
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={lazyFormData.shareLink}
-                  onChange={e => setLazyFormData({ ...lazyFormData, shareLink: e.target.value })}
-                  required
-                  placeholder="分享链接"
-                  className="flex-1 px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                />
-                <input
-                  type="text"
-                  value={lazyFormData.accessCode}
-                  onChange={e => setLazyFormData({ ...lazyFormData, accessCode: e.target.value })}
-                  placeholder="访问码"
-                  className="w-28 px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                />
-              </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">保存目录</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={lazyFormData.targetFolder || lazyFormData.targetFolderId}
-                  readOnly
-                  placeholder="根目录"
-                  className="flex-1 px-5 py-3 bg-slate-100 border border-slate-300 rounded-2xl text-sm outline-none text-slate-500"
-                />
-                <button 
-                  type="button" 
-                  onClick={() => setIsLazyFolderSelectorOpen(true)}
-                  disabled={!lazyFormData.accountId}
-                  className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50"
-                >
-                  <Folder size={20} />
-                </button>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">本地路径前缀 (可选)</label>
-              <input 
-                type="text" 
-                value={lazyFormData.localPathPrefix || ''}
-                onChange={e => setLazyFormData({...lazyFormData, localPathPrefix: e.target.value})}
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20" 
-                placeholder="/volume1/media"
-              />
+          <div className="workbench-form-item">
+            <label className="workbench-label">云端目录路径</label>
+            <div className="flex gap-2">
+              <input type="text" value={form.sourcePath} onChange={e => setForm({...form, sourcePath: e.target.value})} className="flex-1 workbench-input font-mono text-xs" placeholder="/视频/电视剧" />
+              <button type="button" onClick={() => { setFolderSelectorMode('source'); setIsFolderSelectorOpen(true); }} className="workbench-toolbar-button px-4"><Folder size={18} /></button>
             </div>
           </div>
-
-          <div className="flex items-end pb-3">
-              <label className="flex items-center gap-3 cursor-pointer group">
-                <div 
-                  onClick={() => setLazyFormData({...lazyFormData, overwriteExisting: !lazyFormData.overwriteExisting})}
-                  className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                    lazyFormData.overwriteExisting ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
-                  }`}
-                >
-                  {lazyFormData.overwriteExisting && <Check size={14} className="text-white" />}
-                </div>
-                <span className="text-sm font-medium text-slate-700">覆盖已存在的 .strm 文件</span>
-              </label>
-          </div>
-
-          <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={() => setIsLazyModalOpen(false)}
-              className="px-6 py-3 bg-white border border-slate-300 text-slate-700 rounded-full font-medium hover:bg-slate-50 transition-all"
-            >
-              取消
-            </button>
-            <button
-              type="submit"
-              className="px-10 py-3 bg-[#0b57d0] text-white rounded-full font-medium shadow-lg hover:bg-[#0b57d0]/90 transition-all flex items-center gap-2"
-            >
-              <Check size={20} /> 立即生成
-            </button>
+          <div className="workbench-form-item">
+            <label className="workbench-label">本地挂载前缀</label>
+            <input type="text" required value={form.localPath} onChange={e => setForm({...form, localPath: e.target.value})} className="workbench-input font-mono text-xs" placeholder="/mnt/media/TV" />
           </div>
         </form>
       </Modal>
 
-      <FolderSelector
-        isOpen={isFolderSelectorOpen}
-        onClose={() => setIsFolderSelectorOpen(false)}
-        title={`选择目录 - ${getAccountLabel(selectorAccountId || 0)}`}
-        accountId={selectorAccountId || 0}
-        accountName={getAccountLabel(selectorAccountId || 0)}
-        onSelect={handleSelectFolder}
-      />
-
-      <FolderSelector
-        isOpen={isLazyFolderSelectorOpen}
-        onClose={() => setIsLazyFolderSelectorOpen(false)}
-        title={`选择生成目录`}
-        accountId={Number(lazyFormData.accountId)}
-        accountName={getAccountLabel(Number(lazyFormData.accountId))}
-        onSelect={(folder: SelectedFolder) => {
-          setLazyFormData(prev => ({ 
-            ...prev, 
-            accountId: String(folder.accountId),
-            targetFolderId: folder.id, 
-            targetFolder: folder.name 
-          }));
-        }}
-      />
+      <FolderSelector isOpen={isFolderSelectorOpen} onClose={() => setIsFolderSelectorOpen(false)} accountId={Number(form.accountId)} title="选择云端目录" onSelect={(f: SelectedFolder) => { setForm({ ...form, sourcePath: f.name }); setIsFolderSelectorOpen(false); }} />
     </div>
   );
 };

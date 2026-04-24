@@ -2,6 +2,7 @@ const path = require('path');
 const ConfigService = require('../ConfigService');
 const { Cloud189Service } = require('../cloud189');
 const { EmbyService } = require('../emby');
+const { resolveWorkflowResourceName, isGenericSeasonFolder } = require('../../utils/workflowTitleResolver');
 
 const mediaFilePattern = /\.(mkv|mp4|avi|mov|m2ts|ts|flv|rmvb|wmv|iso|mpg|rm|cas)$/i;
 
@@ -145,11 +146,12 @@ const createWorkflowExecutors = (deps = {}) => {
                 const groupRootPath = normalizePathValue(`${requestedFolder}/${groupParts.join('/')}`);
                 const fileRelativeToGroup = normalizePathValue(relativePath.slice(groupRootPath.length + 1));
                 const fileRelativeDir = normalizePathValue(path.posix.dirname(fileRelativeToGroup));
-                const resourceName = groupParts[groupParts.length - 1] || path.posix.basename(groupRootPath);
+                const resourceName = resolveWorkflowResourceName(groupParts) || path.posix.basename(groupRootPath);
                 if (!groups.has(groupRootPath)) {
                     groups.set(groupRootPath, {
                         groupPath: groupRootPath,
                         resourceName,
+                        originalFolderName: groupParts[groupParts.length - 1] || '',
                         files: []
                     });
                 }
@@ -201,12 +203,13 @@ const createWorkflowExecutors = (deps = {}) => {
                 const libraryInfo = organizerService._resolveLibraryInfo(taskLike, resourceInfo, tmdbInfo);
                 groupPreviews.push({
                     groupPath: group.groupPath,
-                    originalName: group.resourceName,
+                    originalName: group.originalFolderName || group.resourceName,
                     tmdbTitle: resourceInfo?.name || group.resourceName,
                     targetPath: normalizePathValue(`${ctx.organizerRootPath}/${libraryInfo.categoryName}/${libraryInfo.resourceFolderName}`),
                     fileCount: group.files.length,
                     resourceInfo,
-                    libraryInfo
+                    libraryInfo,
+                    usedParentFolderName: Boolean(group.originalFolderName && isGenericSeasonFolder(group.originalFolderName))
                 });
             }
 

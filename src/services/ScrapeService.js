@@ -144,6 +144,17 @@ class ScrapeService {
                 return null;
             }
 
+            // 兜底校验：如果AI返回的是季数等通用名称，尝试使用路径解析出的名称
+            const GENERIC_NAMES = new Set(['season', 'series', 'part', 'episode', '第季', '第集', '合集', 'extras', 'specials', 'bonus', 'ova', 'sp', 'mv']);
+            const cleanAiName = String(mediaInfo.name || '').trim().toLowerCase();
+            const aiNameNoNum = cleanAiName.replace(/\d+$/, '').trim();
+            if (GENERIC_NAMES.has(cleanAiName) || GENERIC_NAMES.has(aiNameNoNum)) {
+                if (parsedPath.showName && !GENERIC_NAMES.has(parsedPath.showName.toLowerCase())) {
+                    logTaskEvent(`AI返回名称 "${mediaInfo.name}" 过于通用，自动回退到路径解析出的名称: ${parsedPath.showName}`);
+                    mediaInfo.name = parsedPath.showName;
+                }
+            }
+
             // 获取TMDB信息
             const tmdbDetails = tmdbId 
                 ? (mediaInfo.type === 'tv' 

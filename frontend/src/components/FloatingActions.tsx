@@ -1,11 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Plus, 
-  Cpu, 
-  MessageSquare, 
-  Link2
-} from 'lucide-react';
+import { Plus, Cpu, MessageSquare, Link2, X } from 'lucide-react';
 
 interface FloatingActionsProps {
   onAction?: (actionId: string) => void;
@@ -15,10 +10,10 @@ const FloatingActions: React.FC<FloatingActionsProps> = ({ onAction }) => {
   const [isOpen, setIsOpen] = useState(false);
   
   const actions = [
-    { id: 'createTask', icon: Plus, label: '创建任务', color: 'bg-[#0b57d0] text-white' },
-    { id: 'cloudsaver', icon: Cpu, label: 'CloudSaver', color: 'bg-[#d3e3fd] text-[#0b57d0]' },
-    { id: 'chat', icon: MessageSquare, label: 'AI Assistant', color: 'bg-[#f3e8ff] text-[#7e22ce]' },
-    { id: 'strm', icon: Link2, label: 'STRM 生成', color: 'bg-[#c4eed0] text-[#146c2e]' },
+    { id: 'createTask', icon: Plus, label: '创建转存任务', color: 'bg-blue-600 text-white' },
+    { id: 'cloudsaver', icon: Cpu, label: 'CloudSaver 工具', color: 'bg-emerald-500 text-white' },
+    { id: 'chat', icon: MessageSquare, label: 'AI 交互助手', color: 'bg-purple-500 text-white' },
+    { id: 'strm', icon: Link2, label: '手动生成 STRM', color: 'bg-indigo-500 text-white' },
   ];
 
   const handleAction = (id: string) => {
@@ -27,25 +22,25 @@ const FloatingActions: React.FC<FloatingActionsProps> = ({ onAction }) => {
   };
 
   return (
-    <div className="fixed bottom-8 right-8 z-[100] flex flex-col items-end gap-4">
+    <div className="fixed bottom-6 right-6 z-[1000] flex flex-col items-end gap-3">
       <AnimatePresence>
         {isOpen && (
           <div className="flex flex-col items-end gap-3 mb-2">
             {actions.map((action, index) => (
               <motion.button
                 key={action.id}
-                initial={{ opacity: 0, scale: 0.5, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.5, y: 20 }}
-                transition={{ delay: index * 0.05 }}
+                initial={{ opacity: 0, scale: 0.5, y: 20, x: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0, x: 0 }}
+                exit={{ opacity: 0, scale: 0.5, y: 20, x: 20 }}
+                transition={{ type: 'spring', damping: 20, stiffness: 300, delay: index * 0.04 }}
                 onClick={() => handleAction(action.id)}
                 className="flex items-center gap-3 group"
               >
-                <span className="px-4 py-2 bg-white rounded-xl text-sm font-medium text-slate-700 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="px-4 py-2 glass-modal rounded-2xl text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)] shadow-xl opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
                   {action.label}
                 </span>
-                <div className={`w-14 h-14 rounded-2xl ${action.color} flex items-center justify-center shadow-sm hover:shadow-md hover:scale-105 transition-all`}>
-                  <action.icon size={24} />
+                <div className={`w-12 h-12 rounded-2xl ${action.color} flex items-center justify-center shadow-xl hover:scale-110 active:scale-90 transition-all ring-4 ring-white/10`}>
+                  <action.icon size={20} strokeWidth={2.5} />
                 </div>
               </motion.button>
             ))}
@@ -55,9 +50,9 @@ const FloatingActions: React.FC<FloatingActionsProps> = ({ onAction }) => {
       
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-16 h-16 rounded-2xl ${isOpen ? 'bg-[#d3e3fd] text-[#041e49] rotate-45' : 'bg-[#0b57d0] text-white'} flex items-center justify-center shadow-lg transition-all duration-300 hover:shadow-xl active:scale-95`}
+        className={`w-14 h-14 rounded-3xl ${isOpen ? 'bg-slate-800 text-white rotate-90' : 'bg-[var(--app-accent)] text-[var(--bg-main)] shadow-blue-500/20'} flex items-center justify-center shadow-2xl transition-all duration-500 hover:scale-105 active:scale-90 ring-4 ring-slate-400/10`}
       >
-        <Plus size={32} className="transition-transform" />
+        {isOpen ? <X size={24} strokeWidth={3} /> : <Plus size={28} strokeWidth={3} />}
       </button>
     </div>
   );

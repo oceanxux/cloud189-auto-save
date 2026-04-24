@@ -68,7 +68,7 @@ export class Task {
     @Column('integer')
     accountId!: number;
 
-    @ManyToOne(() => Account, { nullable: true })
+    @ManyToOne(() => Account, { nullable: true, onDelete: 'CASCADE' })
     @JoinColumn({ name: 'accountId' })
     account!: Account;
 
@@ -290,10 +290,17 @@ export class TaskProcessedFile {
 export class CommonFolder {
     @Column('text', { primary: true })
     id!: string;
+
     @Column('integer')
     accountId!: number;
+
+    @ManyToOne(() => Account, { onDelete: 'CASCADE' })
+    @JoinColumn({ name: 'accountId' })
+    account!: Account;
+
     @Column('text')
     path!: string;
+
     @Column('text')
     name!: string;
 }
@@ -544,4 +551,27 @@ export class WorkflowRun {
 }
 
 
-export default { Account, Task, CommonFolder, Subscription, SubscriptionResource, StrmConfig, WorkflowRun };
+@Entity()
+export class SystemLog {
+    @PrimaryGeneratedColumn()
+    id!: number;
+
+    @Column('text')
+    level!: string; // info, warn, error, debug
+
+    @Column('text')
+    module!: string; // transfer, organizer, ai, tmdb, system
+
+    @Column('text')
+    message!: string;
+
+    @CreateDateColumn({
+        transformer: {
+            from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+            to: (date: Date) => date
+        }
+    })
+    createdAt!: Date;
+}
+
+export default { Account, Task, TaskProcessedFile, CommonFolder, Subscription, SubscriptionResource, StrmConfig, WorkflowRun, SystemLog };

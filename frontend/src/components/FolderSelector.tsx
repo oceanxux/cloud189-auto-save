@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Folder, ChevronLeft, RefreshCw, Star, Trash2, Check } from 'lucide-react';
+import { Folder, ChevronLeft, RefreshCw, Star, Trash2, Check, FileText } from 'lucide-react';
 import Modal from './Modal';
 
 interface FolderEntry {
@@ -30,9 +30,16 @@ interface FolderSelectorProps {
   onClose: () => void;
   onSelect: (folder: SelectedFolder) => void;
   accountId: number;
-  accountName: string;
+  accountName?: string;
   title?: string;
+  showFiles?: boolean;
 }
+
+const formatBytes = (bytes: number) => {
+  if (bytes === 0) return '0 B';
+  const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
 
 const FolderSelector: React.FC<FolderSelectorProps> = ({ 
   isOpen, 
@@ -40,21 +47,60 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
   onSelect, 
   accountId, 
   accountName,
-  title = "选择目录"
+  title = "选择目录",
+  showFiles = false
 }) => {
+  const ROOT_FOLDER_ID = '-11';
+  const ROOT_FOLDER_LABEL = '云盘顶部目录';
   const [folderStack, setFolderStack] = useState<{ id: string, name: string }[]>([]);
   const [folderEntries, setFolderEntries] = useState<FolderEntry[]>([]);
+  const [allEntries, setAllEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [favorites, setFavorites] = useState<FavoriteFolder[]>([]);
   const [showFavorites, setShowFavorites] = useState(false);
+  const [resolvedAccountId, setResolvedAccountId] = useState<number>(accountId);
+  const [resolvedAccountName, setResolvedAccountName] = useState(accountName || '');
 
   useEffect(() => {
-    if (isOpen && accountId) {
-      setFolderStack([]);
-      fetchFolderEntries('');
-      loadFavorites();
-    }
-  }, [isOpen, accountId]);
+    if (!isOpen) return;
+
+    setFolderStack([]);
+    loadFavorites();
+
+    const initAccount = async () => {
+      if (accountId) {
+        setResolvedAccountId(accountId);
+        setResolvedAccountName(accountName || '');
+        fetchFolderEntries('', accountId);
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/accounts');
+        const data = await response.json();
+        const accounts = data?.data || [];
+        const fallbackAccount = accounts.find((item: any) => item.isDefault) || accounts[0];
+        if (!fallbackAccount) {
+          setFolderEntries([]);
+          setAllEntries([]);
+          setResolvedAccountId(0);
+          setResolvedAccountName('');
+          return;
+        }
+        setResolvedAccountId(Number(fallbackAccount.id));
+        setResolvedAccountName(fallbackAccount.username || '');
+        fetchFolderEntries('', Number(fallbackAccount.id));
+      } catch (error) {
+        console.error('Failed to resolve account for folder selector:', error);
+        setFolderEntries([]);
+        setAllEntries([]);
+        setResolvedAccountId(0);
+        setResolvedAccountName('');
+      }
+    };
+
+    initAccount();
+  }, [isOpen, accountId, accountName]);
 
   const loadFavorites = () => {
     const saved = localStorage.getItem('folderFavorites');
@@ -69,12 +115,12 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
 
   const saveFavorite = (folder: { id: string, name: string, path: string }) => {
     const newFavorites = [...favorites];
-    const exists = newFavorites.find(f => f.id === folder.id && f.accountId === accountId);
+    const exists = newFavorites.find(f => f.id === folder.id && f.accountId === resolvedAccountId);
     if (!exists) {
       newFavorites.push({
         ...folder,
-        accountId,
-        accountName
+        accountId: resolvedAccountId,
+        accountName: resolvedAccountName
       });
       setFavorites(newFavorites);
       localStorage.setItem('folderFavorites', JSON.stringify(newFavorites));
@@ -88,13 +134,20 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
     localStorage.setItem('folderFavorites', JSON.stringify(newFavorites));
   };
 
-  const fetchFolderEntries = async (folderId: string = '') => {
+  const fetchFolderEntries = async (folderId: string = '', targetAccountId: number = resolvedAccountId) => {
+    if (!targetAccountId) {
+      setFolderEntries([]);
+      setAllEntries([]);
+      return;
+    }
     setLoading(true);
     try {
-      const response = await fetch(`/api/file-manager/list?accountId=${accountId}&folderId=${encodeURIComponent(folderId)}`);
+      const response = await fetch(`/api/file-manager/list?accountId=${targetAccountId}&folderId=${encodeURIComponent(folderId)}`);
       const data = await response.json();
       if (data.success) {
-        setFolderEntries((data.data.entries || []).filter((e: any) => e.isFolder));
+        const entries = data.data.entries || [];
+        setAllEntries(entries);
+        setFolderEntries(entries.filter((e: any) => e.isFolder));
       }
     } catch (error) {
       console.error('Failed to fetch folders:', error);
@@ -119,7 +172,7 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
 
   const handleConfirmSelect = (entry?: FolderEntry) => {
     let folderId = '';
-    let folderName = '根目录';
+    let folderName = ROOT_FOLDER_LABEL;
     let folderPath = '/';
     
     if (entry) {
@@ -132,8 +185,8 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
         folderName = last.name;
         folderPath = '/' + folderStack.map(s => s.name).join('/');
     } else {
-        folderId = '-11';
-        folderName = '全部文件';
+        folderId = ROOT_FOLDER_ID;
+        folderName = ROOT_FOLDER_LABEL;
         folderPath = '/';
     }
 
@@ -141,21 +194,21 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
       id: folderId,
       name: folderName,
       path: folderPath,
-      accountId,
-      accountName
+      accountId: resolvedAccountId,
+      accountName: resolvedAccountName
     });
     onClose();
   };
 
   const isFavorited = (id: string) => {
-    return favorites.some(f => f.id === id && f.accountId === accountId);
+    return favorites.some(f => f.id === id && f.accountId === resolvedAccountId);
   };
 
   const toggleFavorite = (e: React.MouseEvent, entry: FolderEntry) => {
     e.stopPropagation();
     const folderPath = '/' + folderStack.map(s => s.name).concat(entry.name).join('/');
     if (isFavorited(entry.id)) {
-      removeFavorite(e, entry.id, accountId);
+      removeFavorite(e, entry.id, resolvedAccountId);
     } else {
       saveFavorite({ id: entry.id, name: entry.name, path: folderPath });
     }
@@ -167,17 +220,19 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
     const last = folderStack[folderStack.length - 1];
     const folderPath = '/' + folderStack.map(s => s.name).join('/');
     if (isFavorited(last.id)) {
-      removeFavorite(e, last.id, accountId);
+      removeFavorite(e, last.id, resolvedAccountId);
     } else {
       saveFavorite({ id: last.id, name: last.name, path: folderPath });
     }
   };
 
+  const fileCount = allEntries.filter(e => !e.isFolder).length;
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={`${title} - ${accountName}`}
+      title={resolvedAccountName ? `${title} · ${resolvedAccountName}` : title}
       footer={
         <div className="px-8 py-6 flex justify-between items-center border-t border-slate-100 bg-slate-50/50">
           <button 
@@ -248,8 +303,11 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
           </div>
         ) : (
           <>
+            <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3 text-xs leading-6 text-slate-500">
+              “{ROOT_FOLDER_LABEL}”指当前账号进入云盘后看到的最上层目录。选择它时，会以整个云盘顶层作为整理或保存起点。
+            </div>
             <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-2xl overflow-x-auto text-xs text-slate-500 whitespace-nowrap scrollbar-none">
-              <button onClick={() => { setFolderStack([]); fetchFolderEntries(''); }} className="hover:text-slate-900 shrink-0">根目录</button>
+              <button onClick={() => { setFolderStack([]); fetchFolderEntries(''); }} className="hover:text-slate-900 shrink-0">{ROOT_FOLDER_LABEL}</button>
               {folderStack.map((folder, i) => (
                 <React.Fragment key={folder.id}>
                   <span>/</span>
@@ -277,7 +335,7 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
                 </button>
               )}
               <div className="flex-1 font-medium text-slate-700 text-sm truncate flex items-center gap-2">
-                {folderStack.length === 0 ? '根目录' : folderStack[folderStack.length - 1].name}
+                {folderStack.length === 0 ? ROOT_FOLDER_LABEL : folderStack[folderStack.length - 1].name}
                 {folderStack.length > 0 && (
                    <button 
                     onClick={toggleCurrentFavorite}
@@ -310,42 +368,67 @@ const FolderSelector: React.FC<FolderSelectorProps> = ({
                         加载中...
                       </td>
                     </tr>
-                  ) : folderEntries.length === 0 ? (
+                  ) : (folderEntries.length === 0 && (!showFiles || allEntries.length === 0)) ? (
                     <tr>
-                      <td className="px-4 py-12 text-center text-slate-500">当前目录没有子目录</td>
-                    </tr>
-                  ) : folderEntries.map(entry => (
-                    <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors group">
-                      <td 
-                        className="px-4 py-3 font-medium text-slate-900 cursor-pointer flex items-center gap-3"
-                        onClick={() => handleEnterFolder(entry)}
-                      >
-                        <Folder size={18} className="text-[#0b57d0]" />
-                        <span className="truncate flex-1">{entry.name}</span>
-                        <button 
-                          onClick={(e) => toggleFavorite(e, entry)}
-                          className="p-1.5 hover:bg-white rounded-full transition-all opacity-0 group-hover:opacity-100"
-                        >
-                          <Star 
-                            size={16} 
-                            className={isFavorited(entry.id) ? 'text-amber-500' : 'text-slate-300'} 
-                            fill={isFavorited(entry.id) ? 'currentColor' : 'none'}
-                          />
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleConfirmSelect(entry);
-                          }}
-                          className="px-3 py-1.5 bg-[#0b57d0]/10 text-[#0b57d0] hover:bg-[#0b57d0]/20 rounded-xl text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          选择
-                        </button>
+                      <td className="px-4 py-12 text-center text-slate-500">
+                        <div className="flex flex-col items-center gap-2">
+                           <Folder size={32} className="opacity-10" />
+                           <div className="flex flex-col">
+                             <span className="font-bold text-slate-400">当前目录没有子目录</span>
+                             {fileCount > 0 && <span className="text-[10px] text-slate-300">包含 {fileCount} 个文件</span>}
+                           </div>
+                        </div>
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    <>
+                      {/* 渲染文件夹 */}
+                      {folderEntries.map(entry => (
+                        <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors group">
+                          <td 
+                            className="px-4 py-3 font-medium text-slate-900 cursor-pointer flex items-center gap-3"
+                            onClick={() => handleEnterFolder(entry)}
+                          >
+                            <Folder size={18} className="text-[#0b57d0]" />
+                            <span className="truncate flex-1">{entry.name}</span>
+                            <button 
+                              onClick={(e) => toggleFavorite(e, entry)}
+                              className="p-1.5 hover:bg-white rounded-full transition-all opacity-0 group-hover:opacity-100"
+                            >
+                              <Star 
+                                size={16} 
+                                className={isFavorited(entry.id) ? 'text-amber-500' : 'text-slate-300'} 
+                                fill={isFavorited(entry.id) ? 'currentColor' : 'none'}
+                              />
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleConfirmSelect(entry);
+                              }}
+                              className="px-3 py-1.5 bg-[#0b57d0]/10 text-[#0b57d0] hover:bg-[#0b57d0]/20 rounded-xl text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              选择
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {/* 渲染文件 (如果启用) */}
+                      {showFiles && allEntries.filter(e => !e.isFolder).map(file => (
+                        <tr key={file.id} className="bg-slate-50/20">
+                          <td className="px-4 py-2 flex items-center gap-3 opacity-60">
+                            <FileText size={16} className="text-slate-400" />
+                            <span className="text-xs truncate">{file.name}</span>
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            <span className="text-[10px] text-slate-300 font-mono">{formatBytes(file.size || 0)}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </>
+                  )}
                 </tbody>
               </table>
             </div>

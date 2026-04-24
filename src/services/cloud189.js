@@ -259,46 +259,125 @@ class Cloud189Service {
     }
 
     // 获取个人网盘文件列表
-    async listFiles(folderId) {
+    async listFiles(folderId, options = {}) {
+        const { recursive = false, maxPages = 10 } = options;
+        
         if (this.isFamilyAccount()) {
-            return await this.listFamilyFiles(folderId);
+            return await this.listFamilyFiles(folderId, options);
         }
-        return await this.requestWithRetry('/api/open/file/listFiles.action' , {
-            method: 'GET',
-            searchParams: { 
-                folderId,
-                mediaType: 0,
-                orderBy: 'lastOpTime',
-                descending: true,
-                pageNum: 1,
-                pageSize: 1000
-             }
-        }, {
-            retries: 2,
-            retryDelayMs: 1200
-        })
+        
+        // 分页获取所有文件
+        const allFiles = [];
+        const allFolders = [];
+        let pageNum = 1;
+        let hasMore = true;
+        
+        while (hasMore && pageNum <= maxPages) {
+            const result = await this.requestWithRetry('/api/open/file/listFiles.action', {
+                method: 'GET',
+                searchParams: {
+                    folderId,
+                    mediaType: 0,
+                    orderBy: 'lastOpTime',
+                    descending: true,
+                    pageNum,
+                    pageSize: 1000
+                }
+            }, {
+                retries: 2,
+                retryDelayMs: 1200
+            });
+            
+            const fileListAO = result?.fileListAO || {};
+            const files = fileListAO.fileList || [];
+            const folders = fileListAO.folderList || [];
+            
+            allFiles.push(...files);
+            allFolders.push(...folders);
+            
+            // 检查是否还有更多
+            const totalCount = fileListAO.count || 0;
+            hasMore = (pageNum * 1000) < totalCount && files.length === 1000;
+            pageNum++;
+        }
+        
+        // 递归获取子目录文件
+        if (recursive) {
+            for (const folder of allFolders) {
+                const subResult = await this.listFiles(folder.id, { recursive, maxPages });
+                allFiles.push(...(subResult.fileListAO?.fileList || []));
+                allFolders.push(...(subResult.fileListAO?.folderList || []));
+            }
+        }
+        
+        return {
+            fileListAO: {
+                fileList: allFiles,
+                folderList: allFolders,
+                count: allFiles.length
+            }
+        };
     }
 
-    async listFamilyFiles(folderId = '') {
+    async listFamilyFiles(folderId = '', options = {}) {
+        const { recursive = false, maxPages = 10 } = options;
         const familyId = await this.resolveFamilyId();
         const normalizedFolderId = folderId === '-11' ? '' : (folderId || '');
-        return await this.requestWithRetry('/api/open/family/file/listFiles.action', {
-            method: 'GET',
-            searchParams: {
-                folderId: normalizedFolderId,
-                fileType: '0',
-                mediaAttr: '0',
-                iconOption: '5',
-                pageNum: '1',
-                pageSize: '1000',
-                familyId,
-                orderBy: '1',
-                descending: 'false'
+        
+        // 分页获取所有文件
+        const allFiles = [];
+        const allFolders = [];
+        let pageNum = 1;
+        let hasMore = true;
+        
+        while (hasMore && pageNum <= maxPages) {
+            const result = await this.requestWithRetry('/api/open/family/file/listFiles.action', {
+                method: 'GET',
+                searchParams: {
+                    folderId: normalizedFolderId,
+                    fileType: '0',
+                    mediaAttr: '0',
+                    iconOption: '5',
+                    pageNum: String(pageNum),
+                    pageSize: '1000',
+                    familyId,
+                    orderBy: '1',
+                    descending: 'false'
+                }
+            }, {
+                retries: 2,
+                retryDelayMs: 1200
+            });
+            
+            const fileListAO = result?.fileListAO || {};
+            const files = fileListAO.fileList || [];
+            const folders = fileListAO.folderList || [];
+            
+            allFiles.push(...files);
+            allFolders.push(...folders);
+            
+            // 检查是否还有更多
+            const totalCount = fileListAO.count || 0;
+            hasMore = (pageNum * 1000) < totalCount && files.length === 1000;
+            pageNum++;
+        }
+        
+        // 递归获取子目录文件
+        if (recursive) {
+            for (const folder of allFolders) {
+                const subResult = await this.listFamilyFiles(folder.id, { recursive, maxPages });
+                allFiles.push(...(subResult.fileListAO?.fileList || []));
+                allFolders.push(...(subResult.fileListAO?.folderList || []));
             }
-        }, {
-            retries: 2,
-            retryDelayMs: 1200
-        });
+        }
+        
+        return {
+            fileListAO: {
+                fileList: allFiles,
+                folderList: allFolders,
+                count: allFiles.length
+            }
+        };
     }
 
     // 创建批量执行任务
@@ -411,6 +490,23 @@ class Cloud189Service {
                 taskInfos: JSON.stringify(taskInfos)
             },
         });
+    }
+
+    // 获取单个文件详细信息（含MD5）
+    async getFileInfo(fileId) {
+        if (this.isFamilyAccount()) {
+            const familyId = await this.resolveFamilyId();
+            const resp = await this.request('/api/open/family/file/getFileInfo.action', {
+                method: 'GET',
+                searchParams: { fileId, familyId }
+            });
+            return resp?.fileInfo || null;
+        }
+        const resp = await this.request('/api/open/file/getFileInfo.action', {
+            method: 'GET',
+            searchParams: { fileId }
+        });
+        return resp?.fileInfo || null;
     }
 
     // 重命名文件

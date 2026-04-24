@@ -7,881 +7,290 @@ const AIService = require('./ai');
 const { logTaskEvent } = require('../utils/logUtils');
 
 class OrganizerService {
-    constructor(taskService, taskRepo = null) {
-        this.taskService = taskService || null;
-        this.taskRepo = taskRepo || (taskService && taskService.taskRepo) || null;
+    constructor(taskService, taskRepo) {
+        this.taskService = taskService;
+        this.taskRepo = taskRepo;
         this.tmdbService = new TMDBService();
+        this.strmService = new StrmService(taskService);
     }
 
     async organizeTaskById(taskId, options = {}) {
         const task = await this.taskService.getTaskById(taskId);
-        if (!task) {
-            throw new Error('任务不存在');
-        }
+        if (!task) throw new Error(`未找到任务 #${taskId}`);
         return await this.organizeTask(task, options);
     }
 
     async organizeTask(task, options = {}) {
-        const {
-            triggerStrm = false
-        } = options;
-
-        if (!task.account) {
-            const account = await this.taskService._getAccountById(task.accountId);
-            if (!account) {
-                throw new Error('账号不存在');
-            }
-            task.account = account;
-        }
+        console.log(`[Organizer] >>> 开始整理任务: ${task.resourceName} (ID: ${task.id})`);
         if (!task.enableOrganizer && !options.force) {
-            return {
-                message: `任务[${task.resourceName}]未启用整理器，跳过`,
-                files: await this.taskService.getFilesByTask(task)
-            };
+            console.log('[Organizer] 整理器未启用，退出');
+            return { success: false, message: '整理器未启用' };
         }
-        if (task.enableLazyStrm) {
-            throw new Error('懒转存STRM任务暂不支持整理器');
-        }
+        
+        try {
+            const { TaskProcessedFile } = require('../entities');
+            const { AppDataSource: dataSource } = require('../database');
+            const taskProcessedFileRepo = dataSource.getRepository(TaskProcessedFile);
 
-        const cloud189 = Cloud189Service.getInstance(task.account);
-        const allFiles = (await this.taskService.getFilesByTask(task)).filter(file => !file.isFolder);
-        if (!allFiles.length) {
-            throw new Error('当前任务目录没有可整理的文件');
-        }
+            const cloud189 = Cloud189Service.getInstance(task.account);
+            console.log(`[Organizer] 1. 云盘实例就绪: ${task.account.username}`);
 
-        logTaskEvent(`任务[${task.resourceName}]开始执行整理器`);
-        const tmdbInfo = await this._resolveTmdbInfo(task, null);
-        const resourceInfo = await this._resolveResourceInfo(task, allFiles, tmdbInfo);
-        const libraryInfo = this._resolveLibraryInfo(task, resourceInfo, tmdbInfo);
-        const organizerRoot = this._resolveOrganizerRoot(task, options);
-        const baseFolderPath = organizerRoot.path;
-        const categoryCache = new Map();
-        const resourceFolderPath = this._joinPosix(baseFolderPath, libraryInfo.categoryName, libraryInfo.resourceFolderName);
-        const categoryFolderId = await this._ensureFolderByName(cloud189, organizerRoot.id, libraryInfo.categoryName, categoryCache);
-        const resourceFolderId = await this._ensureFolderByName(cloud189, categoryFolderId, libraryInfo.resourceFolderName, categoryCache);
+            console.log(`[Organizer] 2. 正在列出原始目录文件: ${task.realFolderId}`);
+            const folderInfo = await cloud189.listFiles(task.realFolderId);
+            const mediaFiles = (folderInfo?.fileListAO?.fileList || []).filter(f => !f.isFolder);
+            console.log(`[Organizer] 3. 发现媒体文件: ${mediaFiles.length} 个`);
 
-        const originalFolderId = String(task.realFolderId);
-        const originalRootFolderId = String(task.realRootFolderId || task.realFolderId || '');
-        const originalFolderName = this._normalizePath(task.realFolderName || '');
-        const messages = [];
-        const targetSummary = `${libraryInfo.categoryName}/${libraryInfo.resourceFolderName}`;
-        if (originalFolderName !== resourceFolderPath) {
-            messages.push(`├─ 媒体库归档 ${targetSummary}`);
-        }
-
-        const nestedFolderCache = new Map();
-        const folderFileCache = new Map();
-        const fileMap = new Map((resourceInfo.episode || []).map(item => [String(item.id), item]));
-
-        for (const file of allFiles) {
-            const aiFile = fileMap.get(String(file.id));
-            if (!aiFile) {
-                continue;
+            if (mediaFiles.length === 0) {
+                console.log('[Organizer] 无媒体文件，任务结束');
+                return { success: false, message: '没有媒体文件' };
             }
 
-            const template = resourceInfo.type === 'movie'
-                ? ConfigService.getConfigValue('openai.rename.movieTemplate') || '{name} ({year}){ext}'
-                : ConfigService.getConfigValue('openai.rename.template') || '{name} - {se}{ext}';
-            const targetFileName = this.taskService._generateFileName(file, aiFile, resourceInfo, template);
-            const targetRelativeDir = this._buildTargetRelativeDir(file, aiFile, resourceInfo, libraryInfo);
-            const targetFolderId = await this._ensureDirectoryPath(cloud189, resourceFolderId, targetRelativeDir, nestedFolderCache);
-            const currentFolderId = String(file.parentFolderId || originalFolderId);
+            console.log(`[Organizer] 4. 正在对齐 TMDB 元数据...`);
+            const tmdbInfo = await this._resolveTmdbInfo(task);
+            console.log(`[Organizer] TMDB 匹配结果: ${tmdbInfo?.title || '未找到'}`);
 
-            if (file.name !== targetFileName) {
-                const conflictFile = await this._findConflictFile(cloud189, currentFolderId, file.id, targetFileName, folderFileCache);
-                if (conflictFile) {
-                    const conflictType = this._getConflictType(file, conflictFile);
-                    const conflictMessage = conflictType === 'same-md5'
-                        ? `├─ 文件已存在（MD5一致），跳过 ${file.name} -> ${targetFileName}`
-                        : conflictType === 'same-size'
-                            ? `├─ 文件同名且大小一致（疑似重复），跳过 ${file.name} -> ${targetFileName}`
-                            : `├─ 文件同名但内容不同，跳过 ${file.name} -> ${targetFileName}`;
-                    messages.push(conflictMessage);
+            if (tmdbInfo && tmdbInfo.totalEpisodes) {
+                console.log(`[Organizer] 发现 TMDB 最新总集数: ${tmdbInfo.totalEpisodes}`);
+                await this.taskRepo.update(task.id, { totalEpisodes: tmdbInfo.totalEpisodes });
+            }
+
+            console.log(`[Organizer] 5. 正在解析资源结构 (可能触发 AI)...`);
+            const resourceInfo = await this._resolveResourceInfo(task, mediaFiles, tmdbInfo);
+            console.log(`[Organizer] 资源结构就绪: ${resourceInfo.name}, 模式: ${resourceInfo.isFallback ? '保底' : '标准'}`);
+
+            const libraryInfo = this._resolveLibraryInfo(resourceInfo);
+            const organizerRootId = String(task.organizerTargetFolderId || task.targetFolderId).trim();
+            console.log(`[Organizer] 6. 规划目标路径: 根ID(${organizerRootId}) -> 分类(${libraryInfo.categoryName}) -> 剧集(${libraryInfo.resourceFolderName})`);
+
+            const categoryFolderId = await this._ensureFolderByName(cloud189, organizerRootId, libraryInfo.categoryName, new Map());
+            const resourceFolderId = await this._ensureFolderByName(cloud189, categoryFolderId, libraryInfo.resourceFolderName, new Map());
+
+            const fileMap = new Map((resourceInfo.episode || []).map(item => [String(item.id), item]));
+            console.log(`[Organizer] 9. 映射表构建完成 (${fileMap.size} 条)，开始执行物理操作...`);
+
+            const folderCache = new Map();
+            const messages = [];
+            for (const file of mediaFiles) {
+                const aiFile = fileMap.get(String(file.id));
+                if (!aiFile) {
+                    console.log(`[Organizer] [跳过] 文件未在映射中: ${file.name}`);
                     continue;
-                } else {
-                    const renameResult = await cloud189.renameFile(file.id, targetFileName);
-                    if (!renameResult || (renameResult.res_code && renameResult.res_code !== 0)) {
-                        throw new Error(`重命名失败: ${file.name} -> ${targetFileName}`);
+                }
+
+                let targetFolderId = resourceFolderId;
+                if (resourceInfo.type === 'tv' && aiFile.season) {
+                    const seasonName = `Season ${String(aiFile.season).padStart(2, '0')}`;
+                    targetFolderId = await this._ensureFolderByName(cloud189, resourceFolderId, seasonName, folderCache);
+                }
+
+                if (!resourceInfo.isFallback) {
+                    const template = resourceInfo.type === 'movie' ? '{name} ({year}){ext}' : '{name} - {se}{ext}';
+                    const targetFileName = this.taskService._generateFileName(file, aiFile, resourceInfo, template);
+                    if (file.name !== targetFileName) {
+                        console.log(`[Organizer] [重命名] ${file.name} -> ${targetFileName}`);
+                        try {
+                            await cloud189.renameFile(file.id, targetFileName);
+                            messages.push(`├─ 重命名 ${file.name} -> ${targetFileName}`);
+                            file.name = targetFileName;
+                        } catch (err) { console.error(`[Organizer] 重命名执行失败: ${file.name}`, err.message); }
                     }
-                    this._updateFolderFileCacheAfterRename(folderFileCache, currentFolderId, file.name, {
-                        ...file,
-                        name: targetFileName,
-                        parentFolderId: currentFolderId
-                    });
-                    messages.push(`├─ 重命名 ${file.name} -> ${targetFileName}`);
-                    file.name = targetFileName;
                 }
+
+                console.log(`[Organizer] [移动] 正在搬运: ${file.name} -> 目标目录`);
+                try {
+                    await this.taskService.moveCloudFile(cloud189, { id: file.id, name: file.name, isFolder: false }, targetFolderId);
+                    
+                    // 移动成功后同步数据库记录
+                    await taskProcessedFileRepo.update(
+                        { taskId: task.id, sourceFileId: String(file.id) },
+                        { status: 'success', lastError: null, updatedAt: new Date() }
+                    );
+
+                    messages.push(`├─ 移动 ${file.name} -> 归档目录`);
+                    console.log(`[Organizer] [成功] 搬运完成并同步记录: ${file.name}`);
+                } catch (err) { console.error(`[Organizer] 移动执行失败: ${file.name}`, err.message); }
             }
 
-            if (currentFolderId !== String(targetFolderId)) {
-                await this.taskService.moveCloudFile(cloud189, {
-                    id: file.id,
-                    name: file.name,
-                    isFolder: false
-                }, targetFolderId);
-                this._updateFolderFileCacheAfterMove(folderFileCache, currentFolderId, String(targetFolderId), file);
-                messages.push(`├─ 移动 ${file.name} -> ${targetRelativeDir || '媒体根目录'}`);
-                file.parentFolderId = String(targetFolderId);
-                file.relativeDir = targetRelativeDir;
-                file.relativePath = targetRelativeDir ? `${targetRelativeDir}/${file.name}` : file.name;
+            console.log(`[Organizer] 10. 正在清理目录树...`);
+            await this._cleanupEmptyFolderTree(cloud189, task.realFolderId);
+            
+            if (task.realRootFolderId && task.realRootFolderId !== task.realFolderId) {
+                console.log(`[Organizer] 正在额外检查清理任务根目录: ${task.realRootFolderId}`);
+                await this._cleanupEmptyFolderTree(cloud189, task.realRootFolderId);
             }
-        }
-
-        const taskUpdates = {
-            lastOrganizedAt: new Date(),
-            lastOrganizeError: ''
-        };
-
-        if (String(originalFolderId) !== String(resourceFolderId) || originalFolderName !== resourceFolderPath) {
-            taskUpdates.realFolderId = String(resourceFolderId);
-            taskUpdates.realRootFolderId = String(categoryFolderId);
-            taskUpdates.realFolderName = resourceFolderPath;
-            task.realFolderId = String(resourceFolderId);
-            task.realRootFolderId = String(categoryFolderId);
-            task.realFolderName = resourceFolderPath;
-
-            if (ConfigService.getConfigValue('strm.enable') && originalFolderName && originalFolderName !== resourceFolderPath) {
-                const oldStrmPath = this._getTaskRelativeRootPath(originalFolderName);
-                if (oldStrmPath) {
-                    await new StrmService().deleteDir(path.join(task.account.localStrmPrefix, oldStrmPath));
-                }
+            
+            if (messages.length > 0) {
+                messages[messages.length - 1] = messages[messages.length - 1].replace(/^├─/, '└─');
+                logTaskEvent(`整理完成:\n${messages.join('\n')}`, 'info', 'organizer');
             }
+
+            // 核心修复：更新最后整理时间，让前端不再显示“从未执行”
+            await this.taskRepo.update(task.id, { 
+                lastOrganizedAt: new Date(),
+                lastOrganizeError: null 
+            });
+
+            console.log(`[Organizer] <<< 任务 ${task.id} 整理全部达成`);
+            return { message: `${task.resourceName}整理完成`, taskId: task.id };
+        } catch (globalErr) {
+            console.error(`[Organizer] !!! 任务 ${task.id} 整理过程发生严重异常:`, globalErr);
+            throw globalErr;
         }
-
-        if (tmdbInfo?.id && (!task.tmdbId || String(task.tmdbId) !== String(tmdbInfo.id))) {
-            taskUpdates.tmdbId = String(tmdbInfo.id);
-            task.tmdbId = String(tmdbInfo.id);
-        }
-        if (tmdbInfo) {
-            taskUpdates.tmdbContent = JSON.stringify(tmdbInfo);
-            task.tmdbContent = taskUpdates.tmdbContent;
-        }
-        const resolvedTotalEpisodes = this._resolveTotalEpisodes(tmdbInfo);
-        if (resolvedTotalEpisodes > 0 && Number(task.totalEpisodes || 0) !== resolvedTotalEpisodes) {
-            taskUpdates.totalEpisodes = resolvedTotalEpisodes;
-            task.totalEpisodes = resolvedTotalEpisodes;
-        }
-
-        await this.taskRepo.update(task.id, taskUpdates);
-
-        await this._cleanupStagingFolders(cloud189, originalFolderId, originalRootFolderId, String(task.targetFolderId || ''));
-
-        const refreshedFiles = await this.taskService.getFilesByTask(task);
-
-        let strmMessage = '';
-        if (triggerStrm && ConfigService.getConfigValue('strm.enable')) {
-            const strmService = new StrmService();
-            strmMessage = await strmService.generate(task, refreshedFiles, false, true);
-        }
-
-        if (messages.length > 0) {
-            messages[messages.length - 1] = messages[messages.length - 1].replace(/^├─/, '└─');
-            logTaskEvent(`${task.resourceName}整理完成(${targetSummary}):\n${messages.join('\n')}`);
-        } else {
-            logTaskEvent(`${task.resourceName}整理完成，无需调整`);
-        }
-
-        return {
-            message: strmMessage || `${task.resourceName}整理完成，已归档到 ${targetSummary}`,
-            files: refreshedFiles,
-            operations: messages,
-            libraryInfo
-        };
     }
 
     async organizeLooseGroup(params = {}) {
-        const {
-            account,
-            organizerRootId,
-            organizerRootPath = '',
-            sourceFolderPath = '',
-            resourceName = '',
-            files = []
-        } = params;
-
-        if (!account?.id) {
-            throw new Error('账号不存在');
-        }
-        const mediaFiles = Array.isArray(files) ? files.filter(file => file && !file.isFolder) : [];
-        if (mediaFiles.length === 0) {
-            throw new Error('当前目录没有可整理的媒体文件');
-        }
+        const { account, organizerRootId, sourceFolderPath = '', files = [] } = params;
+        const mediaFiles = files.filter(f => f && !f.isFolder);
+        if (!account?.id || mediaFiles.length === 0) throw new Error('参数不足');
 
         const cloud189 = Cloud189Service.getInstance(account);
-        const taskLike = {
-            account,
-            accountId: account.id,
-            resourceName: String(resourceName || '').trim() || path.posix.basename(this._normalizePath(sourceFolderPath || '')) || '未命名资源',
-            shareFolderName: '',
-            targetFolderId: String(organizerRootId || '').trim(),
-            targetFolderName: this._normalizePath(organizerRootPath || ''),
-            organizerTargetFolderId: String(organizerRootId || '').trim(),
-            organizerTargetFolderName: this._normalizePath(organizerRootPath || ''),
-            realFolderId: String(mediaFiles[0]?.parentFolderId || '').trim(),
-            realRootFolderId: String(mediaFiles[0]?.parentFolderId || '').trim(),
-            realFolderName: this._normalizePath(sourceFolderPath || ''),
-            tmdbId: '',
-            tmdbContent: '',
-            currentEpisodes: mediaFiles.length,
-            totalEpisodes: 0,
-            enableOrganizer: true,
-            enableLazyStrm: false
-        };
-
-        logTaskEvent(`目录[${taskLike.realFolderName || taskLike.resourceName}]开始执行无任务整理工作流`);
-        const tmdbInfo = await this._resolveTmdbInfo(taskLike, null);
+        const taskLike = { account, resourceName: path.posix.basename(sourceFolderPath) || '未命名', currentEpisodes: mediaFiles.length };
+        const tmdbInfo = await this._resolveTmdbInfo(taskLike);
         const resourceInfo = await this._resolveResourceInfo(taskLike, mediaFiles, tmdbInfo);
-        const libraryInfo = this._resolveLibraryInfo(taskLike, resourceInfo, tmdbInfo);
-        const organizerRoot = {
-            id: String(organizerRootId || '').trim(),
-            path: this._normalizePath(organizerRootPath || '')
-        };
-        if (!organizerRoot.id) {
-            throw new Error('默认整理根目录未配置');
-        }
+        const libraryInfo = this._resolveLibraryInfo(resourceInfo);
 
-        const categoryCache = new Map();
-        const nestedFolderCache = new Map();
-        const folderFileCache = new Map();
-        const messages = [];
-        const targetSummary = `${libraryInfo.categoryName}/${libraryInfo.resourceFolderName}`;
-        messages.push(`├─ 媒体库归档 ${targetSummary}`);
-
-        const categoryFolderId = await this._ensureFolderByName(cloud189, organizerRoot.id, libraryInfo.categoryName, categoryCache);
-        const resourceFolderId = await this._ensureFolderByName(cloud189, categoryFolderId, libraryInfo.resourceFolderName, categoryCache);
+        const categoryId = await this._ensureFolderByName(cloud189, organizerRootId, libraryInfo.categoryName, new Map());
+        const resourceId = await this._ensureFolderByName(cloud189, categoryId, libraryInfo.resourceFolderName, new Map());
         const fileMap = new Map((resourceInfo.episode || []).map(item => [String(item.id), item]));
 
+        const folderCache = new Map();
         for (const file of mediaFiles) {
             const aiFile = fileMap.get(String(file.id));
-            if (!aiFile) {
-                continue;
+            if (!aiFile) continue;
+
+            let targetFolderId = resourceId;
+            if (resourceInfo.type === 'tv' && aiFile.season) {
+                const seasonName = `Season ${String(aiFile.season).padStart(2, '0')}`;
+                targetFolderId = await this._ensureFolderByName(cloud189, resourceId, seasonName, folderCache);
             }
 
-            const template = resourceInfo.type === 'movie'
-                ? ConfigService.getConfigValue('openai.rename.movieTemplate') || '{name} ({year}){ext}'
-                : ConfigService.getConfigValue('openai.rename.template') || '{name} - {se}{ext}';
-            const targetFileName = this.taskService._generateFileName(file, aiFile, resourceInfo, template);
-            const targetRelativeDir = this._buildTargetRelativeDir(file, aiFile, resourceInfo, libraryInfo);
-            const targetFolderId = await this._ensureDirectoryPath(cloud189, resourceFolderId, targetRelativeDir, nestedFolderCache);
-            const currentFolderId = String(file.parentFolderId || '');
-
-            if (file.name !== targetFileName) {
-                const conflictFile = await this._findConflictFile(cloud189, currentFolderId, file.id, targetFileName, folderFileCache);
-                if (conflictFile) {
-                    const conflictType = this._getConflictType(file, conflictFile);
-                    const conflictMessage = conflictType === 'same-md5'
-                        ? `├─ 文件已存在（MD5一致），跳过 ${file.name} -> ${targetFileName}`
-                        : conflictType === 'same-size'
-                            ? `├─ 文件同名且大小一致（疑似重复），跳过 ${file.name} -> ${targetFileName}`
-                            : `├─ 文件同名但内容不同，跳过 ${file.name} -> ${targetFileName}`;
-                    messages.push(conflictMessage);
-                    continue;
-                }
-                const renameResult = await cloud189.renameFile(file.id, targetFileName);
-                if (!renameResult || (renameResult.res_code && renameResult.res_code !== 0)) {
-                    throw new Error(`重命名失败: ${file.name} -> ${targetFileName}`);
-                }
-                this._updateFolderFileCacheAfterRename(folderFileCache, currentFolderId, file.name, {
-                    ...file,
-                    name: targetFileName,
-                    parentFolderId: currentFolderId
-                });
-                messages.push(`├─ 重命名 ${file.name} -> ${targetFileName}`);
-                file.name = targetFileName;
-            }
-
-            if (currentFolderId !== String(targetFolderId)) {
-                await this.taskService.moveCloudFile(cloud189, {
-                    id: file.id,
-                    name: file.name,
-                    isFolder: false
-                }, targetFolderId);
-                this._updateFolderFileCacheAfterMove(folderFileCache, currentFolderId, String(targetFolderId), file);
-                messages.push(`├─ 移动 ${file.name} -> ${targetRelativeDir || '媒体根目录'}`);
-                file.parentFolderId = String(targetFolderId);
-                file.relativeDir = targetRelativeDir;
-                file.relativePath = targetRelativeDir ? `${targetRelativeDir}/${file.name}` : file.name;
-            }
+            const targetFileName = this.taskService._generateFileName(file, aiFile, resourceInfo, '{name} - {se}{ext}');
+            if (file.name !== targetFileName) await cloud189.renameFile(file.id, targetFileName);
+            await this.taskService.moveCloudFile(cloud189, { id: file.id, name: file.name, isFolder: false }, targetFolderId);
         }
 
-        if (messages.length > 0) {
-            messages[messages.length - 1] = messages[messages.length - 1].replace(/^├─/, '└─');
-            logTaskEvent(`目录[${taskLike.realFolderName || taskLike.resourceName}]整理完成(${targetSummary}):\n${messages.join('\n')}`);
-        }
-
-        return {
-            message: `${taskLike.resourceName}整理完成，已归档到 ${targetSummary}`,
-            operations: messages,
-            libraryInfo,
-            tmdbInfo
-        };
+        if (mediaFiles[0]?.parentFolderId) await this._cleanupEmptyFolderTree(cloud189, mediaFiles[0].parentFolderId);
+        return { message: `${taskLike.resourceName}批量整理完成`, taskId: null };
     }
 
-    async _resolveResourceInfo(task, allFiles, tmdbInfo = null) {
-        const fallbackResourceInfo = this._buildFallbackResourceInfo(task, allFiles, tmdbInfo);
-        const aiMode = this._getAiMode();
-
-        if (aiMode === 'advanced') {
-            logTaskEvent(`整理器启用 AI 高级模式，开始分析资源信息`);
-            try {
-                const analyzed = await this.taskService._analyzeResourceInfo(
-                    task.resourceName,
-                    allFiles.map(file => ({ id: file.id, name: file.name })),
-                    'file'
-                );
-                return this._normalizeResourceInfo(analyzed, task, tmdbInfo, allFiles);
-            } catch (error) {
-                logTaskEvent(`整理器 AI 解析失败，已切换到 TMDB 顺序编号回退: ${error.message}`);
-            }
-        }
-
-        if (aiMode === 'fallback' && this._shouldUseAiFallback(task, allFiles, tmdbInfo, fallbackResourceInfo)) {
-            logTaskEvent(`整理器 TMDB 信息不足，尝试使用 AI 兜底`);
-            try {
-                const analyzed = await this.taskService._analyzeResourceInfo(
-                    task.resourceName,
-                    allFiles.map(file => ({ id: file.id, name: file.name })),
-                    'file'
-                );
-                return this._normalizeResourceInfo(analyzed, task, tmdbInfo, allFiles);
-            } catch (error) {
-                logTaskEvent(`整理器 AI 兜底失败，保留 TMDB 顺序编号结果: ${error.message}`);
-            }
-        }
-
-        return fallbackResourceInfo;
+    async _resolveTmdbInfo(task) {
+        if (task.tmdbId) return await this.tmdbService.getTVDetails(task.tmdbId) || await this.tmdbService.getMovieDetails(task.tmdbId);
+        const title = String(task.resourceName).replace(/\(根\)$/g, '').trim();
+        const year = (title.match(/(19|20)\d{2}/) || [])[0] || '';
+        return await this.tmdbService.searchTV(title, year, task.currentEpisodes || 0) || await this.tmdbService.searchMovie(title, year);
     }
 
-    async markError(taskId, error) {
-        if (!this.taskRepo) {
-            return;
-        }
-        await this.taskRepo.update(taskId, {
-            lastOrganizeError: error.message,
-            lastOrganizedAt: new Date()
-        });
-    }
-
-    async _resolveTmdbInfo(task, resourceInfo) {
-        const cachedTmdb = this._parseTaskTmdbContent(task.tmdbContent);
-        if (cachedTmdb?.id && cachedTmdb?.type) {
-            return cachedTmdb;
-        }
-
-        const apiKey = ConfigService.getConfigValue('tmdb.tmdbApiKey') || ConfigService.getConfigValue('tmdb.apiKey');
-        if (!apiKey) {
-            return cachedTmdb || null;
-        }
-
-        const preferredType = this._resolvePreferredMediaType(resourceInfo, cachedTmdb);
-        if (task.tmdbId) {
-            const details = await this._fetchTmdbDetailsById(task.tmdbId, preferredType);
-            if (details) {
-                return details;
-            }
-        }
-
-        const title = this._sanitizeTitle(resourceInfo?.name || task.resourceName || '');
-        const year = resourceInfo?.year || this._extractYear(task.resourceName) || '';
-        if (!title) {
-            return cachedTmdb || null;
-        }
-
+    async _resolveResourceInfo(task, mediaFiles, tmdbInfo) {
+        const resourceName = task.realFolderName || task.resourceName;
+        const fileNames = mediaFiles.map(f => f.name);
+        
         try {
-            if (preferredType === 'movie') {
-                return await this.tmdbService.searchMovie(title, year);
-            }
-            if (preferredType === 'tv') {
-                return await this.tmdbService.searchTV(title, year, task.currentEpisodes || 0);
+            const { parseMediaTitle } = require('../utils/mediaTitleParser');
+            const parsedRoot = parseMediaTitle(resourceName);
+            
+            const name = tmdbInfo?.title || parsedRoot.cleanTitle || resourceName;
+            const year = tmdbInfo?.releaseDate ? new Date(tmdbInfo.releaseDate).getFullYear() : (parsedRoot.year || 0);
+            const type = (tmdbInfo?.type || (mediaFiles.length > 1 ? 'tv' : 'movie'));
+
+            // 增强：从文件夹名提取季度的保底正则
+            let seasonNum = parsedRoot.season;
+            if (seasonNum === null || seasonNum === undefined) {
+                const sMatch = resourceName.match(/(?:Season|S|第)\s*(\d{1,2})/i);
+                if (sMatch) seasonNum = parseInt(sMatch[1]);
             }
 
-            const tvDetails = await this.tmdbService.searchTV(title, year, task.currentEpisodes || 0);
-            if (tvDetails) {
-                return tvDetails;
-            }
-            return await this.tmdbService.searchMovie(title, year);
-        } catch (error) {
-            logTaskEvent(`TMDB分类信息获取失败，已回退AI结果: ${error.message}`);
-            return cachedTmdb || null;
-        }
-    }
+            let localEpisodes = [];
+            let canLocallyResolve = true;
 
-    _normalizeResourceInfo(resourceInfo, task, tmdbInfo = null, allFiles = []) {
-        const mediaType = this._resolvePreferredMediaType(resourceInfo, tmdbInfo) || (allFiles.length > 1 ? 'tv' : 'movie');
-        const preferredTitle = this._sanitizePathSegment(
-            tmdbInfo?.title
-            || resourceInfo?.name
-            || this._sanitizeTitle(task.resourceName)
-            || task.resourceName
-        );
-        const year = Number(this._extractYear(tmdbInfo?.releaseDate) || resourceInfo?.year || this._extractYear(task.resourceName) || 0);
-        const fallbackEpisodes = this._buildFallbackEpisodeEntries(allFiles, mediaType, preferredTitle);
-        const aiEpisodes = Array.isArray(resourceInfo?.episode) ? resourceInfo.episode : [];
-        const fallbackEpisodeMap = new Map(fallbackEpisodes.map(item => [String(item.id), item]));
-        const normalizedEpisodes = aiEpisodes.length > 0
-            ? aiEpisodes.map(item => {
-                const fallbackEpisode = fallbackEpisodeMap.get(String(item.id)) || {};
+            for (const file of mediaFiles) {
+                const p = parseMediaTitle(file.name);
+                if (type === 'tv' && p.episode === null) {
+                    canLocallyResolve = false;
+                    break;
+                }
+                localEpisodes.push({
+                    id: file.id,
+                    name: name,
+                    season: String(p.season || seasonNum || 1).padStart(2, '0'),
+                    episode: p.episode !== null ? String(p.episode).padStart(2, '0') : '',
+                    extension: path.extname(file.name)
+                });
+            }
+
+            if (canLocallyResolve && localEpisodes.length > 0) {
+                console.log(`[Organizer] 本地解析成功: ${name} (${year}), 跳过 AI`);
+                return { name, year: Number(year), type, season: localEpisodes[0]?.season || '01', episode: localEpisodes };
+            }
+
+            console.log(`[Organizer] 本地解析不完整，正在启动 AI 分析: ${resourceName}`);
+            try {
+                const analyzed = await this.taskService._analyzeResourceInfo(resourceName, fileNames, 'file');
+                return analyzed;
+            } catch (aiError) {
+                console.warn(`[Organizer] AI 分析彻底失败: ${aiError.message}。将进入原始名称归档模式。`);
                 return {
-                    ...fallbackEpisode,
-                    ...item,
-                    id: String(item.id),
-                    name: preferredTitle,
-                    season: String(item.season || fallbackEpisode.season || '01').padStart(2, '0'),
-                    episode: String(item.episode || fallbackEpisode.episode || '01').padStart(2, '0'),
-                    extension: item.extension || fallbackEpisode.extension || ''
+                    name, year: Number(year), type, season: String(seasonNum || 1).padStart(2, '0'), isFallback: true,
+                    episode: mediaFiles.map(f => ({
+                        id: String(f.id), name, season: String(seasonNum || 1).padStart(2, '0'), episode: '', extension: path.extname(f.name)
+                    }))
                 };
-            })
-            : fallbackEpisodes;
-
-        return {
-            ...resourceInfo,
-            name: preferredTitle,
-            year,
-            type: mediaType,
-            episode: normalizedEpisodes
-        };
-    }
-
-    _buildFallbackResourceInfo(task, allFiles, tmdbInfo = null) {
-        const mediaType = tmdbInfo?.type || (allFiles.length > 1 ? 'tv' : 'movie');
-        const preferredTitle = this._sanitizePathSegment(
-            tmdbInfo?.title
-            || this._sanitizeTitle(task.resourceName)
-            || task.resourceName
-        );
-        const year = Number(this._extractYear(tmdbInfo?.releaseDate) || this._extractYear(task.resourceName) || 0);
-
-        return {
-            name: preferredTitle,
-            year,
-            type: mediaType,
-            season: '01',
-            episode: this._buildFallbackEpisodeEntries(allFiles, mediaType, preferredTitle)
-        };
-    }
-
-    _buildFallbackEpisodeEntries(allFiles, mediaType, preferredTitle) {
-        const sortedFiles = [...allFiles].sort((left, right) => {
-            const leftPath = String(left.relativePath || left.name || '');
-            const rightPath = String(right.relativePath || right.name || '');
-            return leftPath.localeCompare(rightPath, 'zh-CN', { numeric: true, sensitivity: 'base' });
-        });
-
-        let fallbackEpisodeNumber = 1;
-        return sortedFiles.map(file => {
-            const episode = mediaType === 'movie'
-                ? '01'
-                : String(fallbackEpisodeNumber++).padStart(2, '0');
-            return {
-                id: String(file.id),
-                name: preferredTitle,
-                season: '01',
-                episode,
-                extension: path.extname(file.name) || ''
-            };
-        });
-    }
-
-    _resolveTotalEpisodes(tmdbInfo = null) {
-        const totalEpisodes = Number(tmdbInfo?.totalEpisodes || 0);
-        if (totalEpisodes > 0) {
-            return totalEpisodes;
-        }
-        const endedEpisodes = Number(tmdbInfo?.lastEpisodeToAir?.episode_number || 0);
-        if (endedEpisodes > 0 && String(tmdbInfo?.status || '').toLowerCase() === 'ended') {
-            return endedEpisodes;
-        }
-        return 0;
-    }
-
-    async _fetchTmdbDetailsById(tmdbId, preferredType = '') {
-        const typeOrder = preferredType === 'movie'
-            ? ['movie', 'tv']
-            : preferredType === 'tv'
-                ? ['tv', 'movie']
-                : ['tv', 'movie'];
-
-        for (const type of typeOrder) {
-            const detail = type === 'movie'
-                ? await this.tmdbService.getMovieDetails(tmdbId)
-                : await this.tmdbService.getTVDetails(tmdbId);
-            if (detail?.id) {
-                return detail;
             }
+        } catch (e) {
+            console.error('[Organizer] 解析过程出错:', e.message);
+            return { name: tmdbInfo?.title || task.resourceName, year: 0, type: mediaFiles.length > 1 ? 'tv' : 'movie', episode: mediaFiles.map(f => ({ id: f.id, name: f.name, extension: path.extname(f.name) })) };
         }
-        return null;
     }
 
-    _resolveLibraryInfo(task, resourceInfo, tmdbInfo) {
-        const mediaType = this._resolvePreferredMediaType(resourceInfo, tmdbInfo);
-        const year = this._extractYear(tmdbInfo?.releaseDate) || resourceInfo?.year || this._extractYear(task.resourceName) || '';
-        const canonicalTitle = this._sanitizePathSegment(
-            tmdbInfo?.title
-            || resourceInfo?.name
-            || this._sanitizeTitle(task.resourceName)
-            || task.resourceName
-        );
-        const categoryName = this._resolveCategoryName(mediaType, tmdbInfo);
-        const resourceFolderName = year ? `${canonicalTitle} (${year})` : canonicalTitle;
-        const seasonBased = mediaType !== 'movie';
-
-        return {
-            mediaType,
-            isAnime: categoryName === this._getCategoryMap().anime,
-            categoryName,
-            canonicalTitle,
-            year: year ? String(year) : '',
-            resourceFolderName,
-            seasonBased
-        };
+    _resolveLibraryInfo(info) {
+        const map = { tv: ConfigService.getConfigValue('organizer.categories.tv', '电视剧'), movie: ConfigService.getConfigValue('organizer.categories.movie', '电影') };
+        return { categoryName: map[info.type] || map.tv, resourceFolderName: `${info.name} (${info.year || '0000'})` };
     }
 
-    _resolvePreferredMediaType(resourceInfo, tmdbInfo) {
-        return tmdbInfo?.type || resourceInfo?.type || 'tv';
+    async _ensureFolderByName(cloud189, parentId, name, cache) {
+        const key = `${parentId}:${name}`;
+        if (cache.has(key)) return cache.get(key);
+        console.log(`[Organizer] 检查目录是否存在: ${name} (父ID: ${parentId})`);
+        const info = await cloud189.listFiles(parentId);
+        const existing = (info?.fileListAO?.folderList || []).find(f => f.name === name);
+        if (existing) {
+            console.log(`[Organizer] 目录已存在: ${name} (ID: ${existing.id})`);
+            cache.set(key, existing.id); return existing.id;
+        }
+        console.log(`[Organizer] 正在新建目录: ${name}`);
+        const result = await cloud189.createFolder(name, parentId);
+        if (!result || !result.id) throw new Error(`创建目录失败: ${name}`);
+        cache.set(key, result.id); return result.id;
     }
 
-    _resolveCategoryName(mediaType, tmdbInfo) {
-        const categories = this._getCategoryMap();
-        const genreIds = Array.isArray(tmdbInfo?.genres)
-            ? tmdbInfo.genres.map(item => Number(item.id)).filter(Number.isFinite)
-            : [];
-
-        if (mediaType === 'movie') {
-            return genreIds.includes(99) ? categories.documentary : categories.movie;
-        }
-        if (genreIds.includes(16)) {
-            return categories.anime;
-        }
-        if (genreIds.includes(99)) {
-            return categories.documentary;
-        }
-        if (genreIds.includes(10764) || genreIds.includes(10767)) {
-            return categories.variety;
-        }
-        return categories.tv;
+    async _ensureDirectoryPath(cloud189, rootId, relPath, cache) {
+        if (!relPath || relPath === '.') return rootId;
+        let cur = rootId;
+        for (const p of relPath.split('/').filter(Boolean)) cur = await this._ensureFolderByName(cloud189, cur, p, cache);
+        return cur;
     }
 
-    _buildTargetRelativeDir(file, aiFile, resourceInfo, libraryInfo) {
-        if (!libraryInfo.seasonBased) {
-            return '';
-        }
-        const seasonDir = this.taskService.buildOrganizerDirectoryName(aiFile, resourceInfo);
-        if (seasonDir) {
-            return seasonDir;
-        }
-
-        const relativeDir = this._normalizePath(file.relativeDir || '');
-        const normalizedParts = relativeDir ? relativeDir.split('/').filter(Boolean) : [];
-        const seasonPart = normalizedParts.find(part => /^(season\s*\d+|s\d+|specials?)$/i.test(part));
-        if (seasonPart) {
-            return seasonPart;
-        }
-        return 'Season 01';
-    }
-
-    async _ensureDirectoryPath(cloud189, rootFolderId, relativeDir, folderCache = new Map()) {
-        const normalizedRelativeDir = this._normalizePath(relativeDir);
-        if (!normalizedRelativeDir) {
-            return String(rootFolderId);
-        }
-
-        let currentParentId = String(rootFolderId);
-        const segments = normalizedRelativeDir.split('/').filter(Boolean);
-
-        for (const segment of segments) {
-            const cacheKey = `${currentParentId}:${segment}`;
-            if (folderCache.has(cacheKey)) {
-                currentParentId = folderCache.get(cacheKey);
-                continue;
+    async _cleanupEmptyFolderTree(cloud189, folderId) {
+        const id = String(folderId || '').trim();
+        if (!id || id === '0') return false;
+        try {
+            console.log(`[Organizer] 正在深度检查清理目录: ${id}`);
+            const info = await cloud189.listFiles(id);
+            for (const f of (info?.fileListAO?.folderList || [])) await this._cleanupEmptyFolderTree(cloud189, f.id);
+            const ref = await cloud189.listFiles(id);
+            const files = ref?.fileListAO?.fileList || [], folders = ref?.fileListAO?.folderList || [];
+            const TRASH_EXTS = new Set(['.nfo', '.jpg', '.jpeg', '.png', '.tbn', '.txt', '.url', '.pdf', '.docx', '.md', '.iso', '.cas', '.exe', '.htm', '.html']);
+            const hasMedia = files.some(f => !TRASH_EXTS.has(path.extname(f.name).toLowerCase()));
+            if (!hasMedia && folders.length === 0) {
+                console.log(`[Organizer] 目录已清空或仅剩杂物，正在物理删除: ${id}`);
+                for (const f of files) await cloud189.deleteFile(f.id, f.name);
+                await cloud189.deleteFile(id, ''); return true;
             }
-            const nextFolderId = await this._ensureFolderByName(cloud189, currentParentId, segment, folderCache);
-            currentParentId = nextFolderId;
-        }
-
-        return currentParentId;
-    }
-
-    async _ensureFolderByName(cloud189, parentFolderId, folderName, folderCache = new Map()) {
-        const safeFolderName = this._sanitizePathSegment(folderName);
-        const cacheKey = `${String(parentFolderId)}:${safeFolderName}`;
-        if (folderCache.has(cacheKey)) {
-            return folderCache.get(cacheKey);
-        }
-
-        const folderInfo = await cloud189.listFiles(parentFolderId);
-        const folderList = folderInfo?.fileListAO?.folderList || [];
-        let folder = folderList.find(item => item.name === safeFolderName);
-        if (!folder) {
-            folder = await cloud189.createFolder(safeFolderName, parentFolderId);
-            if (!folder?.id) {
-                throw new Error(`创建整理目录失败: ${safeFolderName}`);
-            }
-        }
-
-        const folderId = String(folder.id);
-        folderCache.set(cacheKey, folderId);
-        return folderId;
-    }
-
-    async _findConflictFile(cloud189, folderId, currentFileId, targetFileName, folderFileCache = new Map()) {
-        const cacheKey = String(folderId);
-        let fileMap = folderFileCache.get(cacheKey);
-        if (!fileMap) {
-            const folderInfo = await cloud189.listFiles(folderId);
-            const files = folderInfo?.fileListAO?.fileList || [];
-            fileMap = new Map(files.map(item => [item.name, item]));
-            folderFileCache.set(cacheKey, fileMap);
-        }
-
-        const conflictFile = fileMap.get(targetFileName);
-        if (!conflictFile) {
-            return null;
-        }
-        return String(conflictFile.id) === String(currentFileId) ? null : conflictFile;
-    }
-
-    _getConflictType(sourceFile, targetFile) {
-        const sourceMd5 = String(sourceFile?.md5 || '').trim().toLowerCase();
-        const targetMd5 = String(targetFile?.md5 || '').trim().toLowerCase();
-        if (sourceMd5 && targetMd5 && sourceMd5 === targetMd5) {
-            return 'same-md5';
-        }
-
-        const sourceSize = Number(sourceFile?.size || sourceFile?.fileSize || 0);
-        const targetSize = Number(targetFile?.size || targetFile?.fileSize || 0);
-        if (sourceSize > 0 && targetSize > 0 && sourceSize === targetSize) {
-            return 'same-size';
-        }
-
-        return 'different';
-    }
-
-    _updateFolderFileCacheAfterRename(folderFileCache, folderId, oldName, nextFile) {
-        const fileMap = folderFileCache.get(String(folderId));
-        if (!fileMap) {
-            return;
-        }
-        fileMap.delete(oldName);
-        fileMap.set(nextFile.name, nextFile);
-    }
-
-    _updateFolderFileCacheAfterMove(folderFileCache, sourceFolderId, targetFolderId, file) {
-        const sourceMap = folderFileCache.get(String(sourceFolderId));
-        if (sourceMap) {
-            sourceMap.delete(file.name);
-        }
-        const targetMap = folderFileCache.get(String(targetFolderId));
-        if (targetMap) {
-            targetMap.set(file.name, {
-                ...file,
-                parentFolderId: String(targetFolderId)
-            });
-        }
-    }
-
-    async _cleanupStagingFolders(cloud189, originalFolderId, originalRootFolderId, targetFolderId) {
-        const cleanupCandidates = Array.from(new Set(
-            [originalFolderId, originalRootFolderId]
-                .map(id => String(id || '').trim())
-                .filter(Boolean)
-                .filter(id => id !== String(targetFolderId || '').trim())
-        ));
-
-        for (const folderId of cleanupCandidates) {
-            await this._cleanupEmptyFolderTree(cloud189, folderId, String(targetFolderId || '').trim());
-        }
-    }
-
-    async _cleanupEmptyFolderTree(cloud189, folderId, stopFolderId = '') {
-        const normalizedFolderId = String(folderId || '').trim();
-        if (!normalizedFolderId || normalizedFolderId === stopFolderId) {
-            return false;
-        }
-
-        const folderInfo = await cloud189.listFiles(normalizedFolderId);
-        const fileListAO = folderInfo?.fileListAO;
-        if (!fileListAO) {
-            return false;
-        }
-
-        const childFolders = Array.isArray(fileListAO.folderList) ? fileListAO.folderList : [];
-        for (const folder of childFolders) {
-            await this._cleanupEmptyFolderTree(cloud189, folder.id, stopFolderId);
-        }
-
-        const refreshedInfo = await cloud189.listFiles(normalizedFolderId);
-        const refreshedFileListAO = refreshedInfo?.fileListAO;
-        if (!refreshedFileListAO) {
-            return false;
-        }
-        const fileCount = Array.isArray(refreshedFileListAO.fileList) ? refreshedFileListAO.fileList.length : 0;
-        const folderCount = Array.isArray(refreshedFileListAO.folderList) ? refreshedFileListAO.folderList.length : 0;
-        if (fileCount === 0 && folderCount === 0) {
-            await this.taskService.deleteCloudFile(cloud189, { id: normalizedFolderId, name: '' }, 1);
-            return true;
-        }
+        } catch (e) { console.error(`[Organizer] 清理目录失败 (${folderId}):`, e.message); }
         return false;
     }
 
-    _resolveOrganizerRoot(task, options = {}) {
-        const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
-        const configuredOrganizerFolderId = String(autoCreateConfig.organizerTargetFolderId || '').trim();
-        const configuredOrganizerFolderPath = this._normalizePath(autoCreateConfig.organizerTargetFolderName || '');
-        const currentOrganizerFolderId = String(task.organizerTargetFolderId || '').trim();
-        const currentOrganizerFolderPath = this._normalizePath(task.organizerTargetFolderName || '');
-        const targetFolderId = String(task.targetFolderId || '').trim();
-        const targetFolderPath = this._normalizePath(task.targetFolderName || '');
-
-        const shouldUseConfiguredOrganizerRoot = Boolean(
-            configuredOrganizerFolderId &&
-            options.force &&
-            !task.enableOrganizer &&
-            (!currentOrganizerFolderId || currentOrganizerFolderId === targetFolderId) &&
-            (!currentOrganizerFolderPath || currentOrganizerFolderPath === targetFolderPath)
-        );
-
-        const organizerFolderId = shouldUseConfiguredOrganizerRoot
-            ? configuredOrganizerFolderId
-            : String(currentOrganizerFolderId || targetFolderId || '').trim();
-        const organizerFolderPath = shouldUseConfiguredOrganizerRoot
-            ? configuredOrganizerFolderPath
-            : this._normalizePath(currentOrganizerFolderPath || task.targetFolderName || '');
-        if (organizerFolderId) {
-            return {
-                id: organizerFolderId,
-                path: organizerFolderPath
-            };
-        }
-
-        return {
-            id: String(task.targetFolderId || '').trim(),
-            path: this._resolveBaseFolderPath(task)
-        };
-    }
-
-    _getAiMode() {
-        if (!AIService.isEnabled()) {
-            return 'disabled';
-        }
-        const mode = String(ConfigService.getConfigValue('openai.mode', 'fallback') || 'fallback').trim().toLowerCase();
-        return ['advanced', 'fallback'].includes(mode) ? mode : 'fallback';
-    }
-
-    _shouldUseAiFallback(task, allFiles, tmdbInfo, fallbackResourceInfo) {
-        if (!allFiles.length) {
-            return false;
-        }
-
-        if (!tmdbInfo?.id) {
-            return true;
-        }
-
-        const episodes = Array.isArray(fallbackResourceInfo?.episode) ? fallbackResourceInfo.episode : [];
-        if (episodes.length !== allFiles.length) {
-            return true;
-        }
-
-        const hasSuspiciousEpisode = episodes.some(item => {
-            const episode = String(item?.episode || '').trim();
-            return !episode || episode === '00';
-        });
-        if (hasSuspiciousEpisode) {
-            return true;
-        }
-
-        const normalizedTaskTitle = this._sanitizePathSegment(this._sanitizeTitle(task.resourceName) || task.resourceName || '');
-        const normalizedResolvedTitle = this._sanitizePathSegment(fallbackResourceInfo?.name || '');
-        return Boolean(normalizedTaskTitle && normalizedResolvedTitle && normalizedTaskTitle !== normalizedResolvedTitle && !tmdbInfo?.title);
-    }
-
-    _resolveBaseFolderPath(task) {
-        const normalizedFolderName = this._normalizePath(task.realFolderName || '');
-        if (!normalizedFolderName) {
-            return '';
-        }
-
-        const categories = Object.values(this._getCategoryMap()).map(item => this._normalizePath(item));
-        let basePath = this._normalizePath(path.posix.dirname(normalizedFolderName));
-        if (!basePath || basePath === '.') {
-            return '';
-        }
-        if (categories.includes(this._normalizePath(path.posix.basename(basePath)))) {
-            return this._normalizePath(path.posix.dirname(basePath));
-        }
-
-        if (task.shareFolderName) {
-            const normalizedShareFolderName = this._normalizePath(task.shareFolderName);
-            if (normalizedFolderName === normalizedShareFolderName || normalizedFolderName.endsWith(`/${normalizedShareFolderName}`)) {
-                const rootPath = this._normalizePath(path.posix.dirname(normalizedFolderName));
-                const rootBasePath = this._normalizePath(path.posix.dirname(rootPath));
-                if (rootBasePath) {
-                    return rootBasePath;
-                }
-            }
-        }
-
-        return basePath;
-    }
-
-    _parseTaskTmdbContent(tmdbContent) {
-        if (!tmdbContent) {
-            return null;
-        }
-        try {
-            const parsed = JSON.parse(tmdbContent);
-            return parsed && typeof parsed === 'object' ? parsed : null;
-        } catch (error) {
-            return null;
-        }
-    }
-
-    _extractYear(value = '') {
-        const matched = String(value || '').match(/(19|20)\d{2}/);
-        return matched ? matched[0] : '';
-    }
-
-    _sanitizeTitle(title = '') {
-        return String(title || '')
-            .replace(/\(根\)$/g, '')
-            .replace(/[\[【(（](19|20)\d{2}[\]】)）]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-
-    _sanitizePathSegment(value = '') {
-        return String(value || '')
-            .replace(/[<>:"/\\|?*]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-
-    _normalizePath(targetPath = '') {
-        const normalizedPath = String(targetPath || '')
-            .replace(/\\/g, '/')
-            .replace(/^\.\//, '')
-            .replace(/^\/+|\/+$/g, '')
-            .replace(/\/{2,}/g, '/');
-        return normalizedPath === '.' ? '' : normalizedPath;
-    }
-
-    _joinPosix(...parts) {
-        return this._normalizePath(parts.filter(Boolean).join('/'));
-    }
-
-    _getTaskRelativeRootPath(realFolderName = '') {
-        const normalizedPath = this._normalizePath(realFolderName);
-        const index = normalizedPath.indexOf('/');
-        return index >= 0 ? normalizedPath.substring(index + 1) : normalizedPath;
-    }
-
     _getCategoryMap() {
-        return {
-            tv: ConfigService.getConfigValue('organizer.categories.tv', '电视剧'),
-            anime: ConfigService.getConfigValue('organizer.categories.anime', '动漫'),
-            movie: ConfigService.getConfigValue('organizer.categories.movie', '电影'),
-            variety: ConfigService.getConfigValue('organizer.categories.variety', '综艺'),
-            documentary: ConfigService.getConfigValue('organizer.categories.documentary', '纪录片')
-        };
+        return { tv: ConfigService.getConfigValue('organizer.categories.tv', '电视剧'), movie: ConfigService.getConfigValue('organizer.categories.movie', '电影') };
     }
 }
 

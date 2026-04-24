@@ -5,14 +5,13 @@ const { logTaskEvent } = require('../utils/logUtils');
 const ProxyUtil = require('../utils/ProxyUtil');
 const UploadCryptoUtils = require('../utils/UploadCryptoUtils');
 const ConfigService = require('./ConfigService');
+const { CasFileService } = require('./casFileService');
+const { CasCleanupService } = require('./casCleanupService');
 
 const CAS_SLICE_SIZE = 10 * 1024 * 1024; // 10MB（默认分片；超大文件自动放大）
 const MAX_COMMIT_RETRY = 3;
 
-// 与 OpenList-CAS 189pc 对齐的动态分片策略（避免 InvalidPartSize）：
-// - ≤ 10MB*999 (~9.75GB)       : 10MB
-// - ≤ 10MB*2*999 (~19.5GB)     : 20MB
-// - 更大                        : ceil(fileSize / 1999 / 10MB) 向上，最小 5 倍（即 50MB 起）
+// 与 OpenList-CAS 189pc 对齐的动态分片策略：
 function calcCasSliceSize(fileSize) {
     const DEFAULT = CAS_SLICE_SIZE;
     const size = Number(fileSize) || 0;
@@ -33,114 +32,29 @@ const DEFAULT_UA =
 class CasService {
     constructor() {
         this._rsaCache = new Map(); // accountKey -> { pubKey, pkId, expire }
+        this._cleanupService = new CasCleanupService();
     }
 
     // ==================== CAS 文件判断与解析 ====================
 
-    /**
-     * 判断文件是否为 .cas 文件
-     */
     static isCasFile(fileName) {
-        return String(fileName || '').toLowerCase().endsWith('.cas');
+        return CasFileService.isCasFile(fileName);
     }
 
-    /**
-     * 从 .cas 文件名推导原始文件名
-     * 例如: "S01E01.mkv.cas" -> "S01E01.mkv"
-     * 例如: "S01E01.cas" -> "S01E01"（无扩展名，需从 casInfo 补全）
-     */
     static getOriginalFileName(casFileName, casInfo = null) {
-        const trimmed = String(casFileName || '').replace(/\.cas$/i, '');
-        if (!trimmed) {
-            return casInfo?.name || casFileName;
-        }
-        const ext = path.extname(trimmed);
-        if (ext && ext !== '.') {
-            return trimmed;
-        }
-        if (casInfo?.name) {
-            const sourceExt = path.extname(casInfo.name);
-            if (sourceExt && sourceExt !== '.') {
-                return trimmed + sourceExt;
-            }
-        }
-        return trimmed;
+        return CasFileService.getOriginalFileName(casFileName, casInfo);
     }
 
-    /**
-     * 解析 CAS 文件内容（支持 base64 编码和纯 JSON 两种格式）
-     * @param {string|Buffer} content - CAS 文件内容
-     * @returns {{ name: string, size: number, md5: string, sliceMd5: string, createTime?: string }}
-     */
     static parseCasContent(content) {
-        let raw = String(content || '').trim();
-        if (raw.startsWith('\ufeff')) {
-            raw = raw.substring(1);
-        }
-        if (!raw) {
-            throw new Error('CAS文件内容为空');
-        }
-
-        // 尝试1: 直接 JSON
-        if (raw.startsWith('{') && raw.endsWith('}')) {
-            try {
-                return CasService._parsePayload(raw);
-            } catch (_) {
-                // 不是有效 JSON，继续尝试 base64
-            }
-        }
-
-        // 尝试2: base64 解码
-        try {
-            const decoded = Buffer.from(raw, 'base64').toString('utf8');
-            if (decoded && decoded.trim().startsWith('{')) {
-                return CasService._parsePayload(decoded.trim());
-            }
-        } catch (_) {}
-
-        // 尝试3: 多行逐行解析
-        const lines = raw.split(/[\n\r]+/).map((l) => l.trim()).filter(Boolean);
-        for (const line of lines) {
-            if (line.startsWith('{')) {
-                try { return CasService._parsePayload(line); } catch (_) {}
-            }
-            try {
-                const decoded = Buffer.from(line, 'base64').toString('utf8').trim();
-                if (decoded.startsWith('{')) {
-                    return CasService._parsePayload(decoded);
-                }
-            } catch (_) {}
-        }
-
-        throw new Error('CAS文件解析失败: 无法识别格式');
+        return CasFileService.parse(content);
     }
 
-    static _parsePayload(jsonStr) {
-        const p = JSON.parse(jsonStr);
-        const md5 = String(p.md5 || p.fileMd5 || '').trim();
-        const sliceMd5 = String(p.sliceMd5 || p.slice_md5 || '').trim();
-        const info = {
-            name: String(p.name || p.fileName || '').trim(),
-            size: Number(p.size || p.fileSize || 0) || 0,
-            md5,
-            sliceMd5,
-            createTime: String(p.create_time || p.createTime || '').trim()
-        };
-        if (!info.name) throw new Error('CAS缺少文件名');
-        if (info.size < 0) throw new Error('CAS文件大小无效');
-        if (!info.md5) throw new Error('CAS缺少MD5');
-        if (!info.sliceMd5) throw new Error('CAS缺少SliceMD5');
-        return info;
+    static generateCasContent(fileInfo, format = 'base64') {
+        return CasFileService.generate(fileInfo, format);
     }
 
     // ==================== CAS 文件下载与解析 ====================
 
-    /**
-     * 下载并解析 CAS 文件
-     * @param {Cloud189Service} cloud189
-     * @param {string} fileId
-     * @returns {Promise<object>} CAS 信息
-     */
     async downloadAndParseCas(cloud189, fileId) {
         const downloadUrl = await cloud189.getFileDownloadUrl(fileId);
         if (!downloadUrl) {
@@ -162,34 +76,63 @@ class CasService {
         }
 
         const response = await got(normalizedUrl, requestOptions);
-        return CasService.parseCasContent(response.body);
+        return CasFileService.parse(response.body);
+    }
+
+    // ==================== 删除源文件（Generate后） ====================
+
+    /**
+     * CAS生成后删除源文件
+     * @param {Cloud189Service} cloud189
+     * @param {string} sourceFileId - 源文件ID
+     * @param {string} sourceFileName - 源文件名
+     * @param {boolean} isFamily - 是否为家庭云
+     */
+    async deleteSourceFileAfterGenerate(cloud189, sourceFileId, sourceFileName = '', isFamily = false) {
+        const deleteCasSource = ConfigService.getConfigValue('cas.deleteSourceAfterGenerate', false);
+        if (!deleteCasSource) {
+            logTaskEvent(`[CAS] 配置未启用生成后删除源文件，跳过: ${sourceFileName || sourceFileId}`);
+            return false;
+        }
+        
+        logTaskEvent(`[CAS] 生成CAS后删除源文件: ${sourceFileName || sourceFileId}`);
+        return await this._cleanupService.deleteSourceFileAfterGenerate(cloud189, sourceFileId, sourceFileName, isFamily);
+    }
+
+    // ==================== 恢复后删除CAS ====================
+
+    /**
+     * 恢复后删除CAS文件
+     * @param {Cloud189Service} cloud189
+     * @param {string} casFileId - CAS文件ID
+     * @param {string} casFileName - CAS文件名
+     * @param {boolean} isFamily - 是否为家庭云
+     */
+    async deleteCasFileAfterRestore(cloud189, casFileId, casFileName = '', isFamily = false) {
+        const deleteAfterRestore = ConfigService.getConfigValue('cas.deleteCasAfterRestore', true);
+        if (!deleteAfterRestore) {
+            logTaskEvent(`[CAS] 配置未启用恢复后删除CAS，跳过: ${casFileName || casFileId}`);
+            return false;
+        }
+
+        logTaskEvent(`[CAS] 恢复后删除CAS文件: ${casFileName || casFileId}`);
+        return await this._cleanupService.deleteCasFileAfterRestore(cloud189, casFileId, casFileName, isFamily);
     }
 
     // ==================== 秒传恢复 ====================
 
-    /**
-     * 通过秒传 API 恢复 CAS 文件对应的原始文件
-     * 流程参考 OpenList-CAS / 油猴脚本:
-     *   initMultiUpload(不带 md5, lazyCheck=1) → checkTransSecond → commitMultiUploadFile
-     *
-     * 关键点：init 阶段故意不携带 fileMd5/sliceMd5，使用 lazyCheck=1 规避天翼云盘的
-     *        md5 黑名单风控（若 init 阶段命中黑名单，commit 会稳定返回 403 InfoSecurityErrorCode）
-     *
-     * @param {Cloud189Service} cloud189
-     * @param {string} parentFolderId
-     * @param {object} casInfo { name, size, md5, sliceMd5 }
-     * @param {string} restoreName
-     * @returns {Promise<object>} { name, size }
-     */
     async restoreFromCas(cloud189, parentFolderId, casInfo, restoreName) {
         logTaskEvent(`[CAS秒传] 开始: ${restoreName} 大小=${casInfo.size} md5=${casInfo.md5}`);
         const strategy = this._resolveRestoreStrategy(cloud189);
-        return await this._executeRestoreStrategy(strategy, cloud189, parentFolderId, casInfo, restoreName);
+        const result = await this._executeRestoreStrategy(strategy, cloud189, parentFolderId, casInfo, restoreName);
+        
+        // 返回结果包含恢复的文件信息
+        return result;
     }
 
     _resolveRestoreStrategy(cloud189) {
-        const transitFirst = ConfigService.getConfigValue('task.enableFamilyTransitFirst', false);
-        const transitEnabled = ConfigService.getConfigValue('task.enableFamilyTransit', true);
+        const transitFirst = ConfigService.getConfigValue('cas.familyTransitFirst', false);
+        const transitEnabled = ConfigService.getConfigValue('cas.enableFamilyTransit', true);
         const isFamilyTarget = typeof cloud189?.isFamilyAccount === 'function' && cloud189.isFamilyAccount();
 
         if (isFamilyTarget) {
@@ -257,7 +200,7 @@ class CasService {
     }
 
     async _restorePersonalThenMaybeFamily(cloud189, parentFolderId, casInfo, restoreName) {
-        const transitEnabled = ConfigService.getConfigValue('task.enableFamilyTransit', true);
+        const transitEnabled = ConfigService.getConfigValue('cas.enableFamilyTransit', true);
         try {
             return await this._restorePersonal(cloud189, parentFolderId, casInfo, restoreName);
         } catch (personalErr) {
@@ -270,7 +213,6 @@ class CasService {
         }
     }
 
-    // 判断是否应触发家庭中转回退：黑名单/风控/403 情形
     _shouldFallbackToFamily(err) {
         if (!err) return false;
         if (err.isBlacklisted) return true;
@@ -287,7 +229,6 @@ class CasService {
         const sessionKey = await cloud189.getSessionKeyForUpload();
         const sliceSize = calcCasSliceSize(casInfo.size);
 
-        // 1. initMultiUpload（不传 md5，lazyCheck=1）
         const initRes = await this._uploadRequest(cloud189, sessionKey, '/person/initMultiUpload', {
             parentFolderId: String(parentFolderId),
             fileName: encodeURIComponent(restoreName),
@@ -298,14 +239,13 @@ class CasService {
 
         const uploadFileId = this._jsonGet(initRes, 'data', 'uploadFileId');
         if (!uploadFileId) {
-            throw new Error(`CAS秒传初始化失败: 缺少uploadFileId (响应: ${JSON.stringify(initRes).substring(0, 300)})`);
+            throw new Error(`CAS秒传初始化失败: 缺少uploadFileId`);
         }
 
         let fileDataExists = this._jsonGet(initRes, 'data', 'fileDataExists') === 1;
 
         await this._sleep(500);
 
-        // 2. checkTransSecond（若 init 未命中，再单独探测）
         if (!fileDataExists) {
             const checkRes = await this._uploadRequest(cloud189, sessionKey, '/person/checkTransSecond', {
                 fileMd5: casInfo.md5,
@@ -321,7 +261,6 @@ class CasService {
 
         await this._sleep(500);
 
-        // 3. commitMultiUploadFile（含 403 重试）
         let retry = 0;
         let lastErr;
         while (retry < MAX_COMMIT_RETRY) {
@@ -343,7 +282,6 @@ class CasService {
                 if (status === 403 && retry < MAX_COMMIT_RETRY) {
                     const delay = retry * 2000;
                     logTaskEvent(`[CAS秒传] commit 403，第${retry}次重试，等待${delay}ms`);
-                    // 403 时刷新 RSA 密钥
                     this._rsaCache.delete(this._accountKey(cloud189));
                     await this._sleep(delay);
                     continue;
@@ -363,7 +301,6 @@ class CasService {
             return cached;
         }
         const rsaKey = await UploadCryptoUtils.generateRsaKey(sessionKey);
-        // 收紧本地缓存到 5 分钟，避免使用过期密钥
         rsaKey.expire = Math.min(rsaKey.expire, Date.now() + RSA_KEY_TTL_MS);
         this._rsaCache.set(key, rsaKey);
         return rsaKey;
@@ -373,9 +310,6 @@ class CasService {
         return cloud189?.account?.username || cloud189?.username || 'default';
     }
 
-    /**
-     * 封装对 upload.cloud.189.cn 的加密请求
-     */
     async _uploadRequest(cloud189, sessionKey, uri, form) {
         const rsaKey = await this._getRsaKeyWithCache(cloud189, sessionKey);
         const { url, headers } = UploadCryptoUtils.buildUploadRequest(form, uri, rsaKey, sessionKey);
@@ -402,7 +336,6 @@ class CasService {
             }
             return response;
         } catch (err) {
-            // 尝试解析 4xx/5xx 响应体，给出清晰错误
             let body = null;
             const rawBody = err?.response?.body;
             if (typeof rawBody === 'string') {
@@ -440,13 +373,6 @@ class CasService {
 
     // ==================== 家庭中转秒传 ====================
 
-    /**
-     * 家庭中转完整流程：
-     *   1. 找到账号下的家庭（userRole=1）
-     *   2. 家庭秒传 /family/initMultiUpload → checkTransSecond → commitMultiUploadFile
-     *   3. 把家庭文件 COPY 到个人目标目录（手动 MD5 签名）
-     *   4. 删除家庭中转残留
-     */
     async _restoreViaFamily(cloud189, personalFolderId, casInfo, restoreName, personalErr) {
         const familyInfo = await cloud189.getFamilyInfo();
         if (!familyInfo?.familyId) {
@@ -459,22 +385,18 @@ class CasService {
 
         logTaskEvent(`[家庭中转] familyId=${familyId} familyFolderId=${familyFolderId || '(根)'}`);
 
-        // 1. 家庭秒传
         const familyFileId = await this._familyRapidUpload(cloud189, familyId, familyFolderId, casInfo, restoreName);
         if (!familyFileId) {
             throw new Error('家庭中转失败: 未获取到家庭文件ID');
         }
 
-        // 2. 家庭 → 个人目录 COPY
         try {
             await this._copyFamilyFileToPersonal(cloud189, familyId, familyFileId, personalFolderId, familyFolderId, restoreName);
         } catch (copyErr) {
-            // COPY 失败尽量清理家庭残留
             await this._safeDeleteFamilyFile(cloud189, familyId, familyFileId, restoreName);
             throw copyErr;
         }
 
-        // 3. 清理家庭残留
         await this._safeDeleteFamilyFile(cloud189, familyId, familyFileId, restoreName);
 
         logTaskEvent(`[家庭中转] 成功: ${restoreName}`);
@@ -485,7 +407,6 @@ class CasService {
         const sessionKey = await cloud189.getSessionKeyForUpload();
         const sliceSize = calcCasSliceSize(casInfo.size);
 
-        // 1. /family/initMultiUpload（lazyCheck=1，不传 md5 规避黑名单）
         const initRes = await this._uploadRequest(cloud189, sessionKey, '/family/initMultiUpload', {
             parentFolderId: String(familyFolderId || ''),
             familyId: String(familyId),
@@ -496,13 +417,12 @@ class CasService {
         });
         const uploadFileId = this._jsonGet(initRes, 'data', 'uploadFileId');
         if (!uploadFileId) {
-            throw new Error(`家庭秒传init失败: 缺少uploadFileId (响应: ${JSON.stringify(initRes).substring(0, 300)})`);
+            throw new Error(`家庭秒传init失败: 缺少uploadFileId`);
         }
         let fileDataExists = this._jsonGet(initRes, 'data', 'fileDataExists') === 1;
 
         await this._sleep(500);
 
-        // 2. /family/checkTransSecond
         if (!fileDataExists) {
             const checkRes = await this._uploadRequest(cloud189, sessionKey, '/family/checkTransSecond', {
                 fileMd5: String(casInfo.md5),
@@ -517,7 +437,6 @@ class CasService {
 
         await this._sleep(500);
 
-        // 3. /family/commitMultiUploadFile（含 403 重试）
         let retry = 0;
         let lastErr;
         let commitRes;
@@ -554,16 +473,12 @@ class CasService {
             || this._jsonGet(commitRes, 'data', 'fileId')
             || null;
         if (!familyFileId) {
-            throw new Error(`家庭秒传commit响应缺少文件ID: ${JSON.stringify(commitRes).substring(0, 300)}`);
+            throw new Error(`家庭秒传commit响应缺少文件ID`);
         }
         logTaskEvent(`[家庭中转] 家庭秒传完成, 家庭文件ID=${familyFileId}`);
         return String(familyFileId);
     }
 
-    /**
-     * 家庭文件 COPY 到个人空间目录
-     * 天翼云盘要求 POST 参数参与签名，SDK 默认只签 URL query，这里手动签名。
-     */
     async _copyFamilyFileToPersonal(cloud189, familyId, familyFileId, personalFolderId, familyFolderId, fileName = '') {
         const accessToken = await cloud189.client.getAccessToken();
         if (!accessToken) {
@@ -636,7 +551,7 @@ class CasService {
 
         while (Date.now() - start < maxWaitMs) {
             await this._sleep(1000);
-            const accessToken = accessTokenInit; // accessToken 有效期较长，此处不重复获取
+            const accessToken = accessTokenInit;
             const checkParams = { type, taskId: String(taskId) };
             const { timestamp, signature } = this._buildAccessTokenSignature(accessToken, checkParams);
 
@@ -691,9 +606,6 @@ class CasService {
             if (lastStatus != null && lastStatus < 0) {
                 throw new Error(`家庭中转批量任务失败 type=${type} taskStatus=${lastStatus}`);
             }
-            if (lastStatus != null && ![0, 1, 3, 4].includes(Number(lastStatus))) {
-                throw new Error(`家庭中转批量任务异常 type=${type} taskStatus=${lastStatus}`);
-            }
         }
         throw new Error(`家庭中转批量任务超时 taskStatus=${lastStatus}`);
     }
@@ -709,7 +621,7 @@ class CasService {
                     familyId: String(familyId)
                 }
             });
-            const deleteTaskId = deleteResult?.taskId || deleteResult?.data?.taskId || deleteResult?.taskID || deleteResult?.data?.taskID;
+            const deleteTaskId = deleteResult?.taskId || deleteResult?.data?.taskId;
             if (deleteTaskId) {
                 await this._waitForBatchTask(cloud189, 'DELETE', deleteTaskId);
             }
@@ -723,7 +635,7 @@ class CasService {
                     familyId: String(familyId)
                 }
             });
-            const clearTaskId = clearResult?.taskId || clearResult?.data?.taskId || clearResult?.taskID || clearResult?.data?.taskID;
+            const clearTaskId = clearResult?.taskId || clearResult?.data?.taskId;
             if (clearTaskId) {
                 await this._waitForBatchTask(cloud189, 'CLEAR_RECYCLE', clearTaskId);
             }
@@ -733,11 +645,6 @@ class CasService {
         }
     }
 
-    /**
-     * 构建 AccessToken 签名：
-     *   AccessToken=xxx&Timestamp=xxx&key1=val1&key2=val2...（按 key 字典序）
-     *   MD5 小写
-     */
     _buildAccessTokenSignature(accessToken, params) {
         const timestamp = String(Date.now());
         const entries = Object.entries(params || {}).sort((a, b) => a[0].localeCompare(b[0]));

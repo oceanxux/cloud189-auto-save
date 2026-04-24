@@ -20,18 +20,26 @@ class ConfigService {
         mediaSuffix: '.mkv;.iso;.ts;.mp4;.avi;.rmvb;.wmv;.m2ts;.mpg;.flv;.rm;.mov;.cas', // 媒体文件后缀
         enableOnlySaveMedia: false, // 只保存媒体文件
         enableAutoDeleteCompletedTask: false, // 任务完结后自动删除任务记录
-        // CAS 秒传走家庭中转（个人空间被风控时自动回退）
-        enableFamilyTransit: true,
-        enableFamilyTransitFirst: false, 
-        // 文件夹不存在时重新创建
         enableAutoCreateFolder: false,
         autoCreate: {
           accountId: '',
           targetFolderId: '',
           targetFolder: '',
           organizerTargetFolderId: '',
-          organizerTargetFolderName: ''
+          organizerTargetFolderName: '',
+          mode: 'lazy'
         }
+      },
+      // CAS 配置（已迁移到独立配置节点，保留 task 部分用于兼容）
+      cas: {
+        enableAutoRestore: false,      // 启用自动恢复
+        autoRestorePaths: [],          // 自动恢复监控路径 [{ accountId, folderId, folderPath, enabled }]
+        deleteCasAfterRestore: true,   // 恢复后删除CAS文件
+        deleteSourceAfterGenerate: false, // 生成CAS后删除源文件
+        enableFamilyTransit: true,     // 启用家庭中转
+        familyTransitFirst: false,     // 优先家庭中转
+        scanInterval: 300,             // 扫描间隔（秒）
+        tempFileTtl: 300               // 临时播放文件保留时间（秒）
       },
       wecom: {
         enable: false,
@@ -81,7 +89,9 @@ class ConfigService {
         password: 'admin',
         baseUrl: '',
         apiKey: '',
-        streamProxySecret: ''
+        streamProxySecret: '',
+        logExpireDays: 7,
+        logCleanupCron: '0 3 * * *'
       },
       strm: {
         enable: false,

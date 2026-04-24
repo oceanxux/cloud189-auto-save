@@ -35,7 +35,7 @@ class AIService {
                 if (attempt >= maxAttempts) {
                     throw error;
                 }
-                logTaskEvent(`${operationName}失败，第${attempt}/${maxAttempts}次尝试: ${errorMessage}，${delayMs}ms后重试`);
+                logTaskEvent(`${operationName}失败，第${attempt}/${maxAttempts}次尝试: ${errorMessage}，${delayMs}ms后重试`, 'error', 'ai');
                 await new Promise(resolve => setTimeout(resolve, delayMs));
             }
         }
@@ -91,7 +91,7 @@ class AIService {
 
         const waitingCount = Math.max(0, this.flowControl.queueSize - 1);
         if (waitingCount > 0) {
-            logTaskEvent(`AI流控：${operationName}进入队列，前方还有 ${waitingCount} 个请求`);
+            logTaskEvent(`AI流控：${operationName}进入队列，前方还有 ${waitingCount} 个请求`, 'info', 'ai');
         }
 
         try {
@@ -125,19 +125,19 @@ class AIService {
                         'Authorization': `Bearer ${apiKey}`,
                         'Content-Type': 'application/json'
                     },
-                    responseType: 'json'
-                });
+                    timeout: 180000,
+                    retry: 0
+                }).json();
 
                 return {
                     success: true,
-                    data: response.body.choices[0].message.content
+                    data: response.choices[0].message.content
                 };
-            });
+            }, openaiConfig);
         } catch (error) {
             let errorDetails = error.message;
             if (error.response) {
                 errorDetails += `\n状态码: ${error.response.statusCode}`;
-                errorDetails += `\n响应头: ${JSON.stringify(error.response.headers)}`;
                 errorDetails += `\n响应体: ${JSON.stringify(error.response.body)}`;
             }
 
@@ -162,8 +162,9 @@ class AIService {
                 content: `你是一个专业的影视剧文件夹名称标准化助手。你的任务是将各种格式的季度文件夹名称转换为标准格式。
 
                 输入信息说明：
-                1. name 字段必须是纯净的影视剧名称，不能包含年份、季数等信息。**当资源路径中包含括号内的年份时（如 "请回答1994(2025)"），括号前的所有文本（包括数字 "1994" 和文字 "请回答"）都应合并作为 name 字段，即 "请回答1994"。**
-                2. 资源路径：包含影视剧的主要信息，**如果资源路径中同时包含普通年份和括号内的年份（如 "请回答1994(2025)"），请优先提取括号内的年份作为最终年份。**
+                1. name 字段必须是纯净的影视剧名称，不能包含年份、季数等信息。
+                   **重要规则：如果资源路径(resourcePath)的最后一级目录是季数或部分信息（如 "Season 01", "第1季", "Part 1" 等），你必须向上看其父级目录名来提取影视剧名称。**
+                2. 资源路径：包含影视剧的主要信息。
                 3. 文件夹列表：需要标准化的文件夹信息
 
                 文件夹命名规则：
@@ -249,7 +250,8 @@ class AIService {
                             role: 'system',
                             content: `你是一个专业的影视剧文件名解析助手。你的任务是客观地解析文件名和文件夹名，不要对内容做主观判断。
                             无论文件名的内容是什么，都要尽可能提取以下信息：
-                            1. name 字段必须是纯净的影视剧名称，不能包含年份、季数等信息
+                            1. name 字段必须是纯净的影视剧名称，不能包含年份、季数等信息。
+                               **重要规则：如果资源路径(resourcePath)的最后一级目录是季数或部分信息（如 "Season 01", "第1季", "Part 1" 等），你必须向上看其父级目录名来提取影视剧名称。**
                             2. 所有年份信息必须提取到 year 字段中
                             3. 如果无法确定年份，返回0, 如果无法确定季编号, 返回01
                             4. 如果无法判断类型，默认为 movie
@@ -262,7 +264,7 @@ class AIService {
                                 season: string,  // 季编号，必须是纯数字字符串，如："01"
                                 episode: [{ // 仅包含当前处理的 chunk 的剧集信息
                                     id: string,
-                                    name: string, // 使用父级目录中提取到的纯净的影视剧名称，不含年份
+                                    name: string, // 使用提取到的纯净的影视剧名称，不含年份
                                     season: string,  // 季编号，必须是纯数字字符串，如："01"
                                     episode: string,  // 集编号，如果小于100使用两位数字（如："01"），大于等于100使用实际位数
                                     extension: string
@@ -276,8 +278,7 @@ class AIService {
                                - 不要包含'S'或'E'前缀
                             2. 如果无法确定季编号, 返回01
                             3. 每个剧集必须包含名称：
-                                 * 优先使用所在文件夹的纯净的影视剧名称，不能包含年份、季数等信息
-                                 * 保留纯粹的剧集名称，确保与文件夹名称保持一致
+                                 * 使用分析出的影视剧名称，不能包含年份、季数等信息
                             2. 文件扩展名必须包含点号（如：'.mkv', '.mp4'）。
                             5. 年份必须是数字类型
                             6. 必须严格按照此格式返回，不要添加任何额外说明文字
@@ -398,11 +399,11 @@ class AIService {
             return { success: false, error: 'AI服务未配置或未启用' };
         }
         if (!filterDescription) {
-            logTaskEvent('AI过滤：无过滤描述，跳过AI调用');
+            logTaskEvent('AI过滤：无过滤描述，跳过AI调用', 'warn', 'ai');
             return { success: false, error: '缺少过滤描述' };
         }
         if (!files || files.length === 0) {
-            logTaskEvent('AI过滤：文件列表为空，无需过滤');
+            logTaskEvent('AI过滤：文件列表为空，无需过滤', 'info', 'ai');
             return { success: true, data: [] }; // 返回空数组
         }
 
@@ -410,11 +411,11 @@ class AIService {
         let allKeptFileIds = []; // 用于收集所有需要保留的文件 ID
 
         try {
-            logTaskEvent(`AI过滤：开始处理 ${files.length} 个文件，分块大小 ${CHUNK_SIZE}`);
+            logTaskEvent(`AI过滤：开始处理 ${files.length} 个文件，分块大小 ${CHUNK_SIZE}`, 'info', 'ai');
             for (let i = 0; i < files.length; i += CHUNK_SIZE) {
                 const chunk = files.slice(i, i + CHUNK_SIZE);
                 const chunkNumber = i / CHUNK_SIZE + 1;
-                logTaskEvent(`AI过滤：处理块 ${chunkNumber}...`);
+                logTaskEvent(`AI过滤：处理块 ${chunkNumber}...`, 'info', 'ai');
 
                 const messages = [
                     {
@@ -485,14 +486,14 @@ class AIService {
                     }
                 ];
 
-                logTaskEvent(`AI过滤：调用AI处理块 ${chunkNumber}，描述: ${filterDescription}`);
+                logTaskEvent(`AI过滤：调用AI处理块 ${chunkNumber}，描述: ${filterDescription}`, 'info', 'ai');
                 const resultChunk = await this._retryOperation(`AI过滤块 ${chunkNumber}`, async () => {
                     const response = await this.chat(messages, {
                         temperature: 0.1,
                         max_tokens: 2000 // 调整 max_tokens 以适应 ID 列表的输出
                     });
                     if (!response.success) {
-                        logTaskEvent(`AI过滤：处理块 ${chunkNumber} 失败 - ${response.error}`);
+                        logTaskEvent(`AI过滤：处理块 ${chunkNumber} 失败 - ${response.error}`, 'error', 'ai');
                         throw new Error(`AI 调用失败 (块 ${chunkNumber}): ${response.error}`);
                     }
 
@@ -500,18 +501,18 @@ class AIService {
                     const parsedChunk = JSON.parse(cleanData);
 
                     if (!Array.isArray(parsedChunk) || !parsedChunk.every(id => typeof id === 'string' || typeof id === 'number')) {
-                        logTaskEvent(`AI过滤：块 ${chunkNumber} 返回格式错误，期望得到 ID 字符串或数字数组。原始数据: ${response.data}`);
+                        logTaskEvent(`AI过滤：块 ${chunkNumber} 返回格式错误，期望得到 ID 字符串或数字数组。原始数据: ${response.data}`, 'info', 'ai');
                         throw new Error(`AI 返回格式错误 (块 ${chunkNumber}): 期望得到 ID 字符串或数字数组`);
                     }
 
                     return parsedChunk;
                 });
 
-                logTaskEvent(`AI过滤：块 ${chunkNumber} 成功解析，得到 ${resultChunk.length} 个文件 ID。`);
+                logTaskEvent(`AI过滤：块 ${chunkNumber} 成功解析，得到 ${resultChunk.length} 个文件 ID。`, 'info', 'ai');
                 allKeptFileIds.push(...resultChunk); // 合并当前块的结果
             } // end for loop
 
-            logTaskEvent(`AI过滤：所有块处理完成，总共保留 ${allKeptFileIds.length} 个文件 ID。`);
+            logTaskEvent(`AI过滤：所有块处理完成，总共保留 ${allKeptFileIds.length} 个文件 ID。`, 'info', 'ai');
             // 注意：这里返回的是 ID 列表，而不是完整的文件对象列表
             // 在 task.js 中需要根据这个 ID 列表去过滤原始的 fileList
             return {
@@ -521,7 +522,7 @@ class AIService {
 
         } catch (error) {
             // 捕获循环中或 chat 调用中的错误
-            logTaskEvent(`AI过滤：处理过程中发生错误 - ${error.message}`);
+            logTaskEvent(`AI过滤：处理过程中发生错误 - ${error.message}`, 'error', 'ai');
             console.error("AI filterMediaFiles 处理出错:", error.message);
             return {
                 success: false,
@@ -529,8 +530,6 @@ class AIService {
             };
         }
     }
-
-
 
     async streamChat(message, onChunk) {
         try {
@@ -559,8 +558,9 @@ class AIService {
                         'Authorization': `Bearer ${apiKey}`,
                         'Content-Type': 'application/json'
                     },
-                    responseType: 'text',
-                    isStream: true
+                    isStream: true,
+                    timeout: 180000,
+                    retry: 0
                 });
 
                 // 处理流式响应
@@ -615,7 +615,6 @@ class AIService {
             throw error;
         }
     }
-
 
     _validateResponse(result) {
         // 基础验证

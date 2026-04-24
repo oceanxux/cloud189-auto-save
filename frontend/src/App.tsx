@@ -1,35 +1,19 @@
+// BUILD_VERSION: 1777002000000
 import React, { useState, useEffect } from 'react';
 import { 
-  User, 
-  Files, 
-  ClipboardList, 
-  PlayCircle, 
-  LayoutGrid, 
-  Rss, 
-  Link2, 
-  Settings, 
-  Monitor,
-  Search,
-  Bell,
-  Menu,
-  LogOut,
-  MessageSquare,
-  Moon,
-  Sun,
-  RotateCcw,
-  ChevronDown,
-  Terminal
+  User, Files, ClipboardList, PlayCircle, LayoutGrid, Rss, Link2, Settings, Monitor, Search, Bell, Menu, LogOut, MessageSquare, Moon, Sun, RotateCcw, ChevronDown, Terminal, Sparkles, X, Clapperboard, Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-// --- Components ---
+// --- 组件导入 ---
 import FloatingActions from './components/FloatingActions';
 import CreateTaskModal from './components/CreateTaskModal';
 import LogConsole from './components/LogConsole';
 import CloudSaverModal from './components/CloudSaverModal';
 import AIChat from './components/AIChat';
+import FolderSelector, { SelectedFolder } from './components/FolderSelector';
 
-// --- Tabs ---
+// --- 标签页导入 ---
 import AccountTab from './components/tabs/AccountTab';
 import TaskTab from './components/tabs/TaskTab';
 import FileManagerTab from './components/tabs/FileManagerTab';
@@ -38,308 +22,192 @@ import OrganizerTab from './components/tabs/OrganizerTab';
 import SubscriptionTab from './components/tabs/SubscriptionTab';
 import StrmConfigTab from './components/tabs/StrmConfigTab';
 import MediaTab from './components/tabs/MediaTab';
+import TMDBTab from './components/tabs/TMDBTab';
+import CasTab from './components/tabs/CasTab';
 import SettingsTab from './components/tabs/SettingsTab';
+import Toast, { ToastType } from './components/Toast';
 
-// --- Types ---
-type TabType = 'account' | 'fileManager' | 'task' | 'autoSeries' | 'organizer' | 'subscription' | 'strmConfig' | 'media' | 'settings';
-
-export default function App() {
-  const [activeTab, setActiveTab] = useState<TabType>('task');
-  const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
-  const [isLogsOpen, setIsLogsOpen] = useState(false);
-  const [isCloudSaverOpen, setIsCloudSaverOpen] = useState(false);
-  const [isAIChatOpen, setIsAIChatOpen] = useState(false);
-  const [createTaskInitialData, setCreateTaskInitialData] = useState<any>(null);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [taskRefreshKey, setTaskRefreshKey] = useState(0);
-  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [isRestarting, setIsRestarting] = useState(false);
+function App() {
+  const [activeTab, setActiveTab] = useState('task');
   const [isDarkMode, setIsDarkMode] = useState(() => {
-    return localStorage.getItem('theme') === 'dark' || 
-      (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const saved = localStorage.getItem('darkMode');
+    return saved ? JSON.parse(saved) : window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
+  // Toast 状态
+  const [toast, setToast] = useState<{ isVisible: boolean; message: string; type: ToastType }>({
+    isVisible: false,
+    message: '',
+    type: 'info'
+  });
+
+  const showToast = (message: string, type: ToastType = 'info') => {
+    setToast({ isVisible: true, message, type });
+  };
+
+  const [isLogsOpen, setIsLogsOpen] = useState(false);
+  const [isAIChatOpen, setIsAIChatOpen] = useState(false);
+  const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
+  const [isCloudSaverOpen, setIsCloudSaverOpen] = useState(false);
+  const [createTaskData, setCreateTaskData] = useState<any>(null);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [taskRefreshKey, setTaskRefreshKey] = useState(0);
+  const [isRestarting, setIsRestarting] = useState(false);
+
+  // 目录选择器
+  const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
+  const [folderSelectorMode, setFolderSelectorMode] = useState<'target' | 'organizer' | 'manual_strm'>('target');
+
   useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-    }
+    localStorage.setItem('darkMode', JSON.stringify(isDarkMode));
+    if (isDarkMode) document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
 
-  useEffect(() => {
-    const handleWindowClick = () => {
-      setIsUserMenuOpen(false);
-    };
-    window.addEventListener('click', handleWindowClick);
-    return () => window.removeEventListener('click', handleWindowClick);
-  }, []);
-
-  const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
-
-  const tabs: { id: TabType, label: string, icon: any }[] = [
-    { id: 'account', label: '账号', icon: User },
-    { id: 'fileManager', label: '文件', icon: Files },
-    { id: 'task', label: '任务', icon: ClipboardList },
-    { id: 'autoSeries', label: '自动追剧', icon: PlayCircle },
-    { id: 'organizer', label: '整理器', icon: LayoutGrid },
-    { id: 'subscription', label: '订阅', icon: Rss },
-    { id: 'strmConfig', label: 'STRM', icon: Link2 },
-    { id: 'media', label: '媒体', icon: Monitor },
-    { id: 'settings', label: '系统', icon: Settings },
+  const tabs = [
+    { id: 'tmdb', label: 'TMDB资源', icon: Clapperboard },
+    { id: 'account', label: '账户中心', icon: User },
+    { id: 'fileManager', label: '文件管理', icon: Files },
+    { id: 'task', label: '任务中心', icon: ClipboardList },
+    { id: 'autoSeries', label: '智能追剧', icon: PlayCircle },
+    { id: 'cas', label: '妙传中心', icon: Zap },
+    { id: 'organizer', label: '整理任务', icon: LayoutGrid },
+    { id: 'subscription', label: '资源订阅', icon: Rss },
+    { id: 'strmConfig', label: 'STRM 配置', icon: Link2 },
+    { id: 'media', label: '媒体链路', icon: Monitor },
+    { id: 'settings', label: '系统设置', icon: Settings },
   ];
 
-  const activeTabLabel = tabs.find(t => t.id === activeTab)?.label || '控制台';
-  const tabDescriptions: Record<TabType, string> = {
-    account: '统一管理账号、容量与目录映射',
-    fileManager: '浏览文件、批量重命名与移动',
-    task: '追更任务、整理状态与执行记录',
-    autoSeries: '自动追剧规则与订阅命中',
-    organizer: '整理器任务与归档状态',
-    subscription: '订阅资源、转存与后续执行',
-    strmConfig: 'STRM 配置、输出路径与代理',
-    media: 'TMDB、Alist、CloudSaver 与 AI 媒体链路',
-    settings: '系统、推送、Bot 与运行参数'
+  const activeTabLabel = tabs.find(t => t.id === activeTab)?.label || '';
+  const tabDescriptions: Record<string, string> = {
+    account: '管理账号授权与存储详情',
+    task: '实时监控转存与刮削状态',
+    fileManager: '云盘浏览、移动与重命名',
+    autoSeries: '资源自动搜索与任务创建',
+    tmdb: 'TMDB 热门影视与追剧入口',
+    cas: '秒传存根恢复与极速导入',
+    organizer: '媒体库自动归档任务管理',
+    subscription: '追更资源订阅与更新检查',
+    strmConfig: 'STRM 生成模版与挂载规则',
+    media: 'AI 重命名、TMDB 与 Alist 链路',
+    settings: '系统认证、代理与通知设置'
   };
 
-  const handleOpenCreateTask = (initialData?: any) => {
-    setCreateTaskInitialData(initialData || null);
-    setIsCreateTaskOpen(true);
-  };
+  const handleLogout = () => { if (window.confirm('确定退出？')) window.location.href = '/login.html'; };
 
-  const handleLogout = async () => {
-    if (!confirm('确定要退出登录吗？')) return;
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      window.location.href = '/login';
-    } catch (e) {
-      window.location.href = '/login';
-    }
-  };
-
-  const handleRestartContainer = async () => {
+  const handleRestart = async () => {
     if (isRestarting) return;
-    if (!confirm('确定要重启整个容器吗？服务会短暂中断。')) return;
+    if (!window.confirm('确定重启当前服务？服务会短暂断开连接。')) return;
+
+    setIsRestarting(true);
     try {
-      setIsRestarting(true);
-      const response = await fetch('/api/system/restart', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      const responseText = await response.text();
-      const result = responseText ? JSON.parse(responseText) : { success: response.ok };
-      if (!result.success) {
-        throw new Error(result.error || '重启失败');
+      const response = await fetch('/api/system/restart', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || data.error || '重启失败');
       }
-      alert('已发送重启请求，页面将在数秒后断开。');
-      setTimeout(() => window.location.reload(), 4000);
+      showToast('重启请求已发送，服务将在数秒后断开并等待容器拉起。', 'info');
+      setIsUserMenuOpen(false);
     } catch (error: any) {
-      alert(`重启失败: ${error.message || '未知错误'}`);
+      showToast(error?.message || '重启失败', 'error');
+    } finally {
       setIsRestarting(false);
     }
   };
 
-  const handleFloatingAction = (id: string) => {
-    switch (id) {
-      case 'createTask':
-        handleOpenCreateTask();
-        break;
-      case 'cloudsaver':
-        setIsCloudSaverOpen(true);
-        break;
-      case 'strm':
-        setActiveTab('strmConfig');
-        break;
-      case 'logs':
-        setIsLogsOpen(true);
-        break;
-      case 'chat':
-        setIsAIChatOpen(true);
-        break;
-      default:
-        break;
+  const handleFloatingAction = (action: string) => {
+    if (action === 'createTask') setIsCreateTaskOpen(true);
+    else if (action === 'cloudsaver') setIsCloudSaverOpen(true);
+    else if (action === 'chat') setIsAIChatOpen(true);
+    else if (action === 'strm') {
+       setFolderSelectorMode('manual_strm');
+       setIsFolderSelectorOpen(true);
     }
   };
 
+  const handleManualStrm = async (folder: SelectedFolder) => {
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: `帮我整理目录 ${folder.name}`, executeAction: true })
+      });
+      if ((await response.json()).success) {
+        setActiveTab('task');
+        showToast(`已开始整理目录: ${folder.name}`, 'success');
+      }
+    } catch (e) { showToast('操作失败', 'error'); }
+  };
+
   return (
-    <div className="flex h-screen overflow-hidden font-sans transition-colors duration-200">
+    <div className={`flex h-screen w-full transition-colors duration-300 ${isDarkMode ? 'dark' : ''} overflow-hidden`}>
       
-      {/* Mobile Navigation Drawer Overlay */}
+      {/* 移动端菜单 */}
       <AnimatePresence>
         {isMobileMenuOpen && (
-          <>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="fixed inset-0 bg-slate-900/40 z-40 md:hidden dark:bg-slate-950/60"
-            />
-            <motion.nav 
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              transition={{ type: 'spring', bounce: 0, duration: 0.4 }}
-              className="fixed inset-y-0 left-0 w-72 flex flex-col z-50 md:hidden border-r border-[var(--border-color)] bg-[var(--bg-elevated)] backdrop-blur-xl shadow-[var(--app-shadow)]"
-            >
-              <div className="px-6 py-7">
-                <div className="rounded-[28px] border border-[var(--border-color)] bg-[linear-gradient(135deg,rgba(20,89,199,0.12),rgba(255,255,255,0.72))] px-5 py-5 shadow-sm">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--text-secondary)]">Cloud Workflow</p>
-                  <h1 className="mt-2 text-[28px] font-extrabold tracking-tight text-[var(--text-primary)]">天翼自动转存</h1>
-                  <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">任务追更、媒体整理与系统动作统一控制台</p>
-                </div>
+          <div className="fixed inset-0 z-[2000] md:hidden">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsMobileMenuOpen(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
+            <motion.nav initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="absolute inset-y-0 left-0 w-64 bg-[var(--bg-sidebar)] p-6 shadow-2xl">
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-2.5"><Sparkles size={20} className="text-[var(--app-accent)]" /><h1 className="text-xl font-black text-[var(--text-primary)]">工作台</h1></div>
+                <button onClick={() => setIsMobileMenuOpen(false)}><X size={24} /></button>
               </div>
-              <div className="flex-1 px-3 space-y-1 overflow-y-auto custom-scrollbar">
+              <div className="space-y-1.5 overflow-y-auto custom-scrollbar">
                 {tabs.map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => {
-                      setActiveTab(tab.id);
-                      setIsMobileMenuOpen(false);
-                    }}
-                    className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-sm font-semibold transition-all ${
-                      activeTab === tab.id 
-                        ? 'text-[var(--nav-active-text)] shadow-sm'
-                        : 'text-[var(--text-primary)] hover:bg-white/60 dark:hover:bg-slate-800/50'
-                    }`}
-                    style={activeTab === tab.id ? { background: 'var(--nav-active-bg)' } : undefined}
-                  >
-                    <tab.icon size={22} className={activeTab === tab.id ? 'text-[var(--nav-active-text)]' : 'text-[var(--text-secondary)]'} />
-                    {tab.label}
+                  <button key={tab.id} onClick={() => { setActiveTab(tab.id); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${activeTab === tab.id ? 'bg-[var(--app-accent)] text-[var(--bg-main)] shadow-sm' : 'text-[var(--text-secondary)]'}`}>
+                    <tab.icon size={20} />{tab.label}
                   </button>
                 ))}
               </div>
-              <div className="p-4 border-t border-[var(--border-color)]">
-                <button 
-                  onClick={handleLogout}
-                  className="w-full flex items-center gap-4 px-4 py-3.5 rounded-full text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
-                >
-                  <LogOut size={22} />
-                  退出登录
-                </button>
-              </div>
             </motion.nav>
-          </>
+          </div>
         )}
       </AnimatePresence>
 
-      {/* Desktop Navigation Drawer */}
-      <nav className="hidden w-72 flex-col border-r border-[var(--border-color)] bg-[var(--bg-elevated)] backdrop-blur-xl md:flex">
-        <div className="px-6 py-7">
-          <div className="rounded-[28px] border border-[var(--border-color)] bg-[linear-gradient(135deg,rgba(20,89,199,0.12),rgba(255,255,255,0.72))] px-5 py-5 shadow-sm">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--text-secondary)]">Cloud Workflow</p>
-            <h1 className="mt-2 text-[28px] font-extrabold tracking-tight text-[var(--text-primary)]">天翼自动转存</h1>
-            <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">任务追更、媒体整理与系统动作统一控制台</p>
-          </div>
+      {/* 桌面端侧边栏 */}
+      <nav className="hidden w-48 flex-col border-r border-[var(--border-color)] bg-[var(--bg-sidebar)] md:flex z-20">
+        <div className="px-5 py-8 flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-[var(--app-accent)] flex items-center justify-center shadow-lg"><Sparkles size={16} className="text-[var(--bg-main)]" /></div>
+          <h1 className="text-base font-black tracking-tight truncate text-[var(--text-primary)]">工作台</h1>
         </div>
-        <div className="flex-1 px-3 space-y-1 overflow-y-auto pb-6 custom-scrollbar">
+        <div className="flex-1 px-2.5 space-y-1 overflow-y-auto pb-6 custom-scrollbar">
           {tabs.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-4 px-5 py-3.5 rounded-2xl text-sm font-semibold transition-all ${
-                activeTab === tab.id 
-                  ? 'text-[var(--nav-active-text)] shadow-sm' 
-                  : 'text-[var(--text-primary)] hover:bg-white/60 dark:hover:bg-slate-800/50'
-              }`}
-              style={activeTab === tab.id ? { background: 'var(--nav-active-bg)' } : undefined}
-            >
-              <tab.icon size={22} className={activeTab === tab.id ? 'text-[var(--nav-active-text)]' : 'text-[var(--text-secondary)]'} />
-              {tab.label}
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-xs font-black transition-all ${activeTab === tab.id ? 'bg-[var(--nav-active-bg)] text-[var(--nav-active-text)] shadow-sm ring-1 ring-slate-200/50 dark:ring-slate-700/50' : 'text-[var(--text-secondary)] hover:bg-[var(--nav-hover-bg)]'}`}>
+              <tab.icon size={16} strokeWidth={activeTab === tab.id ? 3 : 2.5} />{tab.label}
             </button>
           ))}
         </div>
-        <div className="p-4 border-t border-[var(--border-color)]">
-          <button 
-            onClick={handleLogout}
-            className="w-full flex items-center gap-4 px-5 py-3.5 rounded-full text-sm font-medium text-[var(--text-secondary)] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-          >
-            <LogOut size={22} />
-            退出登录
-          </button>
+        <div className="p-3 border-t border-[var(--border-color)]">
+          <button onClick={handleLogout} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-black text-red-500 hover:bg-red-50"><LogOut size={16} />退出</button>
         </div>
       </nav>
 
-      {/* Main Content Area */}
-      <main className="relative m-3 flex h-[calc(100vh-1.5rem)] min-w-0 flex-1 flex-col overflow-hidden rounded-[32px] border border-[var(--border-color)] bg-[var(--bg-elevated)] shadow-[var(--app-shadow)] backdrop-blur-xl transition-colors duration-200">
-        
-        {/* Top App Bar */}
-        <header className="sticky top-0 z-10 flex min-h-[84px] items-center justify-between border-b border-[var(--border-color)] bg-[var(--bg-elevated)]/90 px-4 md:px-8 backdrop-blur-xl transition-colors duration-200">
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-[var(--text-primary)] md:hidden"
-            >
-              <Menu size={24} />
-            </button>
-            <div>
-              <h2 className="text-[30px] font-extrabold tracking-tight text-[var(--text-primary)]">{activeTabLabel}</h2>
-              <p className="mt-1 text-sm text-[var(--text-secondary)] hidden md:block">{tabDescriptions[activeTab]}</p>
+      {/* 主体内容 */}
+      <main className="relative flex flex-1 flex-col overflow-hidden bg-[var(--bg-surface)] z-0">
+        <header className="sticky top-0 z-30 flex min-h-[56px] items-center justify-between border-b border-[var(--border-color)] bg-[var(--bg-main)]/80 px-5 backdrop-blur-xl transition-colors duration-200">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsMobileMenuOpen(true)} className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-[var(--text-primary)] md:hidden"><Menu size={20} /></button>
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-base font-black text-[var(--text-primary)]">{activeTabLabel}</h2>
+              <span className="hidden text-[10px] font-bold text-slate-400 md:block opacity-60">/ {tabDescriptions[activeTab]}</span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={toggleDarkMode}
-              className="p-2.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-[var(--text-primary)]"
-              title={isDarkMode ? "切换到亮色模式" : "切换到深色模式"}
-            >
-              {isDarkMode ? <Sun size={22} /> : <Moon size={22} />}
-            </button>
-            <button 
-              onClick={() => setIsAIChatOpen(true)}
-              className="p-2.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-[var(--text-primary)]"
-              title="AI 助手"
-            >
-              <MessageSquare size={22} />
-            </button>
-            <button
-              onClick={() => setIsLogsOpen(true)}
-              className={`p-2.5 rounded-full transition-colors ${
-                isLogsOpen
-                  ? 'bg-[#d3e3fd] text-[#0b57d0]'
-                  : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-[var(--text-primary)]'
-              }`}
-              title="实时日志"
-            >
-              <Terminal size={22} />
-            </button>
-            <div className="relative ml-2" onClick={(e) => e.stopPropagation()}>
-              <button
-                onClick={() => setIsUserMenuOpen(prev => !prev)}
-              className="flex items-center gap-1 rounded-full border border-[var(--border-color)] bg-white/70 p-1 pr-2 transition-colors hover:bg-white dark:bg-slate-900/40 dark:hover:bg-slate-900/60"
-              title="用户菜单"
-            >
-                <div className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full bg-[var(--app-accent)] text-sm font-bold text-white transition-shadow hover:shadow-md">
-                  U
-                </div>
-                <ChevronDown size={16} className="text-[var(--text-secondary)] hidden sm:block" />
-              </button>
+          <div className="flex items-center gap-1.5">
+            <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-xl hover:bg-[var(--nav-hover-bg)] text-[var(--text-primary)]">{isDarkMode ? <Sun size={18} /> : <Moon size={18} />}</button>
+            <button onClick={() => setIsAIChatOpen(true)} className="p-2 rounded-xl hover:bg-[var(--nav-hover-bg)] text-[var(--text-primary)]"><MessageSquare size={18} /></button>
+            <button onClick={() => setIsLogsOpen(true)} className={`p-2 rounded-xl transition-all ${isLogsOpen ? 'bg-blue-100 text-blue-600' : 'hover:bg-[var(--nav-hover-bg)] text-[var(--text-primary)]'}`}><Terminal size={18} /></button>
+            <div className="w-px h-4 bg-[var(--border-color)] mx-1" />
+            <div className="relative">
+              <button onClick={() => setIsUserMenuOpen(!isUserMenuOpen)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--app-accent)] text-[10px] font-black text-[var(--bg-main)] shadow-sm">U</button>
               <AnimatePresence>
                 {isUserMenuOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -8, scale: 0.98 }}
-                    transition={{ duration: 0.16, ease: 'easeOut' }}
-                    className="absolute right-0 top-14 z-20 w-56 rounded-3xl border border-[var(--border-color)] bg-[var(--bg-elevated)] p-2 shadow-[var(--app-shadow)] backdrop-blur-xl"
-                  >
-                    <button
-                      onClick={handleRestartContainer}
-                      disabled={isRestarting}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-[var(--text-primary)] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <RotateCcw size={18} />
-                      {isRestarting ? '重启中...' : '重启容器'}
+                  <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="absolute right-0 top-11 z-[500] w-48 rounded-2xl border border-[var(--border-color)] bg-[var(--modal-bg)] p-1.5 shadow-2xl backdrop-blur-2xl" onClick={e => e.stopPropagation()}>
+                    <button onClick={handleRestart} disabled={isRestarting} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-black text-amber-600 hover:bg-amber-50 disabled:opacity-60">
+                      <RotateCcw size={16} className={isRestarting ? 'animate-spin' : ''} />
+                      {isRestarting ? '重启中' : '重启服务'}
                     </button>
-                    <button
-                      onClick={handleLogout}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
-                    >
-                      <LogOut size={18} />
-                      退出登录
-                    </button>
+                    <button onClick={handleLogout} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-black text-red-500 hover:bg-red-50"><LogOut size={16} />退出登录</button>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -347,71 +215,50 @@ export default function App() {
           </div>
         </header>
 
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto px-4 pb-32 pt-5 md:px-8 custom-scrollbar">
-          <div className="mx-auto max-w-7xl">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activeTab}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-              >
-                {activeTab === 'account' && <AccountTab />}
-                {activeTab === 'task' && (
-                  <TaskTab 
-                    key={`task-tab-${taskRefreshKey}`} 
-                    onCreateTask={(data) => handleOpenCreateTask(data)} 
-                  />
-                )}
-                {activeTab === 'fileManager' && <FileManagerTab />}
-                {activeTab === 'autoSeries' && <AutoSeriesTab />}
-                {activeTab === 'organizer' && <OrganizerTab />}
-                {activeTab === 'subscription' && <SubscriptionTab onTransfer={handleOpenCreateTask} />}
-                {activeTab === 'strmConfig' && <StrmConfigTab />}
-                {activeTab === 'media' && <MediaTab />}
-                {activeTab === 'settings' && <SettingsTab />}
-              </motion.div>
-            </AnimatePresence>
-          </div>
+        <div className="flex-1 overflow-y-auto px-5 pb-20 pt-4 md:px-6 custom-scrollbar z-0">
+          <AnimatePresence mode="wait">
+            <motion.div key={activeTab} initial={{ opacity: 0, y: 10, filter: 'blur(4px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }} transition={{ duration: 0.3 }}>
+              {activeTab === 'account' && <AccountTab onShowToast={showToast} />}
+              {activeTab === 'fileManager' && <FileManagerTab onShowToast={showToast} />}
+              {activeTab === 'task' && <TaskTab key={`task-${taskRefreshKey}`} onCreateTask={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} />}
+              {activeTab === 'autoSeries' && <AutoSeriesTab onShowToast={showToast} />}
+              {activeTab === 'tmdb' && <TMDBTab onShowToast={showToast} />}
+              {activeTab === 'cas' && <CasTab onShowToast={showToast} />}
+              {activeTab === 'organizer' && <OrganizerTab onShowToast={showToast} />}
+              {activeTab === 'subscription' && <SubscriptionTab onTransfer={() => setIsCreateTaskOpen(true)} onShowToast={showToast} />}
+              {activeTab === 'strmConfig' && <StrmConfigTab onShowToast={showToast} />}
+              {activeTab === 'media' && <MediaTab onShowToast={showToast} />}
+              {activeTab === 'settings' && <SettingsTab onShowToast={showToast} />}
+            </motion.div>
+          </AnimatePresence>
         </div>
-
         <FloatingActions onAction={handleFloatingAction} />
       </main>
 
-      {/* Modals */}
+      {/* 全局浮层 */}
+      <Toast 
+        isVisible={toast.isVisible} 
+        message={toast.message} 
+        type={toast.type} 
+        onClose={() => setToast(prev => ({ ...prev, isVisible: false }))} 
+      />
       <CreateTaskModal 
         isOpen={isCreateTaskOpen} 
-        onClose={() => {
-          setIsCreateTaskOpen(false);
-          setCreateTaskInitialData(null);
-        }}
-        onSuccess={() => {
-          setTaskRefreshKey(prev => prev + 1);
-          setCreateTaskInitialData(null);
-        }}
-        initialData={createTaskInitialData}
+        onClose={() => setIsCreateTaskOpen(false)} 
+        initialData={createTaskData} 
+        onSuccess={() => { setIsCreateTaskOpen(false); setTaskRefreshKey(v => v + 1); }} 
+        onShowToast={showToast}
       />
-
-      <LogConsole 
-        isOpen={isLogsOpen} 
-        onClose={() => setIsLogsOpen(false)} 
-      />
-
-      <CloudSaverModal 
-        isOpen={isCloudSaverOpen} 
-        onClose={() => setIsCloudSaverOpen(false)} 
-        onTransfer={(data) => {
-          setIsCloudSaverOpen(false);
-          handleOpenCreateTask(data);
-        }}
-      />
-
+      <LogConsole isOpen={isLogsOpen} onClose={() => setIsLogsOpen(false)} />
+      <CloudSaverModal isOpen={isCloudSaverOpen} onClose={() => setIsCloudSaverOpen(false)} onTransfer={(d) => { setIsCloudSaverOpen(false); setCreateTaskData(d); setIsCreateTaskOpen(true); }} />
       <AIChat 
         isOpen={isAIChatOpen} 
         onClose={() => setIsAIChatOpen(false)} 
+        onShowToast={showToast}
       />
+      <FolderSelector isOpen={isFolderSelectorOpen} onClose={() => setIsFolderSelectorOpen(false)} accountId={0} title={folderSelectorMode === 'manual_strm' ? "选择要整理并生成 STRM 的目录" : "选择存入目录"} onSelect={(f: SelectedFolder) => { if (folderSelectorMode === 'manual_strm') handleManualStrm(f); setIsFolderSelectorOpen(false); }} />
     </div>
   );
 }
+
+export default App;

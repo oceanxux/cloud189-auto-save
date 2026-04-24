@@ -213,7 +213,7 @@ class TaskService {
                         }
                     }
                 } catch (error) {
-                    logTaskEvent('子文件夹 AI 分析失败，使用原始文件名: ' + error.message);
+                    logTaskEvent('子文件夹 AI 分析失败，使用原始文件名: ' + error.message, 'error', 'transfer');
                 }
             }
             const shouldReuseRootFolder = selectedSubFolders.length === 1
@@ -228,7 +228,7 @@ class TaskService {
                 const subFolderContent = await cloud189.listShareDir(shareInfo.shareId, folder.id, shareInfo.shareMode, taskDto.accessCode);
                 const hasFiles = subFolderContent?.fileListAO?.fileList?.length > 0;
                 if (!hasFiles) {
-                    logTaskEvent(`子文件夹 "${folder.name}" (ID: ${folder.id}) 为空，跳过目录。`);
+                    logTaskEvent(`子文件夹 "${folder.name}" (ID: ${folder.id}) 为空，跳过目录。`, 'warn', 'transfer');
                     continue; // 跳到下一个子文件夹
                 }
                 let realFolder;
@@ -330,7 +330,7 @@ class TaskService {
                 shareInfo.fileName = resourceInfo.year?`${resourceInfo.name} (${resourceInfo.year})`:resourceInfo.name;
                 taskDto.taskName = shareInfo.fileName;
             } catch (error) {
-                logTaskEvent('AI 分析失败，使用原始文件名: ' + error.message);
+                logTaskEvent('AI 分析失败，使用原始文件名: ' + error.message, 'error', 'transfer');
             }
         }
         // 如果任务名称存在 且和shareInfo的name不一致
@@ -575,11 +575,11 @@ class TaskService {
         const folderInfo = await cloud189.listFiles(folderId);
         // 如果folderInfo.res_code == FileNotFound 需要重新创建目录
         if (folderInfo?.res_code == "FileNotFound") {
-            logTaskEvent('文件夹不存在!')
+            logTaskEvent('文件夹不存在!', 'warn', 'transfer')
             if (!task) {
                 throw new Error('文件夹不存在!');
             }
-            logTaskEvent('正在重新创建目录');
+            logTaskEvent('正在重新创建目录', 'info', 'transfer');
             const enableAutoCreateFolder = ConfigService.getConfigValue('task.enableAutoCreateFolder');
             if (enableAutoCreateFolder) {
                 await this._autoCreateFolder(cloud189, task);
@@ -627,11 +627,11 @@ class TaskService {
             if (rootFolderInfo.res_code === "FileNotFound") {
                 // realRootFolderId 不存在或不可用，需要创建
                 const rootFolderName = task.resourceName.replace('(根)', '').trim();
-                logTaskEvent(`正在创建根目录: ${rootFolderName}`);
+                logTaskEvent(`正在创建根目录: ${rootFolderName}`, 'info', 'transfer');
                 const rootFolder = await cloud189.createFolder(rootFolderName, task.targetFolderId);
                 if (!rootFolder?.id) throw new Error('创建根目录失败');
                 task.realRootFolderId = rootFolder.id;
-                logTaskEvent(`根目录创建成功: ${rootFolderName}`);
+                logTaskEvent(`根目录创建成功: ${rootFolderName}`, 'info', 'transfer');
             }
         }
 
@@ -642,18 +642,18 @@ class TaskService {
         // 根目录任务在某些场景下 realFolderId 可能与 realRootFolderId 不一致，
         // 但 shareFolderName 为空，此时不能再尝试创建空名称目录。
         if (hasSubFolder && task.realRootFolderId !== task.realFolderId) {
-            logTaskEvent(`正在创建子目录: ${shareFolderName}`);
+            logTaskEvent(`正在创建子目录: ${shareFolderName}`, 'info', 'transfer');
             const subFolder = await cloud189.createFolder(shareFolderName, task.realRootFolderId);
             if (!subFolder?.id) throw new Error('创建子目录失败');
             task.realFolderId = subFolder.id;
-            logTaskEvent(`子目录创建成功: ${shareFolderName}`);
+            logTaskEvent(`子目录创建成功: ${shareFolderName}`, 'info', 'transfer');
         } else {
             // 根目录任务或缺少子目录名时，直接将 realFolderId 指向根目录。
             task.realFolderId = task.realRootFolderId;
         }
 
         await this.taskRepo.save(task);
-        logTaskEvent('目录创建完成');
+        logTaskEvent('目录创建完成', 'info', 'transfer');
     }
 
     // 处理新文件
@@ -738,13 +738,13 @@ class TaskService {
                 await this._saveProcessedFileRecord(task, casFile, 'done');
                 try {
                     await cloud189.deleteFile(transferredCasFile.id, transferredCasFile.name);
-                    logTaskEvent(`普通任务已删除CAS文件: ${transferredCasFile.name}`);
+                    logTaskEvent(`普通任务已删除CAS文件: ${transferredCasFile.name}`, 'info', 'transfer');
                 } catch (deleteError) {
-                    logTaskEvent(`普通任务删除CAS文件失败: ${transferredCasFile.name}, 错误: ${deleteError.message}`);
+                    logTaskEvent(`普通任务删除CAS文件失败: ${transferredCasFile.name}, 错误: ${deleteError.message}`, 'error', 'transfer');
                 }
             } catch (error) {
                 await this._saveProcessedFileRecord(task, casFile, 'failed', error.message);
-                logTaskEvent(`普通任务恢复CAS文件失败: ${casFile.name}, 错误: ${error.message}`);
+                logTaskEvent(`普通任务恢复CAS文件失败: ${casFile.name}, 错误: ${error.message}`, 'error', 'transfer');
                 throw error;
             }
         }
@@ -788,7 +788,7 @@ class TaskService {
 
     // 使用 AI 过滤文件列表
     async _filterFilesWithAI(task, fileList) {
-        logTaskEvent(`任务 ${task.id}: 尝试使用 AI 进行文件过滤...`);
+        logTaskEvent(`任务 ${task.id}: 尝试使用 AI 进行文件过滤...`, 'info', 'transfer');
 
         // 1. 构建中文过滤描述
         let filterDescription = '';
@@ -797,7 +797,7 @@ class TaskService {
         const value = task.matchValue; // 例如: "8", "特效", "1080p"
 
         if (!pattern || !operator || !value) {
-            logTaskEvent(`任务 ${task.id}: AI 过滤条件不完整，跳过 AI 过滤。`);
+            logTaskEvent(`任务 ${task.id}: AI 过滤条件不完整，跳过 AI 过滤。`, 'warn', 'transfer');
             return null; // 条件不完整，无法生成描述
         }
 
@@ -812,13 +812,13 @@ class TaskService {
                 operatorText = '不包含';
                 break;
             default:
-                logTaskEvent(`任务 ${task.id}: 未知的过滤操作符 "${operator}"，跳过 AI 过滤。`);
+                logTaskEvent(`任务 ${task.id}: 未知的过滤操作符 "${operator}"，跳过 AI 过滤。`, 'warn', 'transfer');
                 return null;
         }
 
         // 根据 pattern 生成更自然的描述
         filterDescription = `筛选出 ${pattern} ${operatorText} "${value}" 的文件。请根据文件名判断。`;
-        logTaskEvent(`任务 ${task.id}: 生成 AI 过滤描述: "${filterDescription}"`);
+        logTaskEvent(`任务 ${task.id}: 生成 AI 过滤描述: "${filterDescription}"`, 'info', 'transfer');
 
 
         // 2. 准备给 AI 的文件列表 (仅含 id 和 name)
@@ -829,18 +829,18 @@ class TaskService {
             const aiResponse = await AIService.filterMediaFiles(task.resourceName, filesForAI, filterDescription);
 
             if (aiResponse.success && Array.isArray(aiResponse.data)) {
-                logTaskEvent(`任务 ${task.id}: AI 文件过滤成功，保留 ${aiResponse.data.length} 个文件。`);
+                logTaskEvent(`任务 ${task.id}: AI 文件过滤成功，保留 ${aiResponse.data.length} 个文件。`, 'info', 'transfer');
                 // 使用 AI 返回的 id 列表来过滤原始的完整文件列表
                 const keptFileIds = new Set(aiResponse.data);
                 // 先应用后缀过滤，再应用AI过滤结果
                 const filteredList = fileList.filter(file => keptFileIds.has(file.id));
                 return filteredList; 
             } else {
-                logTaskEvent(`任务 ${task.id}: AI 文件过滤失败: ${aiResponse.error || '未知错误'}。`);
+                logTaskEvent(`任务 ${task.id}: AI 文件过滤失败: ${aiResponse.error || '未知错误'}。`, 'error', 'transfer');
                 return null;
             }
         } catch (error) {
-            logTaskEvent(`任务 ${task.id}: 调用 AI 文件过滤时发生错误: ${error.message}`);
+            logTaskEvent(`任务 ${task.id}: 调用 AI 文件过滤时发生错误: ${error.message}`, 'error', 'transfer');
             console.error(`AI filter error for task ${task.id}:`, error);
             return null; 
         }
@@ -865,13 +865,13 @@ class TaskService {
         }
 
         const reasonText = reason === 'share_invalid' ? '当前分享源失效' : '当前分享源无增量';
-        logTaskEvent(`任务[${task.resourceName}]${reasonText}，尝试通过 CloudSaver 自动换源...`);
+        logTaskEvent(`任务[${task.resourceName}]${reasonText}，尝试通过 CloudSaver 自动换源...`, 'info', 'transfer');
         const result = await this.autoSeriesService.maybeRefreshTaskSource(task, reason);
         if (result?.updated) {
             const resourceTitle = result.resourceTitle ? `，匹配资源: ${result.resourceTitle}` : '';
-            logTaskEvent(`任务[${task.resourceName}]已自动切换资源源${resourceTitle}，新链接: ${result.shareLink}`);
+            logTaskEvent(`任务[${task.resourceName}]已自动切换资源源${resourceTitle}，新链接: ${result.shareLink}`, 'info', 'transfer');
         } else if (!result?.skipped) {
-            logTaskEvent(`任务[${task.resourceName}]自动换源未找到更合适的资源`);
+            logTaskEvent(`任务[${task.resourceName}]自动换源未找到更合适的资源`, 'info', 'transfer');
         }
         return result || { updated: false };
     }
@@ -879,12 +879,31 @@ class TaskService {
     // 执行任务
     async processTask(task, options = {}) {
         const { allowSourceRefresh = true } = options;
+
+        // 增强：转存开始的同时，自动尝试通过 TMDB 获取总集数
+        if (task && (!task.totalEpisodes || task.totalEpisodes === 0)) {
+            try {
+                const { TMDBService } = require('./tmdb');
+                const tmdb = new TMDBService();
+                const title = String(task.resourceName).replace(/\(根\)$/g, '').trim();
+                const year = (title.match(/(19|20)\d{2}/) || [])[0] || '';
+                const tmdbInfo = await tmdb.searchTV(title, year);
+                if (tmdbInfo && tmdbInfo.totalEpisodes) {
+                    console.log(`[TaskService] 转存时自动对齐 TMDB 集数: ${task.resourceName} -> ${tmdbInfo.totalEpisodes}集`);
+                    task.totalEpisodes = tmdbInfo.totalEpisodes;
+                    await this.taskRepo.update(task.id, { totalEpisodes: tmdbInfo.totalEpisodes });
+                }
+            } catch (e) {
+                console.warn(`[TaskService] 自动补全集数由于网络或名称问题跳过: ${e.message}`);
+            }
+        }
+
         let saveResults = [];
         let attemptedNewFiles = [];
         try {
             const account = await this.accountRepo.findOneBy({ id: task.accountId });
             if (!account) {
-                logTaskEvent(`账号不存在，accountId: ${task.accountId}`);
+                logTaskEvent(`账号不存在，accountId: ${task.accountId}`, 'warn', 'transfer');
                 throw new Error('账号不存在');
             }
             task.account = account;
@@ -892,7 +911,7 @@ class TaskService {
              // 获取分享文件列表并进行增量转存
              const shareDir = await cloud189.listShareDir(task.shareId, task.shareFolderId, task.shareMode,task.accessCode, task.isFolder);
              if(shareDir.res_code == "ShareAuditWaiting") {
-                logTaskEvent("分享链接审核中, 等待下次执行")
+                logTaskEvent("分享链接审核中, 等待下次执行", 'info', 'transfer')
                 return ''
              }
              if (!shareDir?.fileListAO?.fileList) {
@@ -902,7 +921,7 @@ class TaskService {
                         return await this.processTask(task, { allowSourceRefresh: false });
                     }
                 }
-                logTaskEvent("获取文件列表失败: " + JSON.stringify(shareDir));
+                logTaskEvent("获取文件列表失败: " + JSON.stringify(shareDir), 'error', 'transfer');
                 throw new Error('获取文件列表失败');
             }
             let shareFiles = [...shareDir.fileListAO.fileList];
@@ -940,12 +959,12 @@ class TaskService {
                         task.status = 'completed';
                     }
                     task.currentEpisodes = 0;
-                    logTaskEvent(`${task.resourceName} 当前没有可生成懒转存STRM的媒体文件`);
+                    logTaskEvent(`${task.resourceName} 当前没有可生成懒转存STRM的媒体文件`, 'info', 'transfer');
                 }
 
                 if (task.totalEpisodes && task.currentEpisodes >= task.totalEpisodes) {
                     task.status = 'completed';
-                    logTaskEvent(`${task.resourceName} 已完结`);
+                    logTaskEvent(`${task.resourceName} 已完结`, 'info', 'transfer');
                 }
 
                 task.lastCheckTime = new Date();
@@ -1031,13 +1050,13 @@ class TaskService {
                     if (daysDiff >= ConfigService.getConfigValue('task.taskExpireDays')) {
                         task.status = 'completed';
                     }
-                    logTaskEvent(`${task.resourceName} 没有增量剧集`)
+                    logTaskEvent(`${task.resourceName} 没有增量剧集`, 'info', 'transfer')
                 }
             }
             // 检查是否达到总数
             if (task.totalEpisodes && task.currentEpisodes >= task.totalEpisodes) {
                 task.status = 'completed';
-                logTaskEvent(`${task.resourceName} 已完结`)
+                logTaskEvent(`${task.resourceName} 已完结`, 'info', 'transfer')
             }
 
             task.lastCheckTime = new Date();
@@ -1312,14 +1331,14 @@ class TaskService {
 
         // 用户写了正则时，始终以正则为准
         if (task.sourceRegex && task.targetRegex) {
-            logTaskEvent(` ${task.resourceName} 开始使用正则表达式重命名`);
+            logTaskEvent(` ${task.resourceName} 开始使用正则表达式重命名`, 'info', 'transfer');
             await this._processRegexRename(cloud189, task, files, message, newFiles);
         } else {
             const aiMode = this._getAiMode();
             const fallbackResourceInfo = this._buildLocalRenameResourceInfo(task, files);
 
             if (aiMode === 'advanced') {
-                logTaskEvent(` ${task.resourceName} 开始使用 AI 高级重命名`);
+                logTaskEvent(` ${task.resourceName} 开始使用 AI 高级重命名`, 'info', 'transfer');
                 try {
                     const resourceInfo = await this._analyzeResourceInfo(
                         task.resourceName,
@@ -1328,14 +1347,14 @@ class TaskService {
                     );
                     await this._processRename(cloud189, task, files, resourceInfo, message, newFiles);
                 } catch (error) {
-                    logTaskEvent(`AI 高级重命名失败，已回退 TMDB 顺序编号: ${error.message}`);
+                    logTaskEvent(`AI 高级重命名失败，已回退 TMDB 顺序编号: ${error.message}`, 'error', 'transfer');
                     await this._processRename(cloud189, task, files, fallbackResourceInfo, message, newFiles);
                 }
             } else {
-                logTaskEvent(` ${task.resourceName} 开始使用 TMDB 顺序编号重命名`);
+                logTaskEvent(` ${task.resourceName} 开始使用 TMDB 顺序编号重命名`, 'info', 'transfer');
                 await this._processRename(cloud189, task, files, fallbackResourceInfo, message, newFiles);
                 if (aiMode === 'fallback') {
-                    logTaskEvent(`TMDB 顺序编号仅作基础回退，尝试使用 AI 兜底`);
+                    logTaskEvent(`TMDB 顺序编号仅作基础回退，尝试使用 AI 兜底`, 'info', 'transfer');
                     try {
                         const aiResourceInfo = await this._analyzeResourceInfo(
                             task.resourceName,
@@ -1346,7 +1365,7 @@ class TaskService {
                         newFiles = [];
                         await this._processRename(cloud189, task, files, aiResourceInfo, message, newFiles);
                     } catch (error) {
-                        logTaskEvent(`AI 兜底重命名失败，保留 TMDB 顺序编号结果: ${error.message}`);
+                        logTaskEvent(`AI 兜底重命名失败，保留 TMDB 顺序编号结果: ${error.message}`, 'error', 'transfer');
                         message = [];
                         newFiles = [];
                         await this._processRename(cloud189, task, files, fallbackResourceInfo, message, newFiles);
@@ -1374,7 +1393,7 @@ class TaskService {
         if (message.length > 20) {
             message.splice(5, message.length - 10, '├─ ...');
         }
-        message.length > 0 && logTaskEvent(`${task.resourceName}自动重命名完成: \n${message.join('\n')}`)
+        message.length > 0 && logTaskEvent(`${task.resourceName}自动重命名完成: \n${message.join('\n')}`, 'info', 'transfer')
         message.length > 0 && this.messageUtil.sendMessage(`${task.resourceName}自动重命名: \n${message.join('\n')}`);
     }
 
@@ -1474,7 +1493,7 @@ class TaskService {
                 }
                 await this._renameFile(cloud189, task, file, newName, message, newFiles);
             } catch (error) {
-                logTaskEvent(`${file.name}重命名失败: ${error.message}`);
+                logTaskEvent(`${file.name}重命名失败: ${error.message}`, 'error', 'transfer');
                 newFiles.push(file);
             }
         }
@@ -1499,7 +1518,7 @@ class TaskService {
                 }
                 await this._renameFile(cloud189, task, file, destFileName, message, newFiles);
             } catch (error) {
-                logTaskEvent(`${file.name}重命名失败: ${error.message}`);
+                logTaskEvent(`${file.name}重命名失败: ${error.message}`, 'error', 'transfer');
                 newFiles.push(file);
             }
         }
@@ -1536,7 +1555,7 @@ class TaskService {
         try {
             taskInfos = JSON.parse(batchTaskDto.taskInfos || '[]');
         } catch (error) {
-            logTaskEvent(`批量任务目录校验失败: taskInfos 解析异常 ${error.message}`);
+            logTaskEvent(`批量任务目录校验失败: taskInfos 解析异常 ${error.message}`, 'error', 'transfer');
             return false;
         }
         const fileList = await this.getAllFolderFiles(cloud189, {
@@ -1550,10 +1569,10 @@ class TaskService {
         );
         const pendingFiles = taskInfos.filter(taskInfo => !existingMd5Set.has(String(taskInfo.md5 || '')));
         if (pendingFiles.length === 0) {
-            logTaskEvent(`批量任务目录校验通过: 目标目录已存在 ${taskInfos.length} 个文件，按成功处理`);
+            logTaskEvent(`批量任务目录校验通过: 目标目录已存在 ${taskInfos.length} 个文件，按成功处理`, 'info', 'transfer');
             return true;
         }
-        logTaskEvent(`批量任务目录校验未通过: 仍缺少 ${pendingFiles.length} 个文件`);
+        logTaskEvent(`批量任务目录校验未通过: 仍缺少 ${pendingFiles.length} 个文件`, 'info', 'transfer');
         return false;
     }
 
@@ -1561,7 +1580,7 @@ class TaskService {
         const maxAttempts = 180;
         const pollIntervalMs = 1000;
         if (count > maxAttempts) {
-             logTaskEvent(`任务编号: ${taskId} 状态轮询超时，开始校验目标目录结果...`);
+             logTaskEvent(`任务编号: ${taskId} 状态轮询超时，开始校验目标目录结果...`, 'info', 'transfer');
              return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
         }
         let type = batchTaskDto.type || 'SHARE_SAVE';
@@ -1571,7 +1590,7 @@ class TaskService {
             return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
         }
         const taskStatus = Number(task.taskStatus);
-        logTaskEvent(`任务编号: ${task.taskId}, 任务状态: ${task.taskStatus}`)
+        logTaskEvent(`任务编号: ${task.taskId}, 任务状态: ${task.taskStatus}`, 'info', 'transfer')
         if (taskStatus === -1 || taskStatus === 3 || taskStatus === 1) {
             await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
             return await this.checkTaskStatus(cloud189, taskId, count + 1, batchTaskDto)
@@ -1592,7 +1611,7 @@ class TaskService {
                 });
                 if (conflictFiles.length > 0) {
                     // 打印日志
-                    logTaskEvent(`任务编号: ${task.taskId}, 任务状态: ${task.taskStatus}, 有${conflictFiles.length}个文件冲突, 已忽略: ${conflictFiles.map(file => file.fileName).join(',')}`);
+                    logTaskEvent(`任务编号: ${task.taskId}, 任务状态: ${task.taskStatus}, 有${conflictFiles.length}个文件冲突, 已忽略: ${conflictFiles.map(file => file.fileName).join(',')}`, 'info', 'transfer');
                     // 加入和谐文件中
                     harmonizedFilter.addHarmonizedList(conflictFiles.map(file => file.md5))
                 }
@@ -1621,23 +1640,23 @@ class TaskService {
     async processAllTasks(ignore = false, taskIds = []) {
         const tasks = await this.getPendingTasks(ignore, taskIds);
         if (tasks.length === 0) {
-            logTaskEvent('没有待处理的任务');
+            logTaskEvent('没有待处理的任务', 'info', 'transfer');
             return;
         }
         let saveResults = []
-        logTaskEvent(`================================`);
+        logTaskEvent(`================================`, 'info', 'transfer');
         for (const task of tasks) {
             const taskName = task.shareFolderName?(task.resourceName + '/' + task.shareFolderName): task.resourceName || '未知'
-            logTaskEvent(`任务[${taskName}]开始执行`);
+            logTaskEvent(`任务[${taskName}]开始执行`, 'info', 'transfer');
             try {
                 const result = await this.processTask(task);
             if (result) {
                 saveResults.push(result)
             }
             } catch (error) {
-                logTaskEvent(`任务${task.id}执行失败: ${error.message}`);
+                logTaskEvent(`任务${task.id}执行失败: ${error.message}`, 'error', 'transfer');
             }finally {
-                logTaskEvent(`任务[${taskName}]执行完成`);
+                logTaskEvent(`任务[${taskName}]执行完成`, 'info', 'transfer');
             }
             // 暂停500ms
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -1645,7 +1664,7 @@ class TaskService {
         if (saveResults.length > 0) {
             this.messageUtil.sendMessage(saveResults.join("\n\n"))
         }
-        logTaskEvent(`================================`);
+        logTaskEvent(`================================`, 'info', 'transfer');
         return saveResults
     }
     // 处理匹配模式
@@ -1691,7 +1710,7 @@ class TaskService {
 
     // 任务失败处理逻辑
     async _handleTaskFailure(task, error) {
-        logTaskEvent(error);
+        logTaskEvent(error, 'error', 'transfer');
         const maxRetries = ConfigService.getConfigValue('task.maxRetries');
         const retryInterval = ConfigService.getConfigValue('task.retryInterval');
         // 初始化重试次数
@@ -1705,11 +1724,11 @@ class TaskService {
             task.lastError = `${error.message} (重试 ${task.retryCount}/${maxRetries})`;
             // 设置下次重试时间
             task.nextRetryTime = new Date(Date.now() + retryInterval * 1000);
-            logTaskEvent(`任务将在 ${retryInterval} 秒后重试 (${task.retryCount}/${maxRetries})`);
+            logTaskEvent(`任务将在 ${retryInterval} 秒后重试 (${task.retryCount}/${maxRetries})`, 'info', 'transfer');
         } else {
             task.status = 'failed';
             task.lastError = `${error.message} (已达到最大重试次数 ${maxRetries})`;
-            logTaskEvent(`任务达到最大重试次数 ${maxRetries}，标记为失败`);
+            logTaskEvent(`任务达到最大重试次数 ${maxRetries}，标记为失败`, 'error', 'transfer');
         }
         
         await this.taskRepo.save(task);
@@ -1747,10 +1766,10 @@ class TaskService {
             return [];
         }
         let saveResults = [];
-        logTaskEvent(`================================`);
+        logTaskEvent(`================================`, 'info', 'transfer');
         for (const task of retryTasks) {
             const taskName = task.shareFolderName?(task.resourceName + '/' + task.shareFolderName): task.resourceName || '未知'
-            logTaskEvent(`任务[${taskName}]开始重试`);
+            logTaskEvent(`任务[${taskName}]开始重试`, 'info', 'transfer');
             try {
                 const result = await this.processTask(task);
                 if (result) {
@@ -1759,7 +1778,7 @@ class TaskService {
             } catch (error) {
                 console.error(`重试任务${task.name}执行失败:`, error);
             }finally {
-                logTaskEvent(`任务[${taskName}]重试完成`);
+                logTaskEvent(`任务[${taskName}]重试完成`, 'info', 'transfer');
             }
             // 任务间隔
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -1768,7 +1787,7 @@ class TaskService {
         if (saveResults.length > 0) {
             this.messageUtil.sendMessage(saveResults.join("\n\n"));
         }
-        logTaskEvent(`================================`);
+        logTaskEvent(`================================`, 'info', 'transfer');
         return saveResults;
     }
     // 创建批量任务
@@ -1783,11 +1802,11 @@ class TaskService {
             error.response = resp;
             throw error;
         }
-        logTaskEvent(`批量任务处理中: ${JSON.stringify(resp)}`)
+        logTaskEvent(`批量任务处理中: ${JSON.stringify(resp)}`, 'info', 'transfer')
         if (!await this.checkTaskStatus(cloud189,resp.taskId, 0 , batchTaskDto)) {
             throw new Error('检查批量任务状态: 批量任务处理失败');
         }
-        logTaskEvent(`批量任务处理完成`)
+        logTaskEvent(`批量任务处理完成`, 'info', 'transfer')
     }
     // 定时清空回收站
     async clearRecycleBin(enableAutoClearRecycle, enableAutoClearFamilyRecycle) {
@@ -1799,7 +1818,7 @@ class TaskService {
                     const cloud189 = Cloud189Service.getInstance(account); 
                     await this._clearRecycleBin(cloud189, username, enableAutoClearRecycle, enableAutoClearFamilyRecycle)
                 } catch (error) {
-                    logTaskEvent(`定时[${username}]清空回收站任务执行失败:${error.message}`);
+                    logTaskEvent(`定时[${username}]清空回收站任务执行失败:${error.message}`, 'error', 'transfer');
                 }
             }
         }
@@ -1812,7 +1831,7 @@ class TaskService {
             return [];
         }
         if (!Number.isFinite(retentionHours) || retentionHours <= 0) {
-            logTaskEvent('自动清理懒转存文件已跳过: 保留时长配置无效');
+            logTaskEvent('自动清理懒转存文件已跳过: 保留时长配置无效', 'warn', 'transfer');
             return [];
         }
 
@@ -1827,7 +1846,7 @@ class TaskService {
 
         const cutoffTime = Date.now() - retentionHours * 60 * 60 * 1000;
         const messages = [];
-        logTaskEvent(`开始自动清理懒转存文件, 保留时长: ${retentionHours} 小时, 任务数: ${tasks.length}`);
+        logTaskEvent(`开始自动清理懒转存文件, 保留时长: ${retentionHours} 小时, 任务数: ${tasks.length}`, 'info', 'transfer');
 
         for (const task of tasks) {
             try {
@@ -1836,7 +1855,7 @@ class TaskService {
                     messages.push(result);
                 }
             } catch (error) {
-                logTaskEvent(`任务[${task.resourceName}]自动清理懒转存文件失败: ${error.message}`);
+                logTaskEvent(`任务[${task.resourceName}]自动清理懒转存文件失败: ${error.message}`, 'error', 'transfer');
             }
         }
 
@@ -1870,7 +1889,7 @@ class TaskService {
         await this._cleanupEmptyLazyFolders(cloud189, task.realFolderId, true);
         const taskName = task.shareFolderName ? `${task.resourceName}/${task.shareFolderName}` : task.resourceName;
         const message = `任务[${taskName}]自动清理懒转存文件 ${expiredFiles.length} 个`;
-        logTaskEvent(message);
+        logTaskEvent(message, 'info', 'transfer');
         return message;
     }
 
@@ -1918,9 +1937,9 @@ class TaskService {
         }   
         const batchTaskDto = new BatchTaskDto(params);
         if (enableAutoClearRecycle) {
-            logTaskEvent(`开始清空[${username}]个人回收站`)
+            logTaskEvent(`开始清空[${username}]个人回收站`, 'info', 'transfer')
             await this.createBatchTask(cloud189, batchTaskDto)
-            logTaskEvent(`清空[${username}]个人回收站完成`)
+            logTaskEvent(`清空[${username}]个人回收站完成`, 'info', 'transfer')
             // 延迟10秒
             await new Promise(resolve => setTimeout(resolve, 10000));
         }
@@ -1928,13 +1947,13 @@ class TaskService {
             // 获取家庭id
             const familyInfo = await cloud189.getFamilyInfo()
             if (familyInfo == null) {
-                logTaskEvent(`用户${username}没有家庭主账号, 跳过`)
+                logTaskEvent(`用户${username}没有家庭主账号, 跳过`, 'warn', 'transfer')
                 return
             }
-            logTaskEvent(`开始清空[${username}]家庭回收站`)
+            logTaskEvent(`开始清空[${username}]家庭回收站`, 'info', 'transfer')
             batchTaskDto.familyId = familyInfo.familyId
             await this.createBatchTask(cloud189, batchTaskDto)
-            logTaskEvent(`清空[${username}]家庭回收站完成`)
+            logTaskEvent(`清空[${username}]家庭回收站完成`, 'info', 'transfer')
         }
     }
     // 校验文件后缀
@@ -1965,7 +1984,7 @@ class TaskService {
             }
             return {id: task.realRootFolderId, name: task.shareFolderName}
         }
-        logTaskEvent(`任务[${task.resourceName}]为老版本系统创建, 无法删除网盘内容, 跳过`)
+        logTaskEvent(`任务[${task.resourceName}]为老版本系统创建, 无法删除网盘内容, 跳过`, 'warn', 'transfer')
         return null
     }
     // 删除网盘文件
@@ -2054,7 +2073,7 @@ class TaskService {
             try {
                 await this._createStrmFileByTask(task, overwrite)   
             }catch (error) {
-                logTaskEvent(`任务[${task.resourceName}]生成strm失败: ${error.message}`)
+                logTaskEvent(`任务[${task.resourceName}]生成strm失败: ${error.message}`, 'error', 'transfer')
             }
         }
     }
@@ -2065,7 +2084,7 @@ class TaskService {
         }
         let account = await this._getAccountById(task.accountId)
         if (!account) {
-            logTaskEvent(`任务[${task.resourceName}]账号不存在, 跳过`)
+            logTaskEvent(`任务[${task.resourceName}]账号不存在, 跳过`, 'warn', 'transfer')
             return
         }
         task.account = account;
@@ -2211,7 +2230,7 @@ class TaskService {
                     destFileName: newName
                 });
             } catch (error) {
-                logTaskEvent(`${file.name}AI重命名处理失败: ${error.message}`);
+                logTaskEvent(`${file.name}AI重命名处理失败: ${error.message}`, 'error', 'transfer');
             }
         }
         return newFiles;
@@ -2220,7 +2239,7 @@ class TaskService {
     isHarmonized(file) {
         // 检查资源是否被和谐
         if (harmonizedFilter.isHarmonized(file.md5)) {
-            logTaskEvent(`文件 ${file.name} 被和谐`);
+            logTaskEvent(`文件 ${file.name} 被和谐`, 'info', 'transfer');
             return true;
         }    
         return false
@@ -2272,11 +2291,11 @@ class TaskService {
                     // 非首次只刷新当前目录
                     refreshPath = path.join(currentPath, alistPath);
                 }
-                logTaskEvent(`刷新alist目录缓存: ${refreshPath}`);
+                logTaskEvent(`刷新alist目录缓存: ${refreshPath}`, 'info', 'transfer');
                 await alistService.listFiles(refreshPath);
             }
         }catch (error) {
-            logTaskEvent(`刷新Alist缓存失败: ${error.message}`);
+            logTaskEvent(`刷新Alist缓存失败: ${error.message}`, 'error', 'transfer');
         }
     }
 

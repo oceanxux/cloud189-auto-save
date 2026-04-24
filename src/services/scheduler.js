@@ -48,6 +48,14 @@ class SchedulerService {
                 await taskService.cleanupLazyTransferredFiles();
             });
         }
+
+        // 5. 定时清理系统过期日志
+        const logCleanupCron = ConfigService.getConfigValue('system.logCleanupCron', '0 3 * * *');
+        this.saveDefaultTaskJob('自动清理过期日志', logCleanupCron, async () => {
+            const { cleanOldLogs } = require('../utils/logUtils');
+            const days = ConfigService.getConfigValue('system.logExpireDays', 7);
+            await cleanOldLogs(days);
+        });
     }
 
     static async initStrmConfigJobs(strmConfigRepo, strmConfigService) {
@@ -181,6 +189,15 @@ class SchedulerService {
             '自动清理懒转存文件',
             async () => taskService.cleanupLazyTransferredFiles()
         );
+
+        // 处理系统日志清理任务更新
+        if (settings.system.logCleanupCron && settings.system.logCleanupCron !== ConfigService.getConfigValue('system.logCleanupCron')) {
+            this.saveDefaultTaskJob('自动清理过期日志', settings.system.logCleanupCron, async () => {
+                const { cleanOldLogs } = require('../utils/logUtils');
+                await cleanOldLogs(settings.system.logExpireDays || 7);
+            });
+        }
+
         return true;
     }
 }

@@ -1,1172 +1,296 @@
-import React, { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Cpu, Files, RefreshCw, Search, PencilLine, Link2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Plus, X, Link2, Folder, User, Settings, Info, Save, Cpu, RefreshCw, AlertCircle, Files, Hash, Key } from 'lucide-react';
 import Modal from './Modal';
-import FolderSelector from './FolderSelector';
-
-interface Account {
-  id: number;
-  username: string;
-  accountType: 'family' | 'personal';
-}
-
-interface RegexPreset {
-  id: number;
-  name: string;
-  sourceRegex: string;
-  targetRegex: string;
-  matchPattern: string;
-  matchOperator: string;
-  matchValue: string;
-}
-
-interface TaskInitialData {
-  id?: number;
-  accountId?: string | number;
-  shareLink?: string;
-  currentSourceLink?: string;
-  lastSourceRefreshTime?: string | null;
-  accessCode?: string;
-  taskName?: string;
-  totalEpisodes?: string | number | null;
-  currentEpisodes?: string | number | null;
-  targetFolderId?: string;
-  targetFolder?: string;
-  organizerTargetFolderId?: string;
-  organizerTargetFolderName?: string;
-  shareFolderId?: string;
-  shareFolderName?: string;
-  taskGroup?: string;
-  remark?: string;
-  matchPattern?: string;
-  matchOperator?: string;
-  matchValue?: string;
-  enableCron?: boolean;
-  cronExpression?: string;
-  sourceRegex?: string;
-  targetRegex?: string;
-  tmdbId?: string | number | null;
-  enableTaskScraper?: boolean;
-  enableLazyStrm?: boolean;
-  enableOrganizer?: boolean;
-  executeNow?: boolean;
-  status?: 'pending' | 'processing' | 'completed' | 'failed';
-}
-
-const formatTaskDateTime = (dateStr?: string | null) => {
-  if (!dateStr) return '未换源';
-  const date = new Date(dateStr);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-};
-
-interface SelectedFolder {
-  id: string;
-  name: string;
-  path: string;
-  accountId: number;
-  accountName: string;
-}
-
-interface TaskFormData {
-  accountId: string;
-  shareLink: string;
-  accessCode: string;
-  taskName: string;
-  totalEpisodes: string;
-  currentEpisodes: string;
-  targetFolderId: string;
-  targetFolder: string;
-  organizerTargetFolderId: string;
-  organizerTargetFolderName: string;
-  shareFolderId: string;
-  shareFolderName: string;
-  taskGroup: string;
-  remark: string;
-  matchPattern: string;
-  matchOperator: string;
-  matchValue: string;
-  enableCron: boolean;
-  cronExpression: string;
-  sourceRegex: string;
-  targetRegex: string;
-  tmdbId: string;
-  enableTaskScraper: boolean;
-  enableLazyStrm: boolean;
-  enableOrganizer: boolean;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  batchShareLinks: string;
-  overwriteFolder: number;
-}
+import { ToastType } from './Toast';
+import FolderSelector, { SelectedFolder } from './FolderSelector';
 
 interface CreateTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
-  initialData?: TaskInitialData | null;
+  initialData?: any;
+  onShowToast?: (message: string, type: ToastType) => void;
 }
 
-const normalizeMatchOperator = (matchOperator?: string) => {
-  if (matchOperator === 'regex') {
-    return 'contains';
-  }
-  return matchOperator || '';
-};
-
-const EMPTY_FORM_DATA: TaskFormData = {
-  accountId: '',
-  shareLink: '',
-  accessCode: '',
-  taskName: '',
-  totalEpisodes: '',
-  currentEpisodes: '0',
-  targetFolderId: '',
-  targetFolder: '',
-  organizerTargetFolderId: '',
-  organizerTargetFolderName: '',
-  shareFolderId: '',
-  shareFolderName: '',
-  taskGroup: '',
-  remark: '',
-  matchPattern: '',
-  matchOperator: '',
-  matchValue: '',
-  enableCron: false,
-  cronExpression: '',
-  sourceRegex: '',
-  targetRegex: '',
-  tmdbId: '',
-  enableTaskScraper: false,
-  enableLazyStrm: false,
-  enableOrganizer: false,
-  status: 'pending',
-  batchShareLinks: '',
-  overwriteFolder: 0
-};
-
-const readLastTargetFolder = () => {
-  const raw = localStorage.getItem('lastTargetFolder');
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    return {
-      targetFolderId: parsed.lastTargetFolderId || '',
-      targetFolder: parsed.lastTargetFolderName || ''
-    };
-  } catch (error) {
-    localStorage.removeItem('lastTargetFolder');
-    return null;
-  }
-};
-
-const createInitialFormData = (initialData?: TaskInitialData | null): TaskFormData => {
-  const savedTarget = readLastTargetFolder();
-  const baseData: TaskFormData = {
-    ...EMPTY_FORM_DATA,
-    ...(savedTarget || {})
-  };
-
-  if (!initialData) {
-    return baseData;
-  }
-
-  return {
-    ...baseData,
-    accountId: initialData.accountId !== undefined ? String(initialData.accountId) : baseData.accountId,
-    shareLink: initialData.shareLink || '',
-    accessCode: initialData.accessCode || '',
-    taskName: initialData.taskName || '',
-    totalEpisodes: initialData.totalEpisodes !== undefined && initialData.totalEpisodes !== null ? String(initialData.totalEpisodes) : '',
-    currentEpisodes: initialData.currentEpisodes !== undefined && initialData.currentEpisodes !== null ? String(initialData.currentEpisodes) : '0',
-    targetFolderId: initialData.targetFolderId || baseData.targetFolderId,
-    targetFolder: initialData.targetFolder || baseData.targetFolder,
-    organizerTargetFolderId: initialData.organizerTargetFolderId || initialData.targetFolderId || '',
-    organizerTargetFolderName: initialData.organizerTargetFolderName || initialData.targetFolder || '',
-    shareFolderId: initialData.shareFolderId || '',
-    shareFolderName: initialData.shareFolderName || '',
-    taskGroup: initialData.taskGroup || '',
-    remark: initialData.remark || '',
-    matchPattern: initialData.matchPattern || '',
-    matchOperator: normalizeMatchOperator(initialData.matchOperator),
-    matchValue: initialData.matchValue || '',
-    enableCron: Boolean(initialData.enableCron),
-    cronExpression: initialData.cronExpression || '',
-    sourceRegex: initialData.sourceRegex || '',
-    targetRegex: initialData.targetRegex || '',
-    tmdbId: initialData.tmdbId !== undefined && initialData.tmdbId !== null ? String(initialData.tmdbId) : '',
-    enableTaskScraper: Boolean(initialData.enableTaskScraper),
-    enableLazyStrm: Boolean(initialData.enableLazyStrm),
-    enableOrganizer: Boolean(initialData.enableOrganizer),
-    status: initialData.status || 'pending'
-  };
-};
-
-const shouldShowAdvancedOptions = (formData: TaskFormData) => {
-  return Boolean(
-    formData.sourceRegex ||
-    formData.targetRegex ||
-    formData.matchPattern ||
-    formData.matchOperator ||
-    formData.matchValue
-  );
-};
-
-const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSuccess, initialData }) => {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [regexPresets, setRegexPresets] = useState<RegexPreset[]>([]);
+const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSuccess, initialData, onShowToast }) => {
+  console.log('[CreateTaskModal] initialData:', initialData);
+  const [formData, setFormData] = useState({
+    shareLink: '',
+    accessCode: '',
+    resourceName: '',
+    targetFolderId: '',
+    targetFolderName: '',
+    realFolderId: '',
+    realFolderName: '',
+    totalEpisodes: 0,
+    type: 'normal',
+    accountId: '',
+    enableOrganizer: true
+  });
+  const [accounts, setAccounts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [parsing, setParsing] = useState(false);
-  const [shareFolders, setShareFolders] = useState<Array<{ id: string; name: string }>>([]);
-  const [selectedFolders, setSelectedFolders] = useState<string[]>([]);
-  const [tmdbResults, setTmdbResults] = useState<any[]>([]);
-  const [isBatchMode, setIsBatchMode] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [fetchingEpisodes, setFetchingEpisodes] = useState(false);
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
-  const [folderSelectorMode, setFolderSelectorMode] = useState<'target' | 'organizer'>('target');
-  const [formData, setFormData] = useState<TaskFormData>(() => createInitialFormData(initialData));
-  const [showManualSourceEditor, setShowManualSourceEditor] = useState(false);
-  const [manualSourceLink, setManualSourceLink] = useState('');
-  const [manualAccessCode, setManualAccessCode] = useState('');
-  const [currentSourceLink, setCurrentSourceLink] = useState('');
-  const [lastSourceRefreshTime, setLastSourceRefreshTime] = useState<string | null>(null);
-  const [replacingSource, setReplacingSource] = useState(false);
-  const [executeAfterReplace, setExecuteAfterReplace] = useState(true);
-
-  const isEditing = Boolean(initialData?.id);
+  const [folderSelectorMode, setFolderSelectorMode] = useState<'target' | 'real'>('target');
 
   useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    const nextFormData = createInitialFormData(initialData);
-    setFormData(nextFormData);
-    setShareFolders(
-      initialData?.shareFolderId && initialData.shareFolderName
-        ? [{ id: initialData.shareFolderId, name: initialData.shareFolderName }]
-        : []
-    );
-    setSelectedFolders(initialData?.shareFolderId ? [initialData.shareFolderId] : []);
-    setTmdbResults([]);
-    setIsBatchMode(false);
-    setShowAdvanced(shouldShowAdvancedOptions(nextFormData));
-    setShowManualSourceEditor(false);
-    setManualSourceLink(initialData?.currentSourceLink || initialData?.shareLink || '');
-    setManualAccessCode(initialData?.accessCode || '');
-    setCurrentSourceLink(initialData?.currentSourceLink || initialData?.shareLink || '');
-    setLastSourceRefreshTime(initialData?.lastSourceRefreshTime || null);
-    setExecuteAfterReplace(true);
-    fetchAccounts(nextFormData.accountId);
-    fetchRegexPresets();
-    if (!initialData) {
-      fetchTaskDefaults();
-    }
-  }, [isOpen, initialData]);
-
-  const fetchAccounts = async (preferredAccountId?: string) => {
-    try {
-      const response = await fetch('/api/accounts');
-      const data = await response.json();
-      if (data.success) {
-        const nextAccounts = Array.isArray(data.data) ? data.data : [];
-        setAccounts(nextAccounts);
-        setFormData(prev => {
-          if (prev.accountId) {
-            return prev;
-          }
-
-          const fallbackAccountId = preferredAccountId || (nextAccounts[0] ? String(nextAccounts[0].id) : '');
-          if (!fallbackAccountId) {
-            return prev;
-          }
-
-          return {
-            ...prev,
-            accountId: fallbackAccountId
-          };
-        });
-      }
-    } catch (error) {
-      console.error('Failed to fetch accounts:', error);
-    }
-  };
-
-  const fetchRegexPresets = async () => {
-    try {
-      const response = await fetch('/api/settings/regex-presets');
-      const data = await response.json();
-      if (data.success) {
-        setRegexPresets(data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch regex presets:', error);
-    }
-  };
-
-  const fetchTaskDefaults = async () => {
-    try {
-      const response = await fetch('/api/settings');
-      const data = await response.json();
-      if (!data.success) {
-        return;
-      }
-      const autoCreate = data.data?.task?.autoCreate || {};
-      setFormData(prev => {
-        if (initialData?.id) {
-          return prev;
-        }
-        const nextTargetFolderId = prev.targetFolderId || autoCreate.targetFolderId || '';
-        const nextTargetFolder = prev.targetFolder || autoCreate.targetFolder || '';
-        const nextOrganizerTargetFolderId = prev.organizerTargetFolderId || autoCreate.organizerTargetFolderId || nextTargetFolderId;
-        const nextOrganizerTargetFolderName = prev.organizerTargetFolderName || autoCreate.organizerTargetFolderName || nextTargetFolder;
-        return {
-          ...prev,
-          accountId: prev.accountId || String(autoCreate.accountId || ''),
-          targetFolderId: nextTargetFolderId,
-          targetFolder: nextTargetFolder,
-          organizerTargetFolderId: nextOrganizerTargetFolderId,
-          organizerTargetFolderName: nextOrganizerTargetFolderName
-        };
-      });
-    } catch (error) {
-      console.error('Failed to fetch task defaults:', error);
-    }
-  };
-
-  const handleApplyPreset = (presetId: string) => {
-    const preset = regexPresets.find(item => String(item.id) === presetId);
-    if (!preset) {
-      return;
-    }
-
-    setFormData(prev => ({
-      ...prev,
-      sourceRegex: preset.sourceRegex || prev.sourceRegex,
-      targetRegex: preset.targetRegex || prev.targetRegex,
-      matchPattern: preset.matchPattern || prev.matchPattern,
-      matchOperator: normalizeMatchOperator(preset.matchOperator || prev.matchOperator),
-      matchValue: preset.matchValue || prev.matchValue
-    }));
-    setShowAdvanced(true);
-  };
-
-  const handleAccountChange = (accountId: string) => {
-    setFormData(prev => ({
-      ...prev,
-      accountId
-    }));
-
-    if (isEditing) {
-      return;
-    }
-
-    setShareFolders([]);
-    setSelectedFolders([]);
-  };
-
-  const handleParseShare = async () => {
-    if (!formData.shareLink || !formData.accountId || isBatchMode || isEditing) {
-      return;
-    }
-
-    setParsing(true);
-    try {
-      const response = await fetch('/api/share/parse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          shareLink: formData.shareLink,
-          accessCode: formData.accessCode,
-          accountId: formData.accountId
-        })
-      });
-      const data = await response.json();
-      if (data.success) {
-        const folders = Array.isArray(data.data) ? data.data : [];
-        setShareFolders(folders);
-        setSelectedFolders(folders.map((folder: { id: string }) => folder.id));
-        if (folders.length > 0 && !formData.taskName) {
-          setFormData(prev => ({
-            ...prev,
-            taskName: folders[0].name
-          }));
-        }
-      }
-    } catch (error) {
-      console.error('Failed to parse share link:', error);
-    } finally {
-      setParsing(false);
-    }
-  };
-
-  const handleSearchTmdb = async () => {
-    if (!formData.taskName) {
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/tmdb/search?keyword=${encodeURIComponent(formData.taskName)}`);
-      const data = await response.json();
-      if (data.success) {
-        setTmdbResults(data.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to search TMDB:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSelectTmdb = async (result: { id: number; title: string; type?: string }) => {
-    setLoading(true);
-    try {
-      let totalEpisodes = '';
-      if (result.type === 'tv') {
-        const response = await fetch(`/api/tmdb/tv/${result.id}`);
-        const data = await response.json();
-        if (data.success && data.data?.totalEpisodes > 0) {
-          totalEpisodes = String(data.data.totalEpisodes);
-        }
-      }
-
-      setFormData(prev => ({
-        ...prev,
-        taskName: result.title,
-        tmdbId: String(result.id),
-        totalEpisodes
-      }));
-      setTmdbResults([]);
-    } catch (error) {
-      console.error('Failed to fetch TMDB details:', error);
-      setFormData(prev => ({
-        ...prev,
-        taskName: result.title,
-        tmdbId: String(result.id)
-      }));
-      setTmdbResults([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setLoading(true);
-
-    try {
-      const normalizedMatchOperator = normalizeMatchOperator(formData.matchOperator);
-      const normalizedTotalEpisodes = Number(formData.totalEpisodes || 0);
-      let endpoint = '/api/tasks';
-      let method = 'POST';
-      let body: Record<string, unknown> = {
-        ...formData,
-        totalEpisodes: normalizedTotalEpisodes,
-        matchOperator: normalizedMatchOperator
-      };
-
-      if (isEditing) {
-        const shareFolderId = formData.shareFolderId || selectedFolders[0] || '';
-        const shareFolderName =
-          formData.shareFolderName ||
-          shareFolders.find(folder => folder.id === shareFolderId)?.name ||
-          '';
-
-        endpoint = `/api/tasks/${initialData?.id}`;
-        method = 'PUT';
-        body = {
-          resourceName: formData.taskName.trim(),
-          targetFolderId: formData.targetFolderId,
-          targetFolderName: formData.targetFolder || formData.targetFolderId,
-          organizerTargetFolderId: formData.organizerTargetFolderId || formData.targetFolderId,
-          organizerTargetFolderName: formData.organizerTargetFolderName || formData.targetFolder || formData.targetFolderId,
-          currentEpisodes: Number(formData.currentEpisodes || 0),
-          totalEpisodes: normalizedTotalEpisodes,
-          status: formData.status,
-          shareFolderId,
-          shareFolderName,
-          sourceRegex: formData.sourceRegex,
-          targetRegex: formData.targetRegex,
-          matchPattern: formData.matchPattern,
-          matchOperator: normalizedMatchOperator,
-          matchValue: formData.matchValue,
-          remark: formData.remark,
-          taskGroup: formData.taskGroup,
-          tmdbId: formData.tmdbId,
-          enableCron: formData.enableCron,
-          cronExpression: formData.cronExpression,
-          enableTaskScraper: formData.enableTaskScraper,
-          enableLazyStrm: formData.enableLazyStrm,
-          enableOrganizer: formData.enableOrganizer
-        };
-      } else if (isBatchMode) {
-        endpoint = '/api/tasks/batch-create';
-        const blocks = formData.batchShareLinks
-          .split('\n')
-          .map(line => line.trim())
-          .filter(Boolean);
-        body = {
-          tasks: blocks.map(link => ({
-            ...formData,
-            shareLink: link,
-            taskName: '',
-            selectedFolders: []
-          }))
-        };
+    const init = async () => {
+      await fetchAccounts();
+      if (initialData) {
+        setFormData(prev => ({ 
+          ...prev, 
+          ...initialData,
+          shareLink: initialData.shareLink || '',
+          accessCode: initialData.accessCode || '',
+          accountId: initialData.account?.id || initialData.accountId || ''
+        }));
       } else {
-        body = {
-          ...body,
-          executeNow: Boolean(initialData?.executeNow),
-          selectedFolders
-        };
+        // 获取系统默认配置
+        try {
+          const settingsRes = await fetch('/api/settings');
+          const settingsData = await settingsRes.json();
+          const defaultAccId = settingsData.data?.task?.autoCreate?.accountId || '';
+          const defaultTargetId = settingsData.data?.task?.autoCreate?.targetFolderId || '';
+          const defaultTargetName = settingsData.data?.task?.autoCreate?.targetFolder || '';
+          
+          setFormData({
+            shareLink: '',
+            accessCode: '',
+            resourceName: '',
+            targetFolderId: defaultTargetId,
+            targetFolderName: defaultTargetName,
+            realFolderId: '',
+            realFolderName: '',
+            totalEpisodes: 0,
+            type: 'normal',
+            accountId: defaultAccId,
+            enableOrganizer: true
+          });
+        } catch(e) {
+          console.error('Failed to load default settings', e);
+        }
       }
+    };
+    if (isOpen) init();
+  }, [initialData, isOpen]);
 
-      const response = await fetch(endpoint, {
+  const fetchAccounts = async () => {
+    try {
+      const res = await fetch('/api/accounts');
+      const data = await res.json();
+      if (data.success) setAccounts(data.data || []);
+    } catch (e) { console.error(e); }
+  };
+
+  const handleFetchTotalEpisodes = async () => {
+    if (!formData.resourceName) {
+      onShowToast?.('请先输入任务备注名称以供搜索', 'info');
+      return;
+    }
+    setFetchingEpisodes(true);
+    try {
+      const res = await fetch(`/api/auto-series/search?title=${encodeURIComponent(formData.resourceName)}`);
+      const data = await res.json();
+      if (data.success && data.data?.length > 0) {
+          const bestMatch = data.data[0];
+          if (bestMatch.tmdbId) {
+             const detailRes = await fetch(`/api/tmdb/tv/${bestMatch.tmdbId}`);
+             const detail = await detailRes.json();
+             if (detail.success && detail.data.number_of_episodes) {
+                 setFormData(prev => ({ ...prev, totalEpisodes: detail.data.number_of_episodes }));
+                 onShowToast?.(`已获取 TMDB 最新集数: ${detail.data.number_of_episodes}`, 'success');
+             } else {
+                onShowToast?.('未能获取到集数信息', 'error');
+             }
+          }
+      } else {
+        onShowToast?.('未找到匹配的剧集信息', 'error');
+      }
+    } catch (e) { onShowToast?.('获取集数失败', 'error'); }
+    finally { setFetchingEpisodes(false); }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const method = initialData ? 'PUT' : 'POST';
+      const url = initialData ? `/api/tasks/${initialData.id}` : '/api/tasks';
+      
+      const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(formData)
       });
-      const data = await response.json();
-      if (data.success) {
-        localStorage.setItem(
-          'lastTargetFolder',
-          JSON.stringify({
-            lastTargetFolderId: formData.targetFolderId,
-            lastTargetFolderName: formData.targetFolder
-          })
-        );
-        onSuccess();
-        onClose();
+      const data = await res.json();
+      if (data.success) { 
+        onShowToast?.(initialData ? '任务已更新' : '任务已创建', 'success');
+        onSuccess(); 
+        onClose(); 
       } else {
-        alert('提交失败: ' + data.error);
+        onShowToast?.('操作失败: ' + data.error, 'error');
       }
-    } catch (error) {
-      console.error('Failed to submit task:', error);
-      alert('提交失败');
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { onShowToast?.('请求失败', 'error'); }
+    finally { setLoading(false); }
   };
-
-  const handleReplaceSource = async () => {
-    if (!initialData?.id) return;
-    if (!manualSourceLink.trim()) {
-      window.alert('请先输入新的分享链接');
-      return;
-    }
-    if (!window.confirm('确定要替换当前任务的资源链接吗？系统会保留当前任务配置，只更新资源源。')) {
-      return;
-    }
-
-    setReplacingSource(true);
-    try {
-      const response = await fetch(`/api/tasks/${initialData.id}/replace-source`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          shareLink: manualSourceLink.trim(),
-          accessCode: manualAccessCode.trim(),
-          executeNow: executeAfterReplace
-        })
-      });
-      const data = await response.json();
-      if (!data.success) {
-        window.alert(`更换资源链接失败: ${data.error || '未知错误'}`);
-        return;
-      }
-      const updatedTask = data.data || {};
-      const nextLink = updatedTask.shareLink || manualSourceLink.trim();
-      setCurrentSourceLink(nextLink);
-      setManualSourceLink(nextLink);
-      setManualAccessCode(updatedTask.accessCode || manualAccessCode.trim());
-      setFormData(prev => ({
-        ...prev,
-        shareLink: nextLink,
-        accessCode: updatedTask.accessCode || prev.accessCode,
-        shareFolderId: updatedTask.shareFolderId || prev.shareFolderId,
-        shareFolderName: updatedTask.shareFolderName || prev.shareFolderName
-      }));
-      setShowManualSourceEditor(false);
-      onSuccess();
-      window.alert('资源链接已更新');
-    } catch (error) {
-      console.error('Failed to replace task source:', error);
-      window.alert('更换资源链接失败');
-    } finally {
-      setReplacingSource(false);
-    }
-  };
-
-  const selectedAccount = accounts.find(account => String(account.id) === formData.accountId);
-  const modalTitle = isEditing ? '修改任务' : (isBatchMode ? '批量创建任务' : '创建任务');
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={modalTitle} footer={null}>
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {!isEditing && (
-          <div className="flex items-center justify-between bg-slate-50 p-1 rounded-2xl border border-slate-200">
-            <button
-              type="button"
-              onClick={() => setIsBatchMode(false)}
-              className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${!isBatchMode ? 'bg-white shadow-sm text-[#0b57d0]' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              单个任务
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsBatchMode(true)}
-              className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${isBatchMode ? 'bg-white shadow-sm text-[#0b57d0]' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              批量创建
-            </button>
+    <>
+      <Modal isOpen={isOpen} onClose={onClose} title={initialData ? "修改转存任务" : "创建全新转存任务"}>
+        <form id="modal-form" onSubmit={handleSubmit} className="space-y-6 py-2">
+          
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="md:col-span-3 workbench-form-item">
+              <label className="workbench-label">资源分享链接</label>
+              <div className="relative group">
+                <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={16} />
+                <input 
+                  type="text" required value={formData.shareLink} 
+                  onChange={e => setFormData({...formData, shareLink: e.target.value})}
+                  className="workbench-input pl-10" placeholder="粘贴天翼云盘分享链接"
+                />
+              </div>
+            </div>
+            <div className="workbench-form-item">
+              <label className="workbench-label">访问密码</label>
+              <div className="relative group">
+                <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={16} />
+                <input 
+                  type="text" value={formData.accessCode} 
+                  onChange={e => setFormData({...formData, accessCode: e.target.value})}
+                  className="workbench-input pl-10 font-mono" placeholder="可选"
+                />
+              </div>
+            </div>
           </div>
-        )}
 
-        {isEditing && (
-          <div className="rounded-2xl border border-[#d3e3fd] bg-[#f8fafd] px-4 py-3 text-sm text-slate-600 space-y-3">
-            <div>
-              编辑模式下不会修改分享链接和来源账号，仅更新任务配置和保存目录。
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="md:col-span-2 workbench-form-item">
+              <label className="workbench-label">任务备注名称</label>
+              <input 
+                type="text" required value={formData.resourceName} 
+                onChange={e => setFormData({...formData, resourceName: e.target.value})}
+                onBlur={() => { if (!formData.totalEpisodes || formData.totalEpisodes === 0) handleFetchTotalEpisodes(); }}
+                className="workbench-input font-bold" placeholder="例如：庆余年 第二季"
+              />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div className="space-y-1">
-                <div className="font-bold text-[#0b57d0] uppercase tracking-wider">当前资源链接</div>
-                <div className="break-all text-slate-600">{currentSourceLink || '-'}</div>
-              </div>
-              <div className="space-y-1">
-                <div className="font-bold text-[#0b57d0] uppercase tracking-wider">最近一次自动换源</div>
-                <div className="text-slate-600">{formatTaskDateTime(lastSourceRefreshTime)}</div>
+            <div className="workbench-form-item">
+              <label className="workbench-label">预期总集数</label>
+              <div className="flex gap-2">
+                <div className="relative flex-1 group">
+                  <Hash className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                  <input 
+                    type="number" value={formData.totalEpisodes} 
+                    onChange={e => setFormData({...formData, totalEpisodes: parseInt(e.target.value) || 0})}
+                    className="workbench-input pl-9 font-mono" placeholder="0"
+                  />
+                </div>
+                <button type="button" onClick={handleFetchTotalEpisodes} disabled={fetchingEpisodes} className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-all disabled:opacity-30">
+                  <RefreshCw size={18} className={fetchingEpisodes ? 'animate-spin' : ''} />
+                </button>
               </div>
             </div>
-            <div className="flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() => setShowManualSourceEditor(prev => !prev)}
-                className="px-4 py-2 bg-white border border-[#d3e3fd] rounded-full text-sm font-medium text-[#0b57d0] hover:bg-[#0b57d0]/5 transition-colors inline-flex items-center gap-2"
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="workbench-form-item">
+              <label className="workbench-label">执行账号</label>
+              <select 
+                required value={formData.accountId} 
+                onChange={e => setFormData({...formData, accountId: e.target.value})}
+                className="workbench-select font-bold text-blue-600"
               >
-                <PencilLine size={16} />
-                手动更换资源链接
+                <option value="">选择天翼云账号...</option>
+                {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.alias || acc.username}</option>)}
+              </select>
+            </div>
+            <div className="workbench-form-item">
+              <label className="workbench-label">转存模式</label>
+              <select 
+                value={formData.type} 
+                onChange={e => setFormData({...formData, type: e.target.value})}
+                className="workbench-select font-bold"
+              >
+                <option value="normal">自动转存 (普通)</option>
+                <option value="lazy">懒转存 (STRM 挂载)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="workbench-form-item">
+            <label className="workbench-label">目标保存目录 (归档根目录)</label>
+            <div className="flex gap-2">
+              <div className="relative flex-1 group">
+                <Folder className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input 
+                  type="text" value={formData.targetFolderName || '根目录'} 
+                  readOnly className="workbench-input pl-10 opacity-60 font-bold"
+                />
+              </div>
+              <button 
+                type="button" 
+                disabled={!formData.accountId}
+                onClick={() => { setFolderSelectorMode('target'); setIsFolderSelectorOpen(true); }} 
+                className="workbench-toolbar-button px-5 border-slate-200 disabled:opacity-30"
+              >
+                选择
               </button>
             </div>
-            {showManualSourceEditor && (
-              <div className="rounded-2xl border border-[#d3e3fd] bg-white px-4 py-4 space-y-3">
-                <div className="grid grid-cols-1 md:grid-cols-[1fr_180px] gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-[#0b57d0] uppercase tracking-wider">新资源链接</label>
-                    <input
-                      type="text"
-                      value={manualSourceLink}
-                      onChange={e => setManualSourceLink(e.target.value)}
-                      placeholder="输入新的 cloud.189.cn 分享链接"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-[#0b57d0] uppercase tracking-wider">访问码</label>
-                    <input
-                      type="text"
-                      value={manualAccessCode}
-                      onChange={e => setManualAccessCode(e.target.value)}
-                      placeholder="可选"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                    />
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="space-y-2">
-                    <div className="text-xs text-slate-500 inline-flex items-center gap-2">
-                      <Link2 size={14} />
-                      系统会重新解析新链接，并沿用当前任务的子目录匹配规则。
-                    </div>
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div
-                        onClick={() => setExecuteAfterReplace(prev => !prev)}
-                        className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                          executeAfterReplace
-                            ? 'bg-[#0b57d0] border-[#0b57d0]'
-                            : 'border-slate-400 group-hover:border-[#0b57d0]'
-                        }`}
-                      >
-                        {executeAfterReplace && <div className="w-2 h-2 bg-white rounded-sm" />}
-                      </div>
-                      <span className="text-xs text-slate-600">替换后立即执行一次任务</span>
-                    </label>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowManualSourceEditor(false)}
-                      className="px-4 py-2 rounded-full text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                    >
-                      取消
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleReplaceSource}
-                      disabled={replacingSource}
-                      className="px-5 py-2 rounded-full text-sm font-medium bg-[#0b57d0] text-white hover:bg-[#0b57d0]/90 transition-colors disabled:opacity-70 inline-flex items-center gap-2"
-                    >
-                      {replacingSource ? <RefreshCw size={16} className="animate-spin" /> : <PencilLine size={16} />}
-                      立即替换
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700">选择账号</label>
-            <select
-              value={formData.accountId}
-              onChange={e => handleAccountChange(e.target.value)}
-              disabled={isEditing}
-              className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20 disabled:opacity-70"
-            >
-              {accounts.map(account => (
-                <option key={account.id} value={account.id}>
-                  {account.username} ({account.accountType === 'family' ? '家庭云' : '个人云'})
-                </option>
-              ))}
-            </select>
           </div>
 
-          {!isBatchMode ? (
-            <>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">分享链接</label>
-                <div className="flex gap-3">
-                  <input
-                    type="text"
-                    value={formData.shareLink}
-                    onChange={e => setFormData(prev => ({ ...prev, shareLink: e.target.value }))}
-                    onBlur={handleParseShare}
-                    readOnly={isEditing}
-                    placeholder="分享链接"
-                    className="flex-1 px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20 read-only:bg-slate-100 read-only:text-slate-500"
-                  />
-                  <input
-                    type="text"
-                    value={formData.accessCode}
-                    onChange={e => setFormData(prev => ({ ...prev, accessCode: e.target.value }))}
-                    onBlur={handleParseShare}
-                    readOnly={isEditing}
-                    placeholder="访问码"
-                    className="w-28 px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20 read-only:bg-slate-100 read-only:text-slate-500"
+          {initialData && (
+            <div className="workbench-form-item">
+              <label className="workbench-label">当前资源位置 (原始待处理目录)</label>
+              <div className="flex gap-2">
+                <div className="relative flex-1 group">
+                  <Files className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-400" size={16} />
+                  <input 
+                    type="text" value={formData.realFolderName || '根目录'} 
+                    readOnly className="workbench-input pl-10 opacity-60 font-bold border-amber-100"
                   />
                 </div>
-              </div>
-
-              {parsing && (
-                <div className="text-xs text-slate-500">正在解析分享目录...</div>
-              )}
-
-              {shareFolders.length > 0 && (
-                <div className="space-y-2 p-4 bg-[#f8fafd] rounded-2xl border border-[#d3e3fd]">
-                  <label className="text-xs font-bold text-[#0b57d0] uppercase tracking-wider">
-                    {isEditing ? '当前分享目录' : '选择要转存的目录'}
-                  </label>
-                  <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
-                    {shareFolders.map(folder => {
-                      const checked = selectedFolders.includes(folder.id);
-                      return (
-                        <label key={folder.id} className="flex items-center gap-3 p-2 hover:bg-white rounded-xl transition-colors cursor-pointer group">
-                          <div
-                            onClick={() => {
-                              if (isEditing) {
-                                return;
-                              }
-                              setSelectedFolders(prev =>
-                                prev.includes(folder.id) ? prev.filter(id => id !== folder.id) : [...prev, folder.id]
-                              );
-                            }}
-                            className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                              checked
-                                ? 'bg-[#0b57d0] border-[#0b57d0]'
-                                : 'border-slate-300 bg-white group-hover:border-[#0b57d0]'
-                            }`}
-                          >
-                            {checked && <Check size={14} className="text-white" />}
-                          </div>
-                          <span className="text-sm text-slate-700 truncate">{folder.name}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">批量分享内容</label>
-              <textarea
-                value={formData.batchShareLinks}
-                onChange={e => setFormData(prev => ({ ...prev, batchShareLinks: e.target.value }))}
-                rows={5}
-                placeholder="一行一个分享链接，支持带提取码的粘贴内容"
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20 font-mono"
-              />
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">任务名称</label>
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={formData.taskName}
-                  onChange={e => setFormData(prev => ({ ...prev, taskName: e.target.value }))}
-                  className="flex-1 px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                />
-                <button
-                  type="button"
-                  onClick={handleSearchTmdb}
-                  className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors"
+                <button 
+                  type="button" 
+                  disabled={!formData.accountId}
+                  onClick={() => { setFolderSelectorMode('real'); setIsFolderSelectorOpen(true); }} 
+                  className="workbench-toolbar-button px-5 border-amber-200 text-amber-600"
                 >
-                  <Search size={20} />
+                  重选
                 </button>
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">总集数</label>
-              <input
-                type="number"
-                min="0"
-                value={formData.totalEpisodes}
-                onChange={e => setFormData(prev => ({ ...prev, totalEpisodes: e.target.value }))}
-                placeholder="可选"
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-              />
-            </div>
-          </div>
-
-          {tmdbResults.length > 0 && (
-            <div className="space-y-2 p-4 bg-slate-50 rounded-2xl border border-slate-200">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">TMDB 搜索结果</label>
-              <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
-                {tmdbResults.map(result => (
-                  <button
-                    key={result.id}
-                    type="button"
-                    onClick={() => handleSelectTmdb(result)}
-                    className="w-full text-left px-3 py-2 hover:bg-white rounded-xl text-sm text-slate-700 transition-colors flex justify-between items-center group"
-                  >
-                    <span className="truncate">{result.title} ({result.releaseDate?.substring(0, 4)})</span>
-                    <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">选择</span>
-                  </button>
-                ))}
-              </div>
+              <p className="text-[9px] font-bold text-slate-400 mt-1">如果手动移动了文件或 ID 失效，请重新关联目录</p>
             </div>
           )}
 
-          {isEditing && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">已更新集数</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={formData.currentEpisodes}
-                  onChange={e => setFormData(prev => ({ ...prev, currentEpisodes: e.target.value }))}
-                  className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">任务状态</label>
-                <select
-                  value={formData.status}
-                  onChange={e => setFormData(prev => ({ ...prev, status: e.target.value as TaskFormData['status'] }))}
-                  className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-                >
-                  <option value="pending">等待中</option>
-                  <option value="processing">追剧中</option>
-                  <option value="completed">已完结</option>
-                  <option value="failed">失败</option>
-                </select>
-              </div>
+          <div className="p-4 bg-blue-50/50 dark:bg-blue-900/10 rounded-2xl border border-blue-100 dark:border-blue-900/20 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-500 rounded-xl text-white shadow-sm"><Cpu size={18} /></div>
+              <div><p className="text-xs font-black text-blue-900 dark:text-blue-100 uppercase tracking-tighter">自动整理归档</p><p className="text-[10px] font-bold text-blue-600/60 uppercase">Auto-Organizer</p></div>
             </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">保存目录</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={formData.targetFolder || formData.targetFolderId}
-                  readOnly
-                  placeholder="根目录"
-                  className="flex-1 px-5 py-3 bg-slate-100 border border-slate-300 rounded-2xl text-sm outline-none text-slate-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFolderSelectorMode('target');
-                    setIsFolderSelectorOpen(true);
-                  }}
-                  className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors"
-                >
-                  <Files size={20} />
-                </button>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">任务分组</label>
-              <input
-                type="text"
-                value={formData.taskGroup}
-                onChange={e => setFormData(prev => ({ ...prev, taskGroup: e.target.value }))}
-                placeholder="例如：日更 / 电影"
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-              />
-            </div>
-          </div>
-
-          {formData.enableOrganizer && (
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">整理目录</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={formData.organizerTargetFolderName || formData.organizerTargetFolderId}
-                  readOnly
-                  placeholder="默认与保存目录一致"
-                  className="flex-1 px-5 py-3 bg-slate-100 border border-slate-300 rounded-2xl text-sm outline-none text-slate-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFolderSelectorMode('organizer');
-                    setIsFolderSelectorOpen(true);
-                  }}
-                  className="px-4 py-3 bg-white border border-slate-300 rounded-2xl text-slate-600 hover:bg-slate-50 transition-colors"
-                >
-                  <Files size={20} />
-                </button>
-              </div>
-              <div className="text-xs text-slate-500">
-                开启自动整理后，文件会归档到这个目录下，再按类型生成二级目录，例如 `电视剧/剧名`。
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700">备注</label>
-            <textarea
-              value={formData.remark}
-              onChange={e => setFormData(prev => ({ ...prev, remark: e.target.value }))}
-              rows={2}
-              className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-            />
-          </div>
-
-          <div className="flex flex-wrap gap-4 pt-2">
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <div
-                onClick={() => setFormData(prev => ({ ...prev, enableTaskScraper: !prev.enableTaskScraper }))}
-                className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                  formData.enableTaskScraper ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
-                }`}
-              >
-                {formData.enableTaskScraper && <Check size={14} className="text-white" />}
-              </div>
-              <span className="text-sm font-medium text-slate-600">启用刮削</span>
-            </label>
-
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <div
-                onClick={() => setFormData(prev => ({ ...prev, enableLazyStrm: !prev.enableLazyStrm }))}
-                className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                  formData.enableLazyStrm ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
-                }`}
-              >
-                {formData.enableLazyStrm && <Check size={14} className="text-white" />}
-              </div>
-              <span className="text-sm font-medium text-slate-600">懒 STRM</span>
-            </label>
-
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <div
-                onClick={() => setFormData(prev => ({ ...prev, enableOrganizer: !prev.enableOrganizer }))}
-                className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                  formData.enableOrganizer ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
-                }`}
-              >
-                {formData.enableOrganizer && <Check size={14} className="text-white" />}
-              </div>
-              <span className="text-sm font-medium text-slate-600">自动整理</span>
-            </label>
-
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <div
-                onClick={() => setFormData(prev => ({ ...prev, enableCron: !prev.enableCron }))}
-                className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${
-                  formData.enableCron ? 'bg-[#0b57d0] border-[#0b57d0]' : 'border-slate-300 group-hover:border-[#0b57d0]'
-                }`}
-              >
-                {formData.enableCron && <Check size={14} className="text-white" />}
-              </div>
-              <span className="text-sm font-medium text-slate-600">定时任务</span>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" className="sr-only peer" checked={formData.enableOrganizer} onChange={e => setFormData({...formData, enableOrganizer: e.target.checked})} />
+              <div className="w-10 h-5 bg-slate-200 dark:bg-slate-700 rounded-full peer peer-checked:after:translate-x-5 after:content-[''] after:absolute after:top-[2.5px] after:left-[2.5px] after:bg-white after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-blue-500" />
             </label>
           </div>
+        </form>
+      </Modal>
 
-          {formData.enableCron && (
-            <div className="space-y-2 animate-in slide-in-from-top-2 duration-200">
-              <label className="text-sm font-medium text-slate-700">Cron 表达式</label>
-              <input
-                type="text"
-                value={formData.cronExpression}
-                onChange={e => setFormData(prev => ({ ...prev, cronExpression: e.target.value }))}
-                placeholder="例如：0 0 * * *"
-                className="w-full px-5 py-3 bg-slate-50 border border-slate-300 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-[#0b57d0]/20"
-              />
-            </div>
-          )}
-
-          <div className="pt-2 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(prev => !prev)}
-              className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"
-            >
-              {showAdvanced ? <ChevronUp size={18} /> : <ChevronDown size={18} />} 高级配置 (正则过滤/替换)
-            </button>
-
-            {showAdvanced && (
-              <div className="mt-4 space-y-4 animate-in slide-in-from-top-2 duration-200 p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                    <Cpu size={14} /> 正则预设
-                  </label>
-                  <select
-                    onChange={e => handleApplyPreset(e.target.value)}
-                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm outline-none"
-                  >
-                    <option value="">选择预设直接应用...</option>
-                    {regexPresets.map(preset => (
-                      <option key={preset.id} value={preset.id}>{preset.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">源正则 (Source Regex)</label>
-                    <input
-                      type="text"
-                      value={formData.sourceRegex}
-                      onChange={e => setFormData(prev => ({ ...prev, sourceRegex: e.target.value }))}
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono"
-                      placeholder="e.g. \\[.*?\\]"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">目标正则 (Target Regex)</label>
-                    <input
-                      type="text"
-                      value={formData.targetRegex}
-                      onChange={e => setFormData(prev => ({ ...prev, targetRegex: e.target.value }))}
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">匹配模式 (Match Pattern)</label>
-                    <input
-                      type="text"
-                      value={formData.matchPattern}
-                      onChange={e => setFormData(prev => ({ ...prev, matchPattern: e.target.value }))}
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">操作符</label>
-                    <select
-                      value={formData.matchOperator}
-                      onChange={e => setFormData(prev => ({ ...prev, matchOperator: e.target.value }))}
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs"
-                    >
-                      <option value="">请选择</option>
-                      <option value="lt">小于 (lt)</option>
-                      <option value="gt">大于 (gt)</option>
-                      <option value="eq">等于 (eq)</option>
-                      <option value="contains">包含 (contains)</option>
-                      <option value="notContains">不包含 (notContains)</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-500">匹配值 (Match Value)</label>
-                    <input
-                      type="text"
-                      value={formData.matchValue}
-                      onChange={e => setFormData(prev => ({ ...prev, matchValue: e.target.value }))}
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-3 pt-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-6 py-3 bg-white border border-slate-300 text-slate-700 rounded-full font-medium hover:bg-slate-50 transition-all"
-          >
-            取消
-          </button>
-          <button
-            type="submit"
-            disabled={loading}
-            className="px-10 py-3 bg-[#0b57d0] text-white rounded-full font-medium shadow-lg hover:bg-[#0b57d0]/90 transition-all flex items-center gap-2 disabled:opacity-70"
-          >
-            {loading ? <RefreshCw size={20} className="animate-spin" /> : <Check size={20} />}
-            {isEditing ? '保存修改' : (isBatchMode ? '开始批量创建' : '创建任务')}
-          </button>
-        </div>
-      </form>
-
-      <FolderSelector
-        isOpen={isFolderSelectorOpen}
+      <FolderSelector 
+        isOpen={isFolderSelectorOpen} 
         onClose={() => setIsFolderSelectorOpen(false)}
         accountId={Number(formData.accountId)}
-        accountName={selectedAccount?.username || ''}
+        title={folderSelectorMode === 'target' ? "选择存入目录" : "关联原始资源目录"}
         onSelect={(folder: SelectedFolder) => {
-          setFormData(prev => {
-            if (folderSelectorMode === 'organizer') {
-              return {
-                ...prev,
-                accountId: String(folder.accountId),
-                organizerTargetFolderId: folder.id,
-                organizerTargetFolderName: folder.name
-              };
-            }
-
-            const shouldSyncOrganizer = !prev.organizerTargetFolderId || prev.organizerTargetFolderId === prev.targetFolderId;
-            return {
-              ...prev,
-              accountId: String(folder.accountId),
-              targetFolderId: folder.id,
-              targetFolder: folder.name,
-              ...(shouldSyncOrganizer
-                ? {
-                    organizerTargetFolderId: folder.id,
-                    organizerTargetFolderName: folder.name
-                  }
-                : {})
-            };
-          });
+          if (folderSelectorMode === 'target') {
+            setFormData({ ...formData, targetFolderId: folder.id, targetFolderName: folder.name });
+          } else {
+            setFormData({ ...formData, realFolderId: folder.id, realFolderName: folder.name });
+          }
+          setIsFolderSelectorOpen(false);
         }}
       />
-    </Modal>
+    </>
   );
 };
 

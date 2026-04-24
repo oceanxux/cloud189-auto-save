@@ -30,6 +30,7 @@ const { StreamProxyService } = require('./services/streamProxy');
 const { LazyShareStrmService } = require('./services/lazyShareStrm');
 const { OrganizerService } = require('./services/organizer');
 const { AutoSeriesService } = require('./services/autoSeries');
+const { CasService } = require('./services/casService');
 const { WorkflowRunner } = require('./services/workflow/WorkflowRunner');
 const { createWorkflowExecutors } = require('./services/workflow/executors');
 
@@ -440,6 +441,9 @@ app.use((req, res, next) => {
     }
     authenticateSession(req, res, next);
 });
+let accountRepo, taskRepo, commonFolderRepo, subscriptionRepo, subscriptionResourceRepo, strmConfigRepo, taskProcessedFileRepo, workflowRunRepo;
+let taskService, organizerService, subscriptionService, strmConfigService, streamProxyService, lazyShareStrmService, autoSeriesService, tmdbService, embyService, messageUtil;
+
 // 初始化数据库连接
 AppDataSource.initialize().then(async () => {
     // 当前版本:
@@ -460,27 +464,30 @@ AppDataSource.initialize().then(async () => {
         console.error('STRM目录权限初始化失败:', error);
     }
 
-    const accountRepo = AppDataSource.getRepository(Account);
-    const taskRepo = AppDataSource.getRepository(Task);
-    const commonFolderRepo = AppDataSource.getRepository(CommonFolder);
-    const subscriptionRepo = AppDataSource.getRepository(Subscription);
-    const subscriptionResourceRepo = AppDataSource.getRepository(SubscriptionResource);
-    const strmConfigRepo = AppDataSource.getRepository(StrmConfig);
-    const taskProcessedFileRepo = AppDataSource.getRepository(TaskProcessedFile);
-    const workflowRunRepo = AppDataSource.getRepository(WorkflowRun);
-    const taskService = new TaskService(taskRepo, accountRepo, taskProcessedFileRepo);
-    const organizerService = new OrganizerService(taskService, taskRepo);
-    const subscriptionService = new SubscriptionService(subscriptionRepo, subscriptionResourceRepo, accountRepo);
-    const strmConfigService = new StrmConfigService(strmConfigRepo, accountRepo, subscriptionRepo, subscriptionResourceRepo);
-    const streamProxyService = new StreamProxyService(accountRepo);
-    const lazyShareStrmService = new LazyShareStrmService(accountRepo, taskService);
-    const autoSeriesService = new AutoSeriesService(taskService, accountRepo, lazyShareStrmService);
+    accountRepo = AppDataSource.getRepository(Account);
+    taskRepo = AppDataSource.getRepository(Task);
+    commonFolderRepo = AppDataSource.getRepository(CommonFolder);
+    subscriptionRepo = AppDataSource.getRepository(Subscription);
+    subscriptionResourceRepo = AppDataSource.getRepository(SubscriptionResource);
+    strmConfigRepo = AppDataSource.getRepository(StrmConfig);
+    taskProcessedFileRepo = AppDataSource.getRepository(TaskProcessedFile);
+    workflowRunRepo = AppDataSource.getRepository(WorkflowRun);
+    
+    taskService = new TaskService(taskRepo, accountRepo, taskProcessedFileRepo);
+    organizerService = new OrganizerService(taskService, taskRepo);
+    subscriptionService = new SubscriptionService(subscriptionRepo, subscriptionResourceRepo, accountRepo);
+    strmConfigService = new StrmConfigService(strmConfigRepo, accountRepo, subscriptionRepo, subscriptionResourceRepo);
+    streamProxyService = new StreamProxyService(accountRepo);
+    lazyShareStrmService = new LazyShareStrmService(accountRepo, taskService);
+    autoSeriesService = new AutoSeriesService(taskService, accountRepo, lazyShareStrmService);
     taskService.autoSeriesService = autoSeriesService;
-    const tmdbService = new TMDBService();
-    const embyService = new EmbyService(taskService)
+    tmdbService = new TMDBService();
+    const casService = new CasService();
+    embyService = new EmbyService(taskService);
+    messageUtil = new MessageUtil();
     const embyPrewarmService = new EmbyPrewarmService(embyService);
     embyService.attachPrewarmService(embyPrewarmService);
-    const messageUtil = new MessageUtil();
+
     // 机器人管理
     const botManager = TelegramBotManager.getInstance();
     const workflowExecutors = createWorkflowExecutors({
@@ -546,6 +553,13 @@ AppDataSource.initialize().then(async () => {
     await SchedulerService.initTaskJobs(taskRepo, taskService);
     await SchedulerService.initStrmConfigJobs(strmConfigRepo, strmConfigService);
     await embyPrewarmService.reload();
+
+    // 初始化 CAS 监控服务
+    const casAutoRestoreEnabled = ConfigService.getConfigValue('cas.enableAutoRestore', false);
+    if (casAutoRestoreEnabled) {
+        const { casMonitorService } = require('./services/casMonitorService');
+        casMonitorService.start();
+    }
 
     app.use('/emby-proxy', async (req, res) => {
         await embyService.handleProxyRequest(req, res, { basePath: '/emby-proxy' });
@@ -617,6 +631,57 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
+    app.put('/api/accounts/:id', async (req, res) => {
+        try {
+            const accountId = parseInt(req.params.id);
+            const existingAccount = await accountRepo.findOneBy({ id: accountId });
+            if (!existingAccount) {
+                throw new Error('账号不存在');
+            }
+
+            const nextAccountType = req.body.accountType || existingAccount.accountType || 'personal';
+            const mergedAccount = accountRepo.merge(existingAccount, {
+                alias: req.body.alias ?? existingAccount.alias,
+                cookies: req.body.cookies ? req.body.cookies : existingAccount.cookies,
+                password: req.body.password ? req.body.password : existingAccount.password,
+                accountType: nextAccountType,
+                familyId: nextAccountType === 'family' ? (req.body.familyId || existingAccount.familyId || '') : null,
+                cloudStrmPrefix: req.body.cloudStrmPrefix ?? existingAccount.cloudStrmPrefix,
+                localStrmPrefix: req.body.localStrmPrefix ?? existingAccount.localStrmPrefix
+            });
+
+            if (!mergedAccount.username.startsWith('n_') && req.body.password) {
+                Cloud189Service.invalidateByUsername(mergedAccount.username);
+                const cloud189 = Cloud189Service.getInstance(mergedAccount);
+                const loginResult = await cloud189.login(mergedAccount.username, mergedAccount.password, req.body.validateCode);
+                if (!loginResult.success) {
+                    if (loginResult.code == "NEED_CAPTCHA") {
+                        res.json({
+                            success: false,
+                            code: "NEED_CAPTCHA",
+                            data: {
+                                captchaUrl: loginResult.data
+                            }
+                        });
+                        return;
+                    }
+                    res.json({ success: false, error: loginResult.message });
+                    return;
+                }
+            }
+
+            if (!mergedAccount.username.startsWith('n_') && mergedAccount.accountType === 'family') {
+                const cloud189 = Cloud189Service.getInstance(mergedAccount);
+                mergedAccount.familyId = await cloud189.resolveFamilyId(mergedAccount.familyId || null);
+            }
+
+            await accountRepo.save(mergedAccount);
+            res.json({ success: true, data: null });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
      // 清空回收站
      app.delete('/api/accounts/recycle', async (req, res) => {
         try {
@@ -629,8 +694,14 @@ AppDataSource.initialize().then(async () => {
 
     app.delete('/api/accounts/:id', async (req, res) => {
         try {
-            const account = await accountRepo.findOneBy({ id: parseInt(req.params.id) });
+            const accountId = parseInt(req.params.id);
+            const account = await accountRepo.findOneBy({ id: accountId });
             if (!account) throw new Error('账号不存在');
+
+            // 历史 sqlite schema 中外键并非 CASCADE，删除账号前显式清理依赖数据。
+            await commonFolderRepo.delete({ accountId });
+            await taskRepo.delete({ accountId });
+
             Cloud189Service.invalidateByUsername(account.username);
             await accountRepo.remove(account);
             res.json({ success: true });
@@ -719,13 +790,6 @@ AppDataSource.initialize().then(async () => {
             order: { id: 'DESC' },
             relations: {
                 account: true
-            },
-            select: {
-                account: {
-                    id: true,
-                    username: true,
-                    accountType: true
-                }
             },
             where: whereClause
         });
@@ -970,16 +1034,13 @@ AppDataSource.initialize().then(async () => {
             });
             res.json({ success: true, data: result });
         } catch (error) {
-            const taskId = parseInt(req.params.id);
-            if (!Number.isNaN(taskId)) {
-                await organizerService.markError(taskId, error);
-            }
             res.json({ success: false, error: error.message });
         }
     });
 
     app.post('/api/auto-series', async (req, res) => {
         try {
+            console.log('[API] POST /api/auto-series body:', req.body);
             const result = await autoSeriesService.createByTitle(req.body || {});
             res.json({ success: true, data: result });
         } catch (error) {
@@ -996,6 +1057,282 @@ AppDataSource.initialize().then(async () => {
             });
             res.json({ success: true, data: result });
         } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    // TMDB 相关 API
+    app.get('/api/tmdb/trending', async (req, res) => {
+        try {
+            const { type, window } = req.query;
+            const result = await tmdbService.getTrending(type || 'all', window || 'day');
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.get('/api/tmdb/popular', async (req, res) => {
+        try {
+            const { type, page } = req.query;
+            const result = await tmdbService.getPopular(type || 'movie', page || 1);
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    // CAS 秒传相关 API
+    app.post('/api/cas/restore', async (req, res) => {
+        try {
+            const { accountId, folderId, casContent, fileName } = req.body;
+            const account = await accountRepo.findOneBy({ id: accountId });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            const casInfo = CasService.parseCasContent(casContent);
+            const result = await casService.restoreFromCas(cloud189, folderId, casInfo, fileName || casInfo.name);
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    // 云端CAS文件恢复 - 下载并解析云端CAS文件后恢复
+    app.post('/api/cas/restore-file', async (req, res) => {
+        try {
+            const { accountId, folderId, casFileId, casFileName } = req.body;
+            const account = await accountRepo.findOneBy({ id: accountId });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            
+            // 下载并解析CAS文件
+            const casInfo = await casService.downloadAndParseCas(cloud189, casFileId);
+            const restoreName = CasService.getOriginalFileName(casFileName, casInfo);
+            
+            // 执行恢复
+            const result = await casService.restoreFromCas(cloud189, folderId, casInfo, restoreName);
+            
+            // 恢复后删除CAS文件（如果配置启用）
+            await casService.deleteCasFileAfterRestore(cloud189, casFileId, casFileName, account.accountType === 'family');
+            
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    // 恢复并播放 - 临时恢复文件用于播放
+    app.post('/api/cas/restore-and-play', async (req, res) => {
+        try {
+            const { CasPlaybackService } = require('./services/casPlaybackService');
+            const { accountId, casFileId, casFileName, folderId } = req.body;
+            
+            const account = await accountRepo.findOneBy({ id: accountId });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            
+            const playbackService = new CasPlaybackService();
+            const result = await playbackService.restoreAndGetPlaybackUrl(
+                cloud189, casFileId, casFileName, folderId || '-11'
+            );
+            
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    // CAS自动恢复配置管理
+    app.get('/api/cas/auto-restart-config', async (req, res) => {
+        try {
+            const config = ConfigService.getConfigValue('cas', {});
+            res.json({ 
+                success: true, 
+                data: {
+                    enableAutoRestore: config.enableAutoRestore || false,
+                    autoRestorePaths: config.autoRestorePaths || [],
+                    deleteCasAfterRestore: config.deleteCasAfterRestore !== false,
+                    deleteSourceAfterGenerate: config.deleteSourceAfterGenerate || false,
+                    enableFamilyTransit: config.enableFamilyTransit !== false,
+                    familyTransitFirst: config.familyTransitFirst || false,
+                    scanInterval: config.scanInterval || 300
+                }
+            });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/cas/auto-restart-config', async (req, res) => {
+        try {
+            const { 
+                enableAutoRestore, 
+                autoRestorePaths, 
+                deleteCasAfterRestore,
+                deleteSourceAfterGenerate,
+                enableFamilyTransit,
+                familyTransitFirst,
+                scanInterval
+            } = req.body;
+            
+            ConfigService.setConfigValue('cas.enableAutoRestore', enableAutoRestore);
+            ConfigService.setConfigValue('cas.autoRestorePaths', autoRestorePaths || []);
+            ConfigService.setConfigValue('cas.deleteCasAfterRestore', deleteCasAfterRestore !== false);
+            ConfigService.setConfigValue('cas.deleteSourceAfterGenerate', deleteSourceAfterGenerate || false);
+            ConfigService.setConfigValue('cas.enableFamilyTransit', enableFamilyTransit !== false);
+            ConfigService.setConfigValue('cas.familyTransitFirst', familyTransitFirst || false);
+            ConfigService.setConfigValue('cas.scanInterval', scanInterval || 300);
+            
+            // 重启监控服务
+            const { casMonitorService } = require('./services/casMonitorService');
+            if (enableAutoRestore) {
+                casMonitorService.reload();
+            } else {
+                casMonitorService.stop();
+            }
+            
+            res.json({ success: true, data: '配置已保存' });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    // 手动触发CAS扫描
+    app.post('/api/cas/trigger-scan', async (req, res) => {
+        try {
+            const { accountId, folderId } = req.body;
+            const { casMonitorService } = require('./services/casMonitorService');
+            const result = await casMonitorService.triggerScan(accountId, folderId);
+            res.json(result);
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    // 获取CAS监控状态
+    app.get('/api/cas/monitor-status', async (req, res) => {
+        try {
+            const { casMonitorService } = require('./services/casMonitorService');
+            const status = casMonitorService.getStatus();
+            res.json({ success: true, data: status });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    // 批量清理CAS文件
+    app.post('/api/cas/batch-cleanup', async (req, res) => {
+        try {
+            const { CasCleanupService } = require('./services/casCleanupService');
+            const { accountId, folderId, options } = req.body;
+            
+            const account = await accountRepo.findOneBy({ id: accountId });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            
+            const cleanupService = new CasCleanupService();
+            const result = await cleanupService.batchCleanupCasFiles(cloud189, folderId, options);
+            
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/cas/create', async (req, res) => {
+        try {
+            const { accountId, fileId, parentId } = req.body;
+            const account = await accountRepo.findOneBy({ id: accountId });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            
+            const result = await cloud189.listFiles(parentId || '-11');
+            const file = (result?.fileListAO?.fileList || []).find(f => String(f.id) === String(fileId));
+            
+            if (!file) throw new Error('未找到文件或文件信息不完整(需MD5)');
+            
+            const casContent = CasService.generateCasContent(file, 'base64');
+            
+            // 生成CAS后删除源文件（如果配置启用）
+            await casService.deleteSourceFileAfterGenerate(cloud189, fileId, file.name || file.fileName, account.accountType === 'family');
+            
+            res.json({ success: true, data: { casContent, fileName: (file.name || file.fileName) + '.cas' } });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/cas/export-folder', async (req, res) => {
+        try {
+            const { accountId, folderId } = req.body;
+            const account = await accountRepo.findOneBy({ id: Number(accountId) });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            
+            const exportData = [];
+            
+            // 递归扫描函数
+            const scanFolder = async (fId) => {
+                logTaskEvent(`[CAS Export] 正在扫描目录: ${fId}`);
+                const result = await cloud189.listFiles(fId);
+                
+                const listAO = result?.fileListAO || {};
+                const files = Array.isArray(listAO.fileList) ? listAO.fileList : (Array.isArray(result?.fileList) ? result.fileList : []);
+                const folders = Array.isArray(listAO.folderList) ? listAO.folderList : (Array.isArray(result?.folderList) ? result.folderList : []);
+                
+                logTaskEvent(`[CAS Export] 目录 ${fId} 下找到 ${files.length} 个文件, ${folders.length} 个文件夹`);
+
+                for (const f of files) {
+                    try {
+                        let md5 = f.md5 || f.fileMd5 || f.md5Sum;
+                        let sliceMd5 = f.sliceMd5 || f.slice_md5 || f.slice_md5_hash;
+                        let size = f.size || f.fileSize;
+                        
+                        // 某些接口返回的字段名不同，做最后补救
+                        if (!md5) md5 = f.fileMd5;
+                        if (!size) size = f.fileSize;
+
+                        const name = f.name || f.fileName || '';
+                        const isMedia = ['.mp4', '.mkv', '.ts', '.iso', '.rmvb', '.avi', '.mp3', '.flac', '.mov', '.wmv'].some(ext => name.toLowerCase().endsWith(ext));
+                        
+                        if (!md5 && isMedia) {
+                            logTaskEvent(`[CAS Export] 列表无MD5，尝试获取详情: ${name}`);
+                            const detail = await cloud189.getFileInfo(f.id || f.fileId);
+                            if (detail) {
+                                md5 = detail.md5 || detail.fileMd5;
+                                sliceMd5 = detail.sliceMd5 || detail.slice_md5;
+                                size = detail.size || detail.fileSize;
+                            }
+                        }
+
+                        if (md5) {
+                            logTaskEvent(`[CAS Export] 命中文件: ${name}, MD5: ${md5}`);
+                            const content = CasService.generateCasContent({
+                                name: name,
+                                size: size,
+                                md5: md5,
+                                sliceMd5: sliceMd5 || md5
+                            }, 'base64');
+                            
+                            exportData.push({ name, content });
+                        } else {
+                            logTaskEvent(`[CAS Export] 跳过文件(无MD5): ${name}`);
+                        }
+                    } catch (e) {
+                        logTaskEvent(`[CAS Export] 处理文件出错 ${f.name || f.fileName}: ${e.message}`);
+                    }
+                }
+                
+                for (const subFolder of folders) {
+                    await scanFolder(subFolder.id || subFolder.fileId);
+                }
+            };
+
+            await scanFolder(folderId || '-11');
+            
+            res.json({ success: true, data: exportData });
+        } catch (error) {
+            console.error('递归导出存根失败:', error);
             res.json({ success: false, error: error.message });
         }
     });
@@ -1117,30 +1454,25 @@ AppDataSource.initialize().then(async () => {
             }
             const cloud189 = Cloud189Service.getInstance(account);
             const result = await cloud189.listFiles(folderId);
-            if (!result?.fileListAO) {
-                return res.json({
-                    success: true,
-                    data: {
-                        currentFolderId: folderId,
-                        entries: []
-                    }
-                });
-            }
+            
+            const listAO = result?.fileListAO || {};
+            const rawFolders = Array.isArray(listAO.folderList) ? listAO.folderList : (Array.isArray(result?.folderList) ? result.folderList : []);
+            const rawFiles = Array.isArray(listAO.fileList) ? listAO.fileList : (Array.isArray(result?.fileList) ? result.fileList : []);
 
-            const folderList = (result.fileListAO.folderList || []).map((folder) => ({
-                id: String(folder.id),
-                name: folder.name,
+            const folderList = rawFolders.map((folder) => ({
+                id: String(folder.id || folder.fileId),
+                name: folder.name || folder.fileName,
                 isFolder: true,
                 size: Number(folder.size || 0),
                 lastOpTime: folder.lastOpTime || folder.lastModifyTime || folder.createDate || ''
             }));
-            const fileList = (result.fileListAO.fileList || []).map((file) => ({
-                id: String(file.id),
-                name: file.name,
+            const fileList = rawFiles.map((file) => ({
+                id: String(file.id || file.fileId),
+                name: file.name || file.fileName,
                 isFolder: false,
                 size: Number(file.size || 0),
                 lastOpTime: file.lastOpTime || file.lastModifyTime || file.createDate || '',
-                ext: path.extname(file.name || '').toLowerCase()
+                ext: path.extname(file.name || file.fileName || '').toLowerCase()
             }));
             const entries = [...folderList, ...fileList].sort((left, right) => {
                 if (left.isFolder !== right.isFolder) {
@@ -1308,6 +1640,31 @@ AppDataSource.initialize().then(async () => {
             res.json({ success: true, data: null });
         } catch (error) {
             res.json({ success: false, error: error.message });
+        }
+    });
+
+        // 批量转换 .cas 存根
+    app.post('/api/file-manager/batch-convert-cas', async (req, res) => {
+        try {
+            const { accountId, fileIds } = req.body || {};
+            const account = await accountRepo.findOneBy({ id: Number(accountId) });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            const MEDIA_EXTS = ['.mkv', '.iso', '.ts', '.mp4', '.avi', '.rmvb', '.wmv', '.m2ts', '.mpg', '.flv', '.rm', '.mov'];
+            let count = 0;
+            for (const fileId of fileIds) {
+                const fileInfo = await cloud189.getFileInfo(fileId);
+                if (fileInfo && !fileInfo.isFolder) {
+                    const ext = (fileInfo.name || '').split('.').pop().toLowerCase();
+                    if (MEDIA_EXTS.includes('.' + ext)) {
+                        await cloud189.renameFile(fileId, `${fileInfo.name}.cas`);
+                        count++;
+                    }
+                }
+            }
+            res.json({ success: true, data: { count } });
+        } catch (error) {
+            res.status(400).json({ success: false, error: error.message });
         }
     });
 
@@ -1961,7 +2318,7 @@ AppDataSource.initialize().then(async () => {
                 action: 'restart_container',
                 target: { type: 'none', value: '' },
                 reply: '我可以帮你重启当前服务进程。',
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2028,7 +2385,7 @@ AppDataSource.initialize().then(async () => {
                     mediaType: inferChatMediaType(text)
                 },
                 reply: `我可以帮你查询 ${workflowFolder} 目录，并让程序按 TMDB 识别、重命名后再移动到默认整理根目录。`,
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2042,7 +2399,7 @@ AppDataSource.initialize().then(async () => {
                     mediaType: inferChatMediaType(text)
                 },
                 reply: `我可以帮你把 ${contextualFolder} 目录下当前识别到的任务批量执行整理器。`,
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2056,7 +2413,7 @@ AppDataSource.initialize().then(async () => {
                     mediaType: inferChatMediaType(text)
                 },
                 reply: `我可以帮你把 ${contextualFolder} 目录下当前识别到的任务移动到默认整理根目录。`,
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2070,7 +2427,7 @@ AppDataSource.initialize().then(async () => {
                     mediaType: inferChatMediaType(text)
                 },
                 reply: `我可以帮你对 ${contextualFolder} 目录执行整理器并移动到默认整理根目录。`,
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2080,7 +2437,7 @@ AppDataSource.initialize().then(async () => {
                 action: 'run_all_tasks',
                 target: { type: 'all', value: '' },
                 reply: '我可以帮你执行所有待处理任务。',
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2090,7 +2447,63 @@ AppDataSource.initialize().then(async () => {
                 action: 'notify_emby',
                 target: taskId ? { type: 'task_id', value: String(taskId) } : { type: 'task_name', value: text.replace(/通知.*emby|刷新.*emby/ig, '').trim() },
                 reply: '我可以帮你触发 Emby 通知。',
-                needsConfirmation: true
+                needsConfirmation: false
+            };
+        }
+
+        if (/搜索(剧名|电影|电视剧|名字|名称)/.test(text)) {
+            // 只移除带 # 的 ID，保留普通数字 (如 101)
+            const keyword = text.replace(/.*搜索(?:剧名|电影|电视剧|名字|名称)\s*/, '').replace(/#\d+/g, '').trim();
+            return {
+                mode: 'action',
+                action: 'search_tmdb_candidates',
+                target: { 
+                    keyword: keyword || (taskId ? "" : text), 
+                    taskId: taskId || undefined 
+                },
+                reply: `我来帮你搜索 "${keyword}" 的候选结果。`,
+                needsConfirmation: false
+            };
+        }
+
+        if (/绑定.*(?:为|到)?(电影|电视剧|tv|movie)\s*(?:id)?\s*:?\s*(\d+)/i.test(text) && taskId) {
+            const match = text.match(/绑定.*(?:为|到)?(电影|电视剧|tv|movie)\s*(?:id)?\s*:?\s*(\d+)/i);
+            const typeMap = { '电影': 'movie', 'movie': 'movie', '电视剧': 'tv', 'tv': 'tv' };
+            const mediaType = typeMap[match[1]] || 'movie';
+            const tmdbId = match[2];
+            
+            return {
+                mode: 'action',
+                action: 'correct_ai_recognition',
+                target: { 
+                    type: 'task_id', 
+                    value: String(taskId),
+                    tmdbId: tmdbId,
+                    mediaType: mediaType
+                },
+                reply: `我来帮你将任务 #${taskId} 绑定为 [${match[1]}] ID: ${tmdbId}。`,
+                needsConfirmation: false
+            };
+        }
+
+        if (/识别(错|不对|有问题)|(不|没)识别对/.test(text) || (/它是|它是|正确的(?:剧名|名字)?是/.test(text) && taskId)) {
+            let correction = text.replace(/.*(?:识别错|不对|有问题|不识别对|它是|正确的(?:剧名|名字)?是)/, '').replace(/[#\d]+/g, '').trim();
+            const tmdbIdMatch = text.match(/tmdb\s*(?:id)?\s*:?\s*(\d+)/i) || text.match(/id\s*是\s*(\d+)/);
+            
+            return {
+                mode: 'action',
+                action: 'correct_ai_recognition',
+                target: taskId ? { 
+                    type: 'task_id', 
+                    value: String(taskId),
+                    correction: correction,
+                    tmdbId: tmdbIdMatch ? tmdbIdMatch[1] : undefined
+                } : { 
+                    type: 'task_name', 
+                    value: text.replace(/帮我|请|修正|识别错|不对|有问题/g, '').trim() 
+                },
+                reply: '我可以帮你修正 AI 的识别结果并重新执行刮削。',
+                needsConfirmation: false
             };
         }
 
@@ -2100,7 +2513,7 @@ AppDataSource.initialize().then(async () => {
                 action: 'delete_task',
                 target: taskId ? { type: 'task_id', value: String(taskId) } : { type: 'task_name', value: text.replace(/删除.*任务/g, '').trim() },
                 reply: '我可以帮你删除这个任务记录。',
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2110,7 +2523,7 @@ AppDataSource.initialize().then(async () => {
                 action: 'run_organizer',
                 target: taskId ? { type: 'task_id', value: String(taskId) } : /最新/.test(text) ? { type: 'latest', value: '' } : { type: 'task_name', value: text.replace(/帮我|请|执行|运行|整理器|整理|重命名|移动/g, '').trim() },
                 reply: '我可以帮你调用整理器执行整理、重命名和移动。',
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2120,7 +2533,7 @@ AppDataSource.initialize().then(async () => {
                 action: 'run_task',
                 target: taskId ? { type: 'task_id', value: String(taskId) } : /最新/.test(text) ? { type: 'latest', value: '' } : { type: 'task_name', value: text.replace(/帮我|请|执行|运行|任务/g, '').trim() },
                 reply: '我可以帮你执行这个任务。',
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2142,7 +2555,7 @@ AppDataSource.initialize().then(async () => {
                     countOnly: /(多少|几个|数量|统计)/.test(fullText)
                 },
                 reply: `我可以帮你查询 ${contextualFolder} 目录，然后让程序按 TMDB 识别、重命名并移动到默认整理根目录。`,
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2159,7 +2572,7 @@ AppDataSource.initialize().then(async () => {
                     countOnly: /(多少|几个|数量|统计)/.test(fullText)
                 },
                 reply: `我可以帮你查询 ${directFolderMatch[1]} 目录，然后让程序按 TMDB 识别、重命名并移动到默认整理根目录。`,
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2199,7 +2612,7 @@ AppDataSource.initialize().then(async () => {
                     mediaType
                 },
                 reply: `我可以帮你查询 ${folderTarget} 目录，然后让程序按 TMDB 识别、重命名并移动到默认整理根目录。`,
-                needsConfirmation: true
+                needsConfirmation: false
             };
         }
 
@@ -2244,6 +2657,7 @@ AppDataSource.initialize().then(async () => {
 - notify_emby
 - delete_task
 - restart_container
+- correct_ai_recognition
 
 target.type 只能是：
 - task_id
@@ -2256,8 +2670,8 @@ target.type 只能是：
 返回格式固定为：
 {
   "mode": "action" | "reply",
-  "action": "list_tasks" | "list_unorganized_media" | "organize_folder_workflow" | "run_organizer_folder" | "run_task" | "run_all_tasks" | "run_organizer" | "notify_emby" | "delete_task" | "restart_container" | "",
-  "target": { "type": "task_id" | "task_name" | "latest" | "all" | "status" | "none" | "folder_name", "value": "string", "mediaType": "movie" | "tv" | "all", "countOnly": true | false },
+  "action": "list_tasks" | "list_unorganized_media" | "organize_folder_workflow" | "run_organizer_folder" | "run_task" | "run_all_tasks" | "run_organizer" | "notify_emby" | "delete_task" | "restart_container" | "correct_ai_recognition" | "",
+  "target": { "type": "task_id" | "task_name" | "latest" | "all" | "status" | "none" | "folder_name", "value": "string", "mediaType": "movie" | "tv" | "all", "countOnly": true | false, "correction": "string", "tmdbId": "string" },
   "reply": "string",
   "needsConfirmation": true | false
 }
@@ -2268,6 +2682,7 @@ target.type 只能是：
 - 查询“未刮削/未整理有多少文件/多少电影/多少电视剧”也属于 list_unorganized_media，needsConfirmation=false
 - 如果用户要求“查询后整理并移动”，优先使用 organize_folder_workflow
 - 如果用户说“帮我移动一下/整理一下/刮削一下”且上下文刚提到“未刮削/未整理”，则使用 run_organizer_folder
+- 如果用户反馈某个任务“识别错了”、“不对”、“应该是xxx”或提供了正确的 TMDB ID，使用 correct_ai_recognition。在 correction 中放入正确的剧名，在 tmdbId 中放入数字 ID。
 - 一切会改动系统状态的动作 needsConfirmation=true
 - 如果用户意思不明确，mode=reply，action留空，reply里要求用户补充任务编号或任务名
 - 不要输出 markdown，不要输出解释，只输出 JSON`
@@ -2459,7 +2874,8 @@ target.type 只能是：
                             resourceName: group.resourceName,
                             files: group.files
                         });
-                        successResults.push(`- ${group.groupPath}: ${result?.message || '整理完成'}`);
+                        const taskIdStr = result?.taskId ? `[#${result.taskId}] ` : '';
+                        successResults.push(`- ${group.groupPath}: ${taskIdStr}${result?.message || '整理完成'}`);
                     } catch (error) {
                         failedResults.push(`- ${group.groupPath}: 失败，${error.message}`);
                     }
@@ -2482,7 +2898,9 @@ target.type 只能是：
                     summaryLines.push(...groupingSkipped.slice(0, 20).map(item => `  - ${item}`));
                 }
 
-                return summaryLines.join('\n');
+                const summary = summaryLines.join('\n');
+                messageUtil.sendMessage(summary);
+                return summary;
             }
             case 'run_organizer_folder': {
                 const requestedFolder = resolveChatFolderAlias(target?.value || '')
@@ -2506,32 +2924,104 @@ target.type 只能是：
                         results.push(`- #${task.id} ${formatTaskLabel(task)}: 失败，${error.message}`);
                     }
                 }
-                return `${requestedFolder} 目录批量整理结果：\n${results.join('\n')}`;
+                const summary = `${requestedFolder} 目录批量整理结果：\n${results.join('\n')}`;
+                messageUtil.sendMessage(summary);
+                return summary;
             }
             case 'run_all_tasks': {
                 const result = await taskService.processAllTasks(true);
-                return result && result.length > 0 ? `已执行所有待处理任务：\n${result.join('\n\n')}` : '已执行所有待处理任务，没有新的转存结果。';
+                const summary = result && result.length > 0 ? `已执行所有待处理任务：\n${result.join('\n\n')}` : '已执行所有待处理任务，没有新的转存结果。';
+                messageUtil.sendMessage(summary);
+                return summary;
             }
             case 'run_task': {
                 const task = await resolveTaskTarget(target);
                 const result = await taskService.processTask(task);
-                return result ? `任务已执行：${formatTaskLabel(task)}\n${result}` : `任务已执行：${formatTaskLabel(task)}`;
+                const summary = result ? `任务已执行：${formatTaskLabel(task)}\n${result}` : `任务已执行：${formatTaskLabel(task)}`;
+                messageUtil.sendMessage(summary);
+                return summary;
             }
             case 'run_organizer': {
                 const task = await resolveTaskTarget(target);
                 const result = await organizerService.organizeTaskById(task.id, { triggerStrm: true, force: true });
-                return result?.message || `整理器已执行：${formatTaskLabel(task)}`;
+                const summary = result?.message || `整理器已执行：${formatTaskLabel(task)}`;
+                messageUtil.sendMessage(summary);
+                return summary;
             }
             case 'notify_emby': {
                 const task = await resolveTaskTarget(target);
                 const embyService = new EmbyService(taskService);
                 await embyService.notify(task);
-                return `已通知 Emby：${formatTaskLabel(task)}`;
+                const summary = `已通知 Emby：${formatTaskLabel(task)}`;
+                messageUtil.sendMessage(summary);
+                return summary;
             }
             case 'delete_task': {
                 const task = await resolveTaskTarget(target);
                 await taskService.deleteTask(task.id, false);
-                return `已删除任务：${formatTaskLabel(task)}`;
+                const summary = `已删除任务：${formatTaskLabel(task)}`;
+                messageUtil.sendMessage(summary);
+                return summary;
+            }
+            case 'correct_ai_recognition': {
+                const task = await resolveTaskTarget(target);
+                const correction = String(target?.correction || '').trim();
+                const tmdbId = String(target?.tmdbId || '').trim();
+                const mediaType = String(target?.mediaType || '').toLowerCase(); // movie 或 tv
+
+                const updates = {
+                    tmdbContent: '' // 清空内容以强制重新刮削
+                };
+
+                if (tmdbId) {
+                    updates.tmdbId = tmdbId;
+                    // 如果指定了 ID，我们可以预设一个基础的 tmdbContent，这样后续识别就能直接锁定类型
+                    if (mediaType === 'movie' || mediaType === 'tv') {
+                        updates.tmdbContent = JSON.stringify({ id: tmdbId, type: mediaType });
+                    }
+                }
+                
+                if (correction && correction !== String(task.id)) {
+                    updates.resourceName = correction;
+                }
+
+                await taskRepo.update(task.id, updates);
+                
+                // 重新加载任务并执行整理器
+                const updatedTask = await taskService.getTaskById(task.id);
+                const result = await organizerService.organizeTaskById(updatedTask.id, { triggerStrm: true, force: true });
+                
+                const summary = `已修正任务 #${task.id} 的识别信息：\n${tmdbId ? `- 指定 TMDB ID: ${tmdbId} (${mediaType || '自动识别'})\n` : ''}${correction ? `- 指定剧名: ${correction}\n` : ''}\n程序已重新执行整理与刮削：\n${result?.message || '整理完成'}`;
+                messageUtil.sendMessage(summary);
+                return summary;
+            }
+            case 'search_tmdb_candidates': {
+                const keyword = String(target?.keyword || '').trim();
+                const taskId = target?.taskId;
+                if (!keyword) throw new Error('请输入要搜索的剧名或电影名');
+                
+                const result = await tmdbService.search(keyword);
+                const movies = (result.movies || []).slice(0, 5);
+                const tvs = (result.tvShows || []).slice(0, 5);
+                
+                if (movies.length === 0 && tvs.length === 0) {
+                    return `抱歉，在 TMDB 中未找到关于 "${keyword}" 的任何结果。请尝试缩简名称再次搜索。`;
+                }
+
+                const lines = [`为您找到关于 "${keyword}" 的候选结果：`];
+                if (movies.length > 0) {
+                    lines.push('\n🎬 电影：');
+                    movies.forEach(m => lines.push(`- [电影] ${m.title} (${new Date(m.releaseDate).getFullYear() || '未知'}) | TMDB ID: ${m.id}`));
+                }
+                if (tvs.length > 0) {
+                    lines.push('\n📺 电视剧：');
+                    tvs.forEach(t => lines.push(`- [电视剧] ${t.title} (${new Date(t.releaseDate).getFullYear() || '未知'}) | TMDB ID: ${t.id}`));
+                }
+                
+                const targetRef = taskId ? `#${taskId}` : '最新的';
+                lines.push(`\n您可以回复：\n"绑定${targetRef}任务为电影 ID xxx" 或\n"绑定${targetRef}任务为电视剧 ID xxx"\n来完成手动指定。`);
+                
+                return lines.join('\n');
             }
             case 'restart_container': {
                 setTimeout(() => {
@@ -2608,6 +3098,46 @@ target.type 只能是：
                 return;
             }
 
+            if (workflowRunner) {
+                const pendingRun = await workflowRunner.getPendingConfirm(req.sessionID || req.ip || 'web', 'web');
+                if (pendingRun) {
+                    const normalizedReply = userMessage.toLowerCase();
+                    if (['y', 'yes', '1', '确认', '确认执行', '执行'].includes(normalizedReply)) {
+                        const run = await workflowRunner.confirm(pendingRun.id, pendingRun.confirmKey, true);
+                        if (!run) {
+                            throw new Error('工作流不存在或确认已失效');
+                        }
+                        res.json({
+                            success: true,
+                            data: {
+                                reply: run.context?.resultSummary || run.context?.notifySummary || '工作流已执行完成。'
+                            }
+                        });
+                        return;
+                    }
+                    if (['n', 'no', '2', '取消', '拒绝'].includes(normalizedReply)) {
+                        const run = await workflowRunner.confirm(pendingRun.id, pendingRun.confirmKey, false);
+                        if (!run) {
+                            throw new Error('工作流不存在或确认已失效');
+                        }
+                        res.json({
+                            success: true,
+                            data: {
+                                reply: '工作流已取消。'
+                            }
+                        });
+                        return;
+                    }
+                    res.json({
+                        success: true,
+                        data: {
+                            reply: '当前有待确认工作流，请回复 Y 确认执行，或 N 取消。'
+                        }
+                    });
+                    return;
+                }
+            }
+
             const recentTasks = await listRecentTasksForChat();
             const normalizedHistory = Array.isArray(history)
                 ? history
@@ -2624,7 +3154,7 @@ target.type 只能是：
             if (parsedAction?.mode === 'plan' && Array.isArray(parsedAction?.actions) && parsedAction.actions.length > 0) {
                 const previewLines = [];
                 for (const [index, item] of parsedAction.actions.entries()) {
-                    if (['run_task', 'run_organizer', 'notify_emby', 'delete_task'].includes(item.action)) {
+                    if (['run_task', 'run_organizer', 'notify_emby', 'delete_task', 'correct_ai_recognition'].includes(item.action)) {
                         const task = await resolveTaskTarget(item.target || {});
                         previewLines.push(`${index + 1}. ${item.reply || item.action}\n目标任务：#${task.id} ${formatTaskLabel(task)}`);
                     } else if (item.action === 'organize_folder_workflow') {
@@ -2667,78 +3197,12 @@ target.type 只能是：
             }
 
             if (parsedAction?.mode === 'action' && parsedAction?.action) {
-                if (parsedAction.action === 'organize_folder_workflow') {
-                    const runId = await workflowRunner.start('organize_dir', {
-                        folderName: parsedAction.target?.value || '',
-                        mediaType: parsedAction.target?.mediaType || 'all',
-                        countOnly: Boolean(parsedAction.target?.countOnly)
-                    }, {
-                        source: 'web',
-                        chatId: req.sessionID || req.ip || 'web'
-                    });
-                    const run = await workflowRunner.getRun(runId);
-                    if (run?.status === 'awaiting_confirm') {
-                        res.json({
-                            success: true,
-                            data: {
-                                reply: run.context?.preview || '工作流已生成预览，确认后继续执行。',
-                                action: {
-                                    action: 'workflow_confirm',
-                                    mode: 'workflow_confirm',
-                                    runId,
-                                    key: run.confirmKey
-                                }
-                            }
-                        });
-                        return;
-                    }
-                    res.json({
-                        success: true,
-                        data: {
-                            reply: run?.context?.resultSummary || '工作流已执行完成。'
-                        }
-                    });
-                    return;
-                }
-
-                if (!parsedAction.needsConfirmation) {
-                    const reply = await executeChatAction(parsedAction.action, parsedAction.target || {});
-                    res.json({ success: true, data: { reply } });
-                    return;
-                }
-
-                let previewText = parsedAction.reply || '我已识别到一个可执行动作。';
-                try {
-                    if (['run_task', 'run_organizer', 'notify_emby', 'delete_task'].includes(parsedAction.action)) {
-                        const task = await resolveTaskTarget(parsedAction.target || {});
-                        previewText = `${previewText}\n\n目标任务：#${task.id} ${formatTaskLabel(task)}`;
-                    } else if (parsedAction.action === 'organize_folder_workflow') {
-                        const folderLabel = resolveChatFolderAlias(parsedAction.target?.value || '')
-                            || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
-                        const folderEntries = await listCloudMediaEntriesInFolderForChat(folderLabel, parsedAction.target?.mediaType || 'all');
-                        const grouped = groupCloudEntriesForWorkflow(folderLabel, folderEntries);
-                        previewText = `${previewText}\n\n目标目录：${folderLabel}\n真实文件数：${folderEntries.length}\n目录分组数：${grouped.groups.length}`;
-                    } else if (parsedAction.action === 'run_organizer_folder') {
-                        const folderLabel = resolveChatFolderAlias(parsedAction.target?.value || '')
-                            || resolveChatFolderAlias(ConfigService.getConfigValue('task.autoCreate.targetFolder') || '');
-                        const folderTasks = await listTasksInFolderForChat(folderLabel, parsedAction.target?.mediaType || 'all');
-                        previewText = `${previewText}\n\n目标目录：${folderLabel}\n匹配任务数：${folderTasks.length}`;
-                    } else if (parsedAction.action === 'run_all_tasks') {
-                        previewText = `${previewText}\n\n目标：所有待处理任务`;
-                    } else if (parsedAction.action === 'restart_container') {
-                        previewText = `${previewText}\n\n目标：当前服务进程`;
-                    }
-                } catch (error) {
-                    res.json({ success: true, data: { reply: error.message } });
-                    return;
-                }
-
+                // 强制关闭任何确认逻辑，直接进入执行环节
+                parsedAction.needsConfirmation = false;
+                const reply = await executeChatAction(parsedAction.action, parsedAction.target || {});
                 res.json({
                     success: true,
-                    data: {
-                        reply: `${previewText}\n\n确认后我会直接调用程序执行。`,
-                        action: parsedAction
-                    }
+                    data: { reply }
                 });
                 return;
             }
@@ -2862,6 +3326,7 @@ target.type 只能是：
         try {
             const keyword = req.query.keyword?.trim();
             const year = req.query.year?.trim() || '';
+            console.log(`[API] GET /api/tmdb/search - keyword: "${keyword}", year: "${year}"`);
             if (!keyword) {
                 throw new Error('搜索关键字不能为空');
             }
@@ -2874,6 +3339,7 @@ target.type 只能是：
                 ].slice(0, 10)
             });
         } catch (error) {
+            console.error('[API] TMDB搜索失败:', error.message);
             res.json({ success: false, error: error.message });
         }
     });

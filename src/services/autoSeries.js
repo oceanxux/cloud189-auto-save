@@ -12,20 +12,22 @@ class AutoSeriesService {
         this.tmdbService = new TMDBService();
     }
 
-    async createByTitle({ title, year = '', mode = 'lazy', shareLink = '', resourceTitle = '' }) {
-        const normalizedTitle = String(title || '').trim();
+    async createByTitle({ title, keyword, year = '', mode = '', shareLink = '', resourceTitle = '' }) {
+        console.log('[AutoSeries] createByTitle received:', { title, keyword, year, mode });
+        const normalizedTitle = String(title || keyword || '').trim();
         const normalizedYear = String(year || '').trim();
-        const normalizedMode = this._normalizeMode(mode);
+
+        const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
+        const normalizedMode = this._normalizeMode(mode || autoCreateConfig.mode || 'lazy');
         const manualShareLink = String(shareLink || '').trim();
         const manualResourceTitle = String(resourceTitle || '').trim();
         if (!normalizedTitle) {
-            throw new Error('剧名不能为空');
+            throw new Error(`剧名不能为空 (收到参数: ${JSON.stringify({ title, keyword })})`);
         }
         if (!['normal', 'lazy'].includes(normalizedMode)) {
             throw new Error('无效的自动追剧模式');
         }
 
-        const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
         const accountId = parseInt(autoCreateConfig.accountId);
         const targetFolderId = String(autoCreateConfig.targetFolderId || '').trim();
         const targetFolder = String(autoCreateConfig.targetFolder || '').trim();
@@ -178,11 +180,11 @@ class AutoSeriesService {
         }
     }
 
-    async searchResources({ title, year = '' }) {
-        const normalizedTitle = String(title || '').trim();
+    async searchResources({ title, keyword, year = '' }) {
+        const normalizedTitle = String(title || keyword || '').trim();
         const normalizedYear = String(year || '').trim();
         if (!normalizedTitle) {
-            throw new Error('剧名不能为空');
+            throw new Error(`剧名不能为空 (收到参数: ${JSON.stringify({ title, keyword })})`);
         }
 
         const tmdbInfo = await this._resolveTmdb(normalizedTitle, normalizedYear);

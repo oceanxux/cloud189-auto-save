@@ -37,6 +37,15 @@ const cases = [
             season: 1,
             episode: 1
         }
+    },
+    {
+        input: 'Season 01',
+        expected: {
+            cleanTitle: '',
+            year: null,
+            season: 1,
+            episode: null
+        }
     }
 ];
 

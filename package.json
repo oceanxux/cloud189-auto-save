@@ -1,10 +1,6 @@
 {
   "name": "cloud189-auto-save",
-<<<<<<< HEAD
-  "version": "2.2.68",
-=======
   "version": "2.3.0",
->>>>>>> 0714d90 (feat: ui 2.0)
   "description": "天翼云盘自动转存系统",
   "main": "src/index.js",
   "scripts": {

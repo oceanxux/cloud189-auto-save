@@ -158,8 +158,11 @@ function App() {
         if (!response.ok || !data.success) {
           throw new Error(data.message || data.error || '重启失败');
         }
-        showToast('重启请求已发送，服务将在数秒后断开并等待容器拉起。', 'info');
+        showToast('重启请求已发送，当前登录会话已清除，服务恢复后请重新登录。', 'info');
         setIsUserMenuOpen(false);
+        window.setTimeout(() => {
+          window.location.href = '/login';
+        }, 1800);
       } catch (error: any) {
         showToast(error?.message || '重启失败', 'error');
       } finally {

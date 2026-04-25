@@ -81,6 +81,20 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
     return { label: normalized || '未知', className: 'bg-slate-500/10 text-slate-500' };
   };
 
+  const getTaskEpisodeTotal = (task: Task) => {
+    const seasonTotal = Number(task.tmdbSeasonNumber || 0) > 0 ? Number(task.tmdbSeasonEpisodes || 0) : 0;
+    return seasonTotal > 0 ? seasonTotal : Number(task.totalEpisodes || 0);
+  };
+
+  const getTaskSeasonTag = (task: Task) => {
+    const seasonNumber = Number(task.tmdbSeasonNumber || 0);
+    if (!seasonNumber) return '';
+    const total = getTaskEpisodeTotal(task);
+    const current = Number(task.currentEpisodes || 0);
+    const progressText = total > 0 ? ` · ${Math.min(current, total)}/${total}集` : '';
+    return `S${String(seasonNumber).padStart(2, '0')}${progressText}`;
+  };
+
   const fetchTasks = useCallback(async () => {
     setLoading(true);
     try {
@@ -258,6 +272,11 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
       <div className="grid grid-cols-1 gap-2.5">
         {tasks.map(task => {
           const statusMeta = getTaskStatusMeta(task.status);
+          const episodeTotal = getTaskEpisodeTotal(task);
+          const episodeCurrent = episodeTotal > 0
+            ? Math.min(Number(task.currentEpisodes || 0), episodeTotal)
+            : Number(task.currentEpisodes || 0);
+          const seasonTag = getTaskSeasonTag(task);
           return (
             <div key={task.id} className={`workbench-panel p-3.5 group relative transition-all ${openTaskMenuId === task.id ? 'z-20 overflow-visible' : 'overflow-hidden'} ${selectedTaskIds.includes(task.id) ? 'ring-1 ring-blue-500 bg-blue-50/5' : ''}`}>
               <div className={`absolute left-0 top-0 w-0.5 h-full ${task.lastOrganizeError ? 'bg-red-500' : statusMeta.accentClass}`} />
@@ -268,9 +287,9 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
                     <h3 className="font-black text-sm truncate max-w-[200px] md:max-w-md">{task.resourceName.replace(/\(根\)$/g, '')}</h3>
                     <div className="flex items-center gap-3 text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">
                       <span className="flex items-center gap-1"><User size={9} />{task.account.username}{task.account.accountType === 'family' ? ' [家庭云]' : ' [个人云]'}</span>
-                      {task.tmdbSeasonNumber && (
-                        <span className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-blue-500">
-                          S{String(task.tmdbSeasonNumber).padStart(2, '0')}{task.tmdbSeasonEpisodes ? ` · ${task.tmdbSeasonEpisodes}集` : ''}
+                      {seasonTag && (
+                        <span className={`rounded-md px-1.5 py-0.5 ${episodeTotal > 0 && task.currentEpisodes >= episodeTotal ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>
+                          {seasonTag}
                         </span>
                       )}
                       <span className={`rounded-md px-1.5 py-0.5 ${statusMeta.badgeClass}`}>{statusMeta.label}</span>
@@ -286,8 +305,8 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
                 </div>
                 <div className="flex items-center gap-4 shrink-0">
                   <div className="text-right hidden sm:block">
-                    <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">进度 {task.currentEpisodes}/{task.totalEpisodes || '?'}</div>
-                    <div className="w-20 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"><div className={`h-full ${statusMeta.progressClass}`} style={{ width: `${task.totalEpisodes > 0 ? Math.min(100, (task.currentEpisodes / task.totalEpisodes) * 100) : 0}%` }} /></div>
+                    <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">进度 {episodeCurrent}/{episodeTotal || '?'}</div>
+                    <div className="w-20 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"><div className={`h-full ${statusMeta.progressClass}`} style={{ width: `${episodeTotal > 0 ? Math.min(100, (episodeCurrent / episodeTotal) * 100) : 0}%` }} /></div>
                   </div>
                   <div className="flex items-center gap-1">
                     <button onClick={() => handleRunTask(task.id)} className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500 rounded-lg transition-all"><RefreshCw size={15} /></button>

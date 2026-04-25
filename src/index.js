@@ -15,7 +15,6 @@ const { logTaskEvent, initSSE, sendAIMessage } = require('./utils/logUtils');
 const TelegramBotManager = require('./utils/TelegramBotManager');
 const fs = require('fs').promises;
 const path = require('path');
-const crypto = require('crypto');
 const { setupCloudSaverRoutes, clearCloudSaverToken } = require('./sdk/cloudsaver');
 const { Like, Not, IsNull, In, Or } = require('typeorm');
 const cors = require('cors'); 
@@ -39,106 +38,6 @@ const appPort = Number(process.env.PORT || 3000);
 let embyStandaloneProxyServer = null;
 const SESSION_SECRET = process.env.SESSION_SECRET || ConfigService.getConfigValue('system.sessionSecret') || 'LhX2IyUcMAz2';
 const AUTH_COOKIE_NAME = 'cloud189_auto_save_auth';
-const AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
-
-const parseCookies = (cookieHeader = '') => {
-    return String(cookieHeader || '').split(';').reduce((cookies, item) => {
-        const separatorIndex = item.indexOf('=');
-        if (separatorIndex === -1) {
-            return cookies;
-        }
-        const key = item.slice(0, separatorIndex).trim();
-        const value = item.slice(separatorIndex + 1).trim();
-        if (!key) {
-            return cookies;
-        }
-        try {
-            cookies[key] = decodeURIComponent(value);
-        } catch (error) {
-            cookies[key] = value;
-        }
-        return cookies;
-    }, {});
-};
-
-const getAuthCookieSecret = () => [
-    SESSION_SECRET,
-    ConfigService.getConfigValue('system.username', ''),
-    ConfigService.getConfigValue('system.password', '')
-].join(':');
-
-const signAuthPayload = (payload) => {
-    return crypto
-        .createHmac('sha256', getAuthCookieSecret())
-        .update(payload)
-        .digest('base64url');
-};
-
-const createAuthToken = (username) => {
-    const payload = Buffer.from(JSON.stringify({
-        username,
-        expiresAt: Date.now() + AUTH_COOKIE_MAX_AGE
-    }), 'utf8').toString('base64url');
-    return `${payload}.${signAuthPayload(payload)}`;
-};
-
-const verifyAuthToken = (token) => {
-    const [payload, signature] = String(token || '').split('.');
-    if (!payload || !signature) {
-        return null;
-    }
-
-    const expectedSignature = signAuthPayload(payload);
-    const signatureBuffer = Buffer.from(signature);
-    const expectedBuffer = Buffer.from(expectedSignature);
-    if (signatureBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
-        return null;
-    }
-
-    try {
-        const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-        if (!data?.username || Number(data.expiresAt || 0) < Date.now()) {
-            return null;
-        }
-        if (data.username !== ConfigService.getConfigValue('system.username')) {
-            return null;
-        }
-        return data.username;
-    } catch (error) {
-        return null;
-    }
-};
-
-const getAuthCookieOptions = (req) => ({
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: Boolean(req.secure),
-    maxAge: AUTH_COOKIE_MAX_AGE,
-    path: '/'
-});
-
-const restoreSessionFromAuthCookie = (req) => {
-    if (req.session?.authenticated) {
-        return true;
-    }
-
-    const cookies = parseCookies(req.headers.cookie || '');
-    const username = verifyAuthToken(cookies[AUTH_COOKIE_NAME]);
-    if (!username || !req.session) {
-        return false;
-    }
-
-    req.session.authenticated = true;
-    req.session.username = username;
-    return true;
-};
-
-const persistAuthCookie = (req, res) => {
-    const username = req.session?.username || ConfigService.getConfigValue('system.username');
-    if (username) {
-        res.cookie(AUTH_COOKIE_NAME, createAuthToken(username), getAuthCookieOptions(req));
-    }
-};
 const resolvePublicDir = () => {
     const candidates = [
         path.join(__dirname, 'public'),
@@ -469,8 +368,7 @@ const authenticateSession = (req, res, next) => {
     if (apiKey && configApiKey && apiKey === configApiKey) {
         return next();
     }
-    if (restoreSessionFromAuthCookie(req)) {
-        persistAuthCookie(req, res);
+    if (req.session?.authenticated) {
         next();
     } else {
         // API 请求返回 401，页面请求重定向到登录页
@@ -484,11 +382,10 @@ const authenticateSession = (req, res, next) => {
 
 // 添加根路径处理
 app.get('/', async (req, res) => {
-    if (!restoreSessionFromAuthCookie(req)) {
+    if (!req.session?.authenticated) {
         res.redirect('/login');
         return;
     }
-    persistAuthCookie(req, res);
     await sendPublicFileOrFallback(res, 'index.html');
 });
 
@@ -505,7 +402,7 @@ app.post('/api/auth/login', (req, res) => {
         password === ConfigService.getConfigValue('system.password')) {
         req.session.authenticated = true;
         req.session.username = username;
-        res.cookie(AUTH_COOKIE_NAME, createAuthToken(username), getAuthCookieOptions(req));
+        res.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
         req.session.save((error) => {
             if (error) {
                 res.status(500).json({ success: false, error: '登录状态保存失败' });
@@ -524,19 +421,36 @@ app.post('/api/auth/logout', (req, res) => {
             res.status(500).json({ success: false, error: '退出登录失败' });
             return;
         }
-        res.clearCookie('connect.sid');
+        res.clearCookie('connect.sid', { path: '/' });
         res.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
         res.json({ success: true });
     });
 });
 
 app.post('/api/system/restart', authenticateSession, (req, res) => {
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.status(200).send(JSON.stringify({ success: true, message: '重启请求已接受' }));
-    setTimeout(() => {
+    const exitProcess = () => setTimeout(() => {
         console.log('收到容器重启请求，准备退出进程');
         process.exit(0);
     }, 1500);
+    const sendAccepted = () => {
+        res.clearCookie('connect.sid', { path: '/' });
+        res.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.status(200).send(JSON.stringify({ success: true, message: '重启请求已接受，当前登录会话已清除' }));
+        exitProcess();
+    };
+
+    if (!req.session) {
+        sendAccepted();
+        return;
+    }
+
+    req.session.destroy((error) => {
+        if (error) {
+            console.error('重启前清理登录会话失败:', error.message);
+        }
+        sendAccepted();
+    });
 });
 
 app.use(express.static(publicDir));

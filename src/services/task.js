@@ -54,11 +54,32 @@ class TaskService {
         throw new Error('TaskProcessedFile 仓库未初始化');
     }
 
+    _getSeasonExpectedEpisodes(task) {
+        const seasonNumber = Number(task?.tmdbSeasonNumber || 0);
+        const seasonEpisodes = Number(task?.tmdbSeasonEpisodes || 0);
+        if (seasonNumber > 0 && seasonEpisodes > 0) {
+            return seasonEpisodes;
+        }
+        return Number(task?.totalEpisodes || 0);
+    }
+
+    _alignTaskTotalEpisodesToSeason(task) {
+        if (!task?.id) {
+            return false;
+        }
+        const seasonEpisodes = this._getSeasonExpectedEpisodes(task);
+        if (seasonEpisodes > 0 && Number(task.totalEpisodes || 0) !== seasonEpisodes) {
+            task.totalEpisodes = seasonEpisodes;
+            return true;
+        }
+        return false;
+    }
+
     _syncTaskCompletionState(task) {
         if (!task?.id) {
             return false;
         }
-        const totalEpisodes = Number(task.totalEpisodes || 0);
+        const totalEpisodes = this._getSeasonExpectedEpisodes(task);
         const currentEpisodes = Number(task.currentEpisodes || 0);
         if (totalEpisodes > 0 && currentEpisodes >= totalEpisodes && task.status !== 'completed') {
             task.status = 'completed';
@@ -71,9 +92,12 @@ class TaskService {
         if (!task?.id) {
             return false;
         }
-        const changed = this._syncTaskCompletionState(task);
+        const changed = this._alignTaskTotalEpisodesToSeason(task) || this._syncTaskCompletionState(task);
         if (changed) {
-            await this.taskRepo.update(task.id, { status: task.status });
+            await this.taskRepo.update(task.id, {
+                totalEpisodes: task.totalEpisodes,
+                status: task.status
+            });
         }
         return changed;
     }
@@ -106,6 +130,10 @@ class TaskService {
 
     // 创建任务的基础配置
     _createTaskConfig(taskDto, shareInfo, realFolder, resourceName, currentEpisodes = 0, shareFolderId = null, shareFolderName = "") {
+        const seasonTotalEpisodes = Number(taskDto.tmdbSeasonNumber || 0) > 0 && Number(taskDto.tmdbSeasonEpisodes || 0) > 0
+            ? Number(taskDto.tmdbSeasonEpisodes)
+            : Number(taskDto.totalEpisodes || 0);
+
         return {
             accountId: taskDto.accountId,
             shareLink: taskDto.shareLink,
@@ -116,7 +144,7 @@ class TaskService {
             realFolderId:realFolder.id,
             realFolderName:realFolder.name,
             status: 'pending',
-            totalEpisodes: taskDto.totalEpisodes,
+            totalEpisodes: seasonTotalEpisodes,
             resourceName,
             currentEpisodes,
             shareFileId: shareInfo.fileId,
@@ -163,14 +191,16 @@ class TaskService {
         const tmdb = new TMDBService();
         let tmdbInfo = null;
 
+        const preferredSeasonNumber = Number(task.tmdbSeasonNumber || parsed.season || 0) || null;
+
         if (task.tmdbId) {
             tmdbInfo = await tmdb.getTVDetails(task.tmdbId);
-            if (tmdbInfo && parsed.season) {
-                const seasonDetail = await tmdb.getTVSeasonDetails(task.tmdbId, parsed.season);
+            if (tmdbInfo && preferredSeasonNumber) {
+                const seasonDetail = await tmdb.getTVSeasonDetails(task.tmdbId, preferredSeasonNumber);
                 if (seasonDetail) {
                     tmdbInfo = {
                         ...tmdbInfo,
-                        seasonNumber: parsed.season,
+                        seasonNumber: preferredSeasonNumber,
                         seasonName: seasonDetail.name || '',
                         seasonEpisodes: seasonDetail.episodeCount || 0,
                         totalEpisodes: seasonDetail.episodeCount || tmdbInfo.totalEpisodes || 0,
@@ -188,7 +218,7 @@ class TaskService {
             throw new Error('未匹配到 TMDB 剧集');
         }
 
-        const seasonNumber = Number(tmdbInfo.seasonNumber || parsed.season || 0) || null;
+        const seasonNumber = Number(tmdbInfo.seasonNumber || preferredSeasonNumber || 0) || null;
         const seasonEpisodes = Number(tmdbInfo.seasonEpisodes || 0);
         const totalEpisodes = seasonEpisodes || Number(tmdbInfo.totalEpisodes || 0);
         const result = {
@@ -216,9 +246,13 @@ class TaskService {
             };
             await this.taskRepo.update(task.id, updates);
             Object.assign(task, updates);
+            this._alignTaskTotalEpisodesToSeason(task);
             this._syncTaskCompletionState(task);
             if (task.status === 'completed') {
-                await this.taskRepo.update(task.id, { status: task.status });
+                await this.taskRepo.update(task.id, {
+                    totalEpisodes: task.totalEpisodes,
+                    status: task.status
+                });
             }
         }
 
@@ -1056,6 +1090,7 @@ class TaskService {
                 console.warn(`[TaskService] 自动补全集数由于网络或名称问题跳过: ${e.message}`);
             }
         }
+        this._alignTaskTotalEpisodesToSeason(task);
 
         let saveResults = [];
         let attemptedNewFiles = [];
@@ -1122,7 +1157,8 @@ class TaskService {
                     logTaskEvent(`${task.resourceName} 当前没有可生成懒转存STRM的媒体文件`, 'info', 'transfer');
                 }
 
-                if (task.totalEpisodes && task.currentEpisodes >= task.totalEpisodes) {
+                const expectedEpisodes = this._getSeasonExpectedEpisodes(task);
+                if (expectedEpisodes && task.currentEpisodes >= expectedEpisodes) {
                     task.status = 'completed';
                     await this._syncTaskDetailRecordsWithActualFiles(task);
                     logTaskEvent(`${task.resourceName} 已完结`, 'info', 'transfer');
@@ -1215,7 +1251,8 @@ class TaskService {
                 }
             }
             // 检查是否达到总数
-            if (task.totalEpisodes && task.currentEpisodes >= task.totalEpisodes) {
+            const expectedEpisodes = this._getSeasonExpectedEpisodes(task);
+            if (expectedEpisodes && task.currentEpisodes >= expectedEpisodes) {
                 task.status = 'completed';
                 logTaskEvent(`${task.resourceName} 已完结`, 'info', 'transfer')
             }
@@ -1272,7 +1309,7 @@ class TaskService {
 
         for (const task of taskList) {
             const stats = statsByTaskId.get(task.id);
-            let changed = false;
+            let changed = this._alignTaskTotalEpisodesToSeason(task);
 
             if (stats) {
                 const currentEpisodes = Number(task.currentEpisodes) || 0;
@@ -1294,6 +1331,7 @@ class TaskService {
             if (changed) {
                 pendingUpdates.push({
                     id: task.id,
+                    totalEpisodes: task.totalEpisodes,
                     currentEpisodes: task.currentEpisodes,
                     lastFileUpdateTime: task.lastFileUpdateTime,
                     status: task.status
@@ -1399,6 +1437,8 @@ class TaskService {
         if (task.matchPattern && !task.matchValue) {
             throw new Error('匹配模式需要提供匹配值');
         }
+        this._alignTaskTotalEpisodesToSeason(task);
+        this._syncTaskCompletionState(task);
         const newTask = await this.taskRepo.save(task)
         SchedulerService.removeTaskJob(task.id)
         if (task.enableCron && task.cronExpression) {

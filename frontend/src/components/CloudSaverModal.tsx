@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, ExternalLink, Plus, RefreshCw, X, Check } from 'lucide-react';
 import Modal from './Modal';
+import { extractEpisodeCountFromTitle } from '../utils/episodeCount';
 
 interface CloudSaverModalProps {
   isOpen: boolean;
@@ -12,6 +13,13 @@ const CloudSaverModal: React.FC<CloudSaverModalProps> = ({ isOpen, onClose, onTr
   const [keyword, setKeyword] = useState('');
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+
+  const getShareLink = (resource: any) => (
+    resource?.shareLink
+    || resource?.url
+    || resource?.cloudLinks?.[0]?.link
+    || ''
+  );
 
   const handleSearch = async () => {
     if (!keyword.trim()) return;
@@ -72,14 +80,23 @@ const CloudSaverModal: React.FC<CloudSaverModalProps> = ({ isOpen, onClose, onTr
                   <div className="flex items-center gap-3 text-xs text-slate-500">
                     <span>{res.size || '未知大小'}</span>
                     <span>{res.date || '未知日期'}</span>
+                    {extractEpisodeCountFromTitle(res.title) > 0 && (
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-bold text-emerald-600">
+                        {extractEpisodeCountFromTitle(res.title)} 集
+                      </span>
+                    )}
                   </div>
                 </div>
                 <button 
                   onClick={() => onTransfer({
-                    shareLink: res.url,
+                    shareLink: getShareLink(res),
                     accessCode: res.accessCode || '',
-                    taskName: res.title
+                    resourceName: res.title,
+                    taskName: res.title,
+                    resourceTitle: res.title,
+                    totalEpisodes: extractEpisodeCountFromTitle(res.title)
                   })}
+                  disabled={!getShareLink(res)}
                   className="shrink-0 p-2.5 bg-[#c4eed0] text-[#146c2e] rounded-xl hover:bg-[#b2e7c0] transition-colors"
                   title="一键转存"
                 >

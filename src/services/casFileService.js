@@ -132,6 +132,41 @@ class CasFileService {
     }
 
     /**
+     * 批量解析文件 MD5 信息，用于从外部 JSON 生成多个 .cas 文件
+     * @param {string|object|Array} data - JSON 数组、{files: []} 或单个文件对象
+     * @returns {Array<object>} CAS 信息数组
+     */
+    static parseBatchSource(data) {
+        let payload = data;
+        if (typeof data === 'string') {
+            const trimmed = data.trim();
+            if (!trimmed) {
+                throw new Error('批量内容为空');
+            }
+            payload = JSON.parse(trimmed);
+        }
+
+        const list = Array.isArray(payload)
+            ? payload
+            : (Array.isArray(payload?.files) ? payload.files : [payload]);
+
+        return list.map((item, index) => {
+            try {
+                const info = {
+                    name: String(item?.name || item?.fileName || '').trim(),
+                    size: Number(item?.size || item?.fileSize || 0) || 0,
+                    md5: String(item?.md5 || item?.fileMd5 || '').trim().toLowerCase(),
+                    sliceMd5: String(item?.sliceMd5 || item?.slice_md5 || item?.sliceMD5 || '').trim().toLowerCase()
+                };
+                CasFileService._validate(info);
+                return info;
+            } catch (error) {
+                throw new Error(`第 ${index + 1} 个文件信息无效: ${error.message}`);
+            }
+        });
+    }
+
+    /**
      * 判断是否为 CAS 文件
      * @param {string} fileName - 文件名
      * @returns {boolean}

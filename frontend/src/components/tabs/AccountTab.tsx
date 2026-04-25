@@ -21,6 +21,8 @@ interface Account {
 
 interface AccountTabProps {
   onShowToast?: (message: string, type: ToastType) => void;
+  onShowConfirm?: (title: string, message: string, onConfirm: () => void, type?: 'danger' | 'warning' | 'info') => void;
+  onShowPrompt?: (title: string, message: string, onConfirm: (value: string) => void, initialValue?: string) => void;
 }
 
 const formatBytes = (bytes: number) => {
@@ -41,7 +43,7 @@ const createEmptyFormData = () => ({
   localStrmPrefix: ''
 });
 
-const AccountTab: React.FC<AccountTabProps> = ({ onShowToast }) => {
+const AccountTab: React.FC<AccountTabProps> = ({ onShowToast, onShowConfirm, onShowPrompt }) => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -109,24 +111,31 @@ const AccountTab: React.FC<AccountTabProps> = ({ onShowToast }) => {
 
   const handleUpdateStrmPrefix = async (account: Account, type: 'cloud' | 'local') => {
     const currentValue = type === 'cloud' ? (account.cloudStrmPrefix || '') : (account.localStrmPrefix || '');
-    const nextValue = window.prompt(type === 'cloud' ? '请输入新的云端同步前缀' : '请输入新的本地同步前缀', currentValue);
-    if (nextValue === null) return;
+    
+    onShowPrompt?.(
+      type === 'cloud' ? '修改云端前缀' : '修改本地前缀',
+      type === 'cloud' ? '请输入新的云端同步前缀' : '请输入新的本地同步前缀',
+      async (nextValue) => {
+        if (nextValue === null || nextValue === currentValue) return;
 
-    try {
-      const res = await fetch(`/api/accounts/${account.id}/strm-prefix`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strmPrefix: nextValue, type })
-      });
-      const data = await res.json();
-      if (data.success) {
-        fetchAccounts();
-        onShowToast?.('同步前缀已更新', 'success');
-      }
-      else onShowToast?.('更新失败: ' + data.error, 'error');
-    } catch (error) {
-      onShowToast?.('更新失败', 'error');
-    }
+        try {
+          const res = await fetch(`/api/accounts/${account.id}/strm-prefix`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ strmPrefix: nextValue, type })
+          });
+          const data = await res.json();
+          if (data.success) {
+            fetchAccounts();
+            onShowToast?.('同步前缀已更新', 'success');
+          }
+          else onShowToast?.('更新失败: ' + data.error, 'error');
+        } catch (error) {
+          onShowToast?.('更新失败', 'error');
+        }
+      },
+      currentValue
+    );
   };
 
   const handleSetDefaultAccount = async (id: number) => {
@@ -145,20 +154,21 @@ const AccountTab: React.FC<AccountTabProps> = ({ onShowToast }) => {
   const handleDeleteAccount = async (id: number) => {
     // 强制先停止点击穿透
     if (!id) return;
-    if (!window.confirm('确定要彻底删除此账号吗？此操作不可撤销。')) return;
     
-    try {
-      const res = await fetch(`/api/accounts/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        onShowToast?.('账号已删除', 'success');
-        fetchAccounts();
-      } else {
-        onShowToast?.('删除失败: ' + data.error, 'error');
+    onShowConfirm?.('彻底删除账号', '确定要彻底删除此账号吗？此操作将移除所有关联配置，不可撤销。', async () => {
+      try {
+        const res = await fetch(`/api/accounts/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+          onShowToast?.('账号已删除', 'success');
+          fetchAccounts();
+        } else {
+          onShowToast?.('删除失败: ' + data.error, 'error');
+        }
+      } catch (e) {
+        onShowToast?.('网络请求失败，请稍后重试', 'error');
       }
-    } catch (e) {
-      onShowToast?.('网络请求失败，请稍后重试', 'error');
-    }
+    }, 'danger');
   };
 
   return (

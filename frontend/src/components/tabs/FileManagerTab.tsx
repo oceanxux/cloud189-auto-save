@@ -10,6 +10,7 @@ interface FileEntry { id: string; name: string; isFolder: boolean; size: number;
 
 interface FileManagerTabProps {
   onShowToast?: (message: string, type: ToastType) => void;
+  onShowConfirm?: (title: string, message: string, onConfirm: () => void, type?: 'danger' | 'warning' | 'info') => void;
 }
 
 const formatBytes = (bytes: number) => {
@@ -18,7 +19,7 @@ const formatBytes = (bytes: number) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 
-const FileManagerTab: React.FC<FileManagerTabProps> = ({ onShowToast }) => {
+const FileManagerTab: React.FC<FileManagerTabProps> = ({ onShowToast, onShowConfirm }) => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -174,26 +175,27 @@ const FileManagerTab: React.FC<FileManagerTabProps> = ({ onShowToast }) => {
   };
 
   const handleDelete = async (targetIds: string[]) => {
-    if (!confirm('确定删除？')) return;
-    try {
-      const res = await fetch('/api/file-manager/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accountId: selectedAccountId,
-          entries: entries
-            .filter(entry => targetIds.includes(entry.id))
-            .map(entry => ({ id: entry.id, name: entry.name, isFolder: entry.isFolder }))
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        fetchEntries();
-        onShowToast?.('文件已删除', 'success');
-      } else {
-        onShowToast?.('删除失败: ' + data.error, 'error');
-      }
-    } catch (e) { onShowToast?.('删除失败', 'error'); }
+    onShowConfirm?.('删除确认', `确定要删除选中的 ${targetIds.length} 个项目吗？删除后将进入回收站。`, async () => {
+      try {
+        const res = await fetch('/api/file-manager/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accountId: selectedAccountId,
+            entries: entries
+              .filter(entry => targetIds.includes(entry.id))
+              .map(entry => ({ id: entry.id, name: entry.name, isFolder: entry.isFolder }))
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          fetchEntries();
+          onShowToast?.('文件已删除', 'success');
+        } else {
+          onShowToast?.('删除失败: ' + data.error, 'error');
+        }
+      } catch (e) { onShowToast?.('删除失败', 'error'); }
+    }, 'danger');
   };
 
   const batchRenamePlans = React.useMemo(() => {

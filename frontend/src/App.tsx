@@ -26,6 +26,8 @@ import TMDBTab from './components/tabs/TMDBTab';
 import CasTab from './components/tabs/CasTab';
 import SettingsTab from './components/tabs/SettingsTab';
 import Toast, { ToastType } from './components/Toast';
+import ConfirmDialog from './components/ConfirmDialog';
+import PromptDialog from './components/PromptDialog';
 
 function App() {
   const [activeTab, setActiveTab] = useState('task');
@@ -41,8 +43,46 @@ function App() {
     type: 'info'
   });
 
+  // 确认弹窗状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info',
+    onConfirm: () => {}
+  });
+
   const showToast = (message: string, type: ToastType = 'info') => {
     setToast({ isVisible: true, message, type });
+  };
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void, type: 'danger' | 'warning' | 'info' = 'info') => {
+    setConfirmDialog({ isOpen: true, title, message, onConfirm, type });
+  };
+
+  // Prompt 状态
+  const [promptDialog, setPromptDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    initialValue: string;
+    onConfirm: (value: string) => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    initialValue: '',
+    onConfirm: () => {}
+  });
+
+  const showPrompt = (title: string, message: string, onConfirm: (value: string) => void, initialValue: string = '') => {
+    setPromptDialog({ isOpen: true, title, message, onConfirm, initialValue });
   };
 
   const [isLogsOpen, setIsLogsOpen] = useState(false);
@@ -94,26 +134,30 @@ function App() {
     settings: '系统认证、代理与通知设置'
   };
 
-  const handleLogout = () => { if (window.confirm('确定退出？')) window.location.href = '/login.html'; };
+  const handleLogout = () => {
+    showConfirm('退出登录', '确定要退出当前工作台并返回登录页面吗？', () => {
+       window.location.href = '/login.html';
+    });
+  };
 
   const handleRestart = async () => {
     if (isRestarting) return;
-    if (!window.confirm('确定重启当前服务？服务会短暂断开连接。')) return;
-
-    setIsRestarting(true);
-    try {
-      const response = await fetch('/api/system/restart', { method: 'POST' });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || data.error || '重启失败');
+    showConfirm('重启服务', '确定要重启当前后端服务吗？服务会短暂断开连接并在数秒后恢复。', async () => {
+      setIsRestarting(true);
+      try {
+        const response = await fetch('/api/system/restart', { method: 'POST' });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || data.error || '重启失败');
+        }
+        showToast('重启请求已发送，服务将在数秒后断开并等待容器拉起。', 'info');
+        setIsUserMenuOpen(false);
+      } catch (error: any) {
+        showToast(error?.message || '重启失败', 'error');
+      } finally {
+        setIsRestarting(false);
       }
-      showToast('重启请求已发送，服务将在数秒后断开并等待容器拉起。', 'info');
-      setIsUserMenuOpen(false);
-    } catch (error: any) {
-      showToast(error?.message || '重启失败', 'error');
-    } finally {
-      setIsRestarting(false);
-    }
+    }, 'warning');
   };
 
   const handleFloatingAction = (action: string) => {
@@ -218,15 +262,15 @@ function App() {
         <div className="flex-1 overflow-y-auto px-5 pb-20 pt-4 md:px-6 custom-scrollbar z-0">
           <AnimatePresence mode="wait">
             <motion.div key={activeTab} initial={{ opacity: 0, y: 10, filter: 'blur(4px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }} transition={{ duration: 0.3 }}>
-              {activeTab === 'account' && <AccountTab onShowToast={showToast} />}
-              {activeTab === 'fileManager' && <FileManagerTab onShowToast={showToast} />}
-              {activeTab === 'task' && <TaskTab key={`task-${taskRefreshKey}`} onCreateTask={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} />}
-              {activeTab === 'autoSeries' && <AutoSeriesTab onShowToast={showToast} />}
+              {activeTab === 'account' && <AccountTab onShowToast={showToast} onShowConfirm={showConfirm} onShowPrompt={showPrompt} />}
+              {activeTab === 'fileManager' && <FileManagerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
+              {activeTab === 'task' && <TaskTab key={`task-${taskRefreshKey}`} onCreateTask={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} onShowConfirm={showConfirm} />}
+              {activeTab === 'autoSeries' && <AutoSeriesTab onShowToast={showToast} onShowConfirm={showConfirm} />}
               {activeTab === 'tmdb' && <TMDBTab onShowToast={showToast} />}
-              {activeTab === 'cas' && <CasTab onShowToast={showToast} />}
-              {activeTab === 'organizer' && <OrganizerTab onShowToast={showToast} />}
-              {activeTab === 'subscription' && <SubscriptionTab onTransfer={() => setIsCreateTaskOpen(true)} onShowToast={showToast} />}
-              {activeTab === 'strmConfig' && <StrmConfigTab onShowToast={showToast} />}
+              {activeTab === 'cas' && <CasTab onShowToast={showToast} onShowConfirm={showConfirm} />}
+              {activeTab === 'organizer' && <OrganizerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
+              {activeTab === 'subscription' && <SubscriptionTab onTransfer={() => setIsCreateTaskOpen(true)} onShowToast={showToast} onShowConfirm={showConfirm} />}
+              {activeTab === 'strmConfig' && <StrmConfigTab onShowToast={showToast} onShowConfirm={showConfirm} />}
               {activeTab === 'media' && <MediaTab onShowToast={showToast} />}
               {activeTab === 'settings' && <SettingsTab onShowToast={showToast} />}
             </motion.div>
@@ -257,6 +301,22 @@ function App() {
         onShowToast={showToast}
       />
       <FolderSelector isOpen={isFolderSelectorOpen} onClose={() => setIsFolderSelectorOpen(false)} accountId={0} title={folderSelectorMode === 'manual_strm' ? "选择要整理并生成 STRM 的目录" : "选择存入目录"} onSelect={(f: SelectedFolder) => { if (folderSelectorMode === 'manual_strm') handleManualStrm(f); setIsFolderSelectorOpen(false); }} />
+      <ConfirmDialog 
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        type={confirmDialog.type}
+        onConfirm={confirmDialog.onConfirm}
+        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+      />
+      <PromptDialog 
+        isOpen={promptDialog.isOpen}
+        title={promptDialog.title}
+        message={promptDialog.message}
+        initialValue={promptDialog.initialValue}
+        onConfirm={promptDialog.onConfirm}
+        onClose={() => setPromptDialog(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }

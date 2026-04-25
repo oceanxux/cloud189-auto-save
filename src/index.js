@@ -903,11 +903,12 @@ AppDataSource.initialize().then(async () => {
                 .map(id => parseInt(id))
                 .filter(id => Number.isInteger(id) && id > 0);
             if (taskIds.length === 0) throw new Error('任务ID不能为空');
+            const syncUpdatedCount = await taskService.syncProcessedRecordsWithActualFilesByTaskIds(taskIds);
             const records = await taskService.getProcessedRecordsByTaskIds(taskIds, {
                 status: String(req.query.status || 'all'),
                 search: String(req.query.search || '').trim()
             });
-            res.json({ success: true, data: records });
+            res.json({ success: true, data: records, syncUpdatedCount });
         } catch (error) {
             res.json({ success: false, error: error.message });
         }
@@ -915,6 +916,11 @@ AppDataSource.initialize().then(async () => {
 
     app.delete('/api/tasks/processed-files', async (req, res) => {
         try {
+            if (Array.isArray(req.body?.recordIds)) {
+                await taskService.deleteProcessedRecordsByIds(req.body.recordIds);
+                return res.json({ success: true });
+            }
+
             const taskIds = Array.isArray(req.body?.taskIds)
                 ? req.body.taskIds
                 : String(req.query.taskIds || '')
@@ -988,15 +994,58 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
+    app.post('/api/tasks/:id/repair', authenticateSession, async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            const result = await taskService.repairTaskStatus(taskId);
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.get('/api/tasks/:id/season-info', async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            if (!taskId) throw new Error('任务ID不能为空');
+            const task = await taskRepo.findOneBy({ id: taskId });
+            if (!task) throw new Error('任务不存在');
+            logTaskEvent(`任务[${task.resourceName}]开始识别 TMDB 季集数`, 'info', 'tmdb');
+            const result = await taskService.resolveTmdbSeasonInfo(task, { updateTask: false });
+            logTaskEvent(`任务[${task.resourceName}]识别 TMDB 季集数完成: ${result.seasonNumber ? `S${String(result.seasonNumber).padStart(2, '0')} ` : ''}${result.totalEpisodes || 0}集`, 'info', 'tmdb');
+            res.json({ success: true, data: result });
+        } catch (error) {
+            logTaskEvent(`识别 TMDB 季集数失败: ${error.message}`, 'error', 'tmdb');
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/tasks/:id/sync-season-episodes', async (req, res) => {
+        try {
+            const taskId = parseInt(req.params.id);
+            if (!taskId) throw new Error('任务ID不能为空');
+            const task = await taskRepo.findOneBy({ id: taskId });
+            if (!task) throw new Error('任务不存在');
+            logTaskEvent(`任务[${task.resourceName}]开始同步 TMDB 季集数`, 'info', 'tmdb');
+            const result = await taskService.resolveTmdbSeasonInfo(task, { updateTask: true });
+            logTaskEvent(`任务[${task.resourceName}]同步 TMDB 季集数完成: ${result.seasonNumber ? `S${String(result.seasonNumber).padStart(2, '0')} ` : ''}${result.totalEpisodes || 0}集`, 'info', 'tmdb');
+            res.json({ success: true, data: result });
+        } catch (error) {
+            logTaskEvent(`同步 TMDB 季集数失败: ${error.message}`, 'error', 'tmdb');
+            res.json({ success: false, error: error.message });
+        }
+    });
+
     app.get('/api/tasks/:id/processed-files', async (req, res) => {
         try {
             const taskId = parseInt(req.params.id);
             if (!taskId) throw new Error('任务ID不能为空');
+            const syncUpdatedCount = await taskService.syncProcessedRecordsWithActualFilesByTaskIds([taskId]);
             const records = await taskService.getProcessedRecords(taskId, {
                 status: String(req.query.status || 'all'),
                 search: String(req.query.search || '').trim()
             });
-            res.json({ success: true, data: records });
+            res.json({ success: true, data: records, syncUpdatedCount });
         } catch (error) {
             res.json({ success: false, error: error.message });
         }
@@ -1258,6 +1307,41 @@ AppDataSource.initialize().then(async () => {
             
             res.json({ success: true, data: { casContent, fileName: (file.name || file.fileName) + '.cas' } });
         } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/cas/generate-folder-files', async (req, res) => {
+        try {
+            const { accountId, jobs, format, overwrite } = req.body || {};
+            const account = await accountRepo.findOneBy({ id: Number(accountId) });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            const result = await casService.generateCasFilesToCloud(cloud189, jobs, {
+                format,
+                overwrite: overwrite !== false
+            });
+            res.json({ success: true, data: result });
+        } catch (error) {
+            console.error('生成云端CAS文件失败:', error);
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/cas/export-folder-to-cloud', async (req, res) => {
+        try {
+            const { accountId, sourceFolderId, targetFolderId, recursive, overwrite } = req.body || {};
+            const account = await accountRepo.findOneBy({ id: Number(accountId) });
+            if (!account) throw new Error('账号不存在');
+            const cloud189 = Cloud189Service.getInstance(account);
+            const result = await casService.exportFolderCasFilesToCloud(cloud189, sourceFolderId, targetFolderId, {
+                recursive: recursive !== false,
+                overwrite: overwrite !== false,
+                mediaOnly: true
+            });
+            res.json({ success: true, data: result });
+        } catch (error) {
+            console.error('网盘文件另存为CAS失败:', error);
             res.json({ success: false, error: error.message });
         }
     });
@@ -3340,6 +3424,22 @@ target.type 只能是：
             });
         } catch (error) {
             console.error('[API] TMDB搜索失败:', error.message);
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.get('/api/tmdb/tv/:id/season/:seasonNumber', async (req, res) => {
+        try {
+            const { id, seasonNumber } = req.params;
+            if (!id || !seasonNumber) {
+                throw new Error('TMDB ID 和季号不能为空');
+            }
+            const data = await tmdbService.getTVSeasonDetails(id, seasonNumber);
+            if (!data) {
+                throw new Error('获取 TMDB 季详情失败');
+            }
+            res.json({ success: true, data });
+        } catch (error) {
             res.json({ success: false, error: error.message });
         }
     });

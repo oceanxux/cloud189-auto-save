@@ -17,9 +17,10 @@ interface StrmConfig {
 
 interface StrmConfigTabProps {
   onShowToast?: (message: string, type: ToastType) => void;
+  onShowConfirm?: (title: string, message: string, onConfirm: () => void, type?: 'danger' | 'warning' | 'info') => void;
 }
 
-const StrmConfigTab: React.FC<StrmConfigTabProps> = ({ onShowToast }) => {
+const StrmConfigTab: React.FC<StrmConfigTabProps> = ({ onShowToast, onShowConfirm }) => {
   const [configs, setConfigs] = useState<StrmConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -67,17 +68,18 @@ const StrmConfigTab: React.FC<StrmConfigTabProps> = ({ onShowToast }) => {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('确定删除此 STRM 配置？')) return;
-    try {
-      const res = await fetch(`/api/strm-configs/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        fetchConfigs();
-        onShowToast?.('配置已删除', 'success');
-      } else {
-        onShowToast?.('删除失败: ' + data.error, 'error');
-      }
-    } catch (e) { onShowToast?.('删除失败', 'error'); }
+    onShowConfirm?.('删除 STRM 配置', '确定删除此 STRM 配置？已生成的 STRM 文件不会受影响。', async () => {
+      try {
+        const res = await fetch(`/api/strm-configs/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+          fetchConfigs();
+          onShowToast?.('配置已删除', 'success');
+        } else {
+          onShowToast?.('删除失败: ' + data.error, 'error');
+        }
+      } catch (e) { onShowToast?.('删除失败', 'error'); }
+    }, 'danger');
   };
 
   return (

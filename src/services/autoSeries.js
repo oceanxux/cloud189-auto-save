@@ -225,7 +225,14 @@ class AutoSeriesService {
             id: tmdbInfo.id || null,
             title: tmdbInfo.title || '',
             originalTitle: tmdbInfo.originalTitle || '',
-            releaseDate: tmdbInfo.releaseDate || ''
+            releaseDate: tmdbInfo.releaseDate || '',
+            totalEpisodes: Number(tmdbInfo.totalEpisodes || 0),
+            seasonNumber: tmdbInfo.seasonNumber || null,
+            seasonName: tmdbInfo.seasonName || '',
+            seasonEpisodes: Number(tmdbInfo.seasonEpisodes || 0),
+            tmdbSeasonUrl: tmdbInfo.tmdbSeasonUrl || '',
+            lastEpisodeToAir: tmdbInfo.lastEpisodeToAir || null,
+            status: tmdbInfo.status || ''
         };
     }
 

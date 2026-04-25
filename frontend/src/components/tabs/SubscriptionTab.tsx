@@ -28,9 +28,10 @@ interface Subscription {
 interface Props {
   onTransfer?: () => void;
   onShowToast?: (message: string, type: ToastType) => void;
+  onShowConfirm?: (title: string, message: string, onConfirm: () => void, type?: 'danger' | 'warning' | 'info') => void;
 }
 
-const SubscriptionTab: React.FC<Props> = ({ onTransfer, onShowToast }) => {
+const SubscriptionTab: React.FC<Props> = ({ onTransfer, onShowToast, onShowConfirm }) => {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
@@ -84,16 +85,17 @@ const SubscriptionTab: React.FC<Props> = ({ onTransfer, onShowToast }) => {
   };
 
   const handleDeleteSubscription = async (id: number) => {
-    if (!confirm('确定要删除此订阅吗？')) return;
-    try {
-      const res = await fetch(`/api/subscriptions/${id}`, { method: 'DELETE' });
-      if ((await res.json()).success) {
-        fetchSubscriptions();
-        onShowToast?.('订阅已删除', 'success');
-      } else {
-        onShowToast?.('删除失败', 'error');
-      }
-    } catch (e) { onShowToast?.('删除失败', 'error'); }
+    onShowConfirm?.('删除订阅', '确定要删除此订阅吗？关联的所有资源记录也将被移除。', async () => {
+      try {
+        const res = await fetch(`/api/subscriptions/${id}`, { method: 'DELETE' });
+        if ((await res.json()).success) {
+          fetchSubscriptions();
+          onShowToast?.('订阅已删除', 'success');
+        } else {
+          onShowToast?.('删除失败', 'error');
+        }
+      } catch (e) { onShowToast?.('删除失败', 'error'); }
+    }, 'danger');
   };
 
   const handleRunSubscription = async (id: number) => {
@@ -137,17 +139,18 @@ const SubscriptionTab: React.FC<Props> = ({ onTransfer, onShowToast }) => {
   };
 
   const handleDeleteResource = async (id: number) => {
-    if (!confirm('确定删除此资源？')) return;
-    try {
-      const res = await fetch(`/api/subscriptions/resources/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        if (viewingSub) fetchResources(viewingSub.id);
-        onShowToast?.('资源已删除', 'success');
-      } else {
-        onShowToast?.('删除失败', 'error');
-      }
-    } catch (e) { onShowToast?.('删除失败', 'error'); }
+    onShowConfirm?.('删除资源', '确定要删除此资源记录吗？', async () => {
+      try {
+        const res = await fetch(`/api/subscriptions/resources/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+          if (viewingSub) fetchResources(viewingSub.id);
+          onShowToast?.('资源已删除', 'success');
+        } else {
+          onShowToast?.('删除失败', 'error');
+        }
+      } catch (e) { onShowToast?.('删除失败', 'error'); }
+    }, 'danger');
   };
 
   return (

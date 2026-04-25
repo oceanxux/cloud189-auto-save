@@ -4,6 +4,7 @@ import { Plus, X, Link2, Folder, User, Settings, Info, Save, Cpu, RefreshCw, Ale
 import Modal from './Modal';
 import { ToastType } from './Toast';
 import FolderSelector, { SelectedFolder } from './FolderSelector';
+import { extractEpisodeCountFromTitle } from '../utils/episodeCount';
 
 interface CreateTaskModalProps {
   isOpen: boolean;
@@ -14,7 +15,6 @@ interface CreateTaskModalProps {
 }
 
 const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSuccess, initialData, onShowToast }) => {
-  console.log('[CreateTaskModal] initialData:', initialData);
   const [formData, setFormData] = useState({
     shareLink: '',
     accessCode: '',
@@ -24,6 +24,9 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
     realFolderId: '',
     realFolderName: '',
     totalEpisodes: 0,
+    tmdbSeasonNumber: null as number | null,
+    tmdbSeasonName: '',
+    tmdbSeasonEpisodes: null as number | null,
     type: 'normal',
     accountId: '',
     enableOrganizer: true
@@ -33,16 +36,28 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
   const [fetchingEpisodes, setFetchingEpisodes] = useState(false);
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
   const [folderSelectorMode, setFolderSelectorMode] = useState<'target' | 'real'>('target');
+  const seasonLabel = formData.tmdbSeasonNumber
+    ? `S${String(formData.tmdbSeasonNumber).padStart(2, '0')}`
+    : '';
 
   useEffect(() => {
     const init = async () => {
       await fetchAccounts();
       if (initialData) {
+        const resourceName = initialData.resourceName || initialData.taskName || initialData.title || initialData.resourceTitle || '';
+        const shareLink = initialData.shareLink || initialData.url || initialData.cloudLinks?.[0]?.link || '';
+        const inferredTotalEpisodes = Number(initialData.totalEpisodes || 0)
+          || extractEpisodeCountFromTitle(initialData.resourceTitle)
+          || extractEpisodeCountFromTitle(initialData.taskName)
+          || extractEpisodeCountFromTitle(initialData.title)
+          || extractEpisodeCountFromTitle(resourceName);
         setFormData(prev => ({ 
           ...prev, 
           ...initialData,
-          shareLink: initialData.shareLink || '',
+          shareLink,
           accessCode: initialData.accessCode || '',
+          resourceName,
+          totalEpisodes: inferredTotalEpisodes,
           accountId: initialData.account?.id || initialData.accountId || ''
         }));
       } else {
@@ -63,6 +78,9 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
             realFolderId: '',
             realFolderName: '',
             totalEpisodes: 0,
+            tmdbSeasonNumber: null,
+            tmdbSeasonName: '',
+            tmdbSeasonEpisodes: null,
             type: 'normal',
             accountId: defaultAccId,
             enableOrganizer: true
@@ -92,18 +110,44 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
     try {
       const res = await fetch(`/api/auto-series/search?title=${encodeURIComponent(formData.resourceName)}`);
       const data = await res.json();
-      if (data.success && data.data?.length > 0) {
-          const bestMatch = data.data[0];
-          if (bestMatch.tmdbId) {
-             const detailRes = await fetch(`/api/tmdb/tv/${bestMatch.tmdbId}`);
+      if (data.success) {
+          const payload = data.data;
+          const bestMatch = Array.isArray(payload) ? payload[0] : payload?.tmdbInfo;
+          const directTotalEpisodes = Number(
+            bestMatch?.totalEpisodes
+            || bestMatch?.number_of_episodes
+            || bestMatch?.lastEpisodeToAir?.episode_number
+            || 0
+          );
+          if (directTotalEpisodes > 0) {
+            setFormData(prev => ({
+              ...prev,
+              totalEpisodes: directTotalEpisodes,
+              tmdbSeasonNumber: bestMatch?.seasonNumber || prev.tmdbSeasonNumber,
+              tmdbSeasonName: bestMatch?.seasonName || prev.tmdbSeasonName,
+              tmdbSeasonEpisodes: bestMatch?.seasonEpisodes || prev.tmdbSeasonEpisodes
+            }));
+            onShowToast?.(`已获取 TMDB 最新集数: ${directTotalEpisodes}`, 'success');
+            return;
+          }
+
+          const tmdbId = bestMatch?.tmdbId || bestMatch?.id;
+          if (tmdbId) {
+             const detailRes = await fetch(`/api/tmdb/tv/${tmdbId}`);
              const detail = await detailRes.json();
-             if (detail.success && detail.data.number_of_episodes) {
-                 setFormData(prev => ({ ...prev, totalEpisodes: detail.data.number_of_episodes }));
-                 onShowToast?.(`已获取 TMDB 最新集数: ${detail.data.number_of_episodes}`, 'success');
-             } else {
-                onShowToast?.('未能获取到集数信息', 'error');
+             const totalEpisodes = Number(
+              detail.data?.totalEpisodes
+              || detail.data?.number_of_episodes
+              || detail.data?.lastEpisodeToAir?.episode_number
+              || 0
+             );
+             if (detail.success && totalEpisodes > 0) {
+                 setFormData(prev => ({ ...prev, totalEpisodes }));
+                 onShowToast?.(`已获取 TMDB 最新集数: ${totalEpisodes}`, 'success');
+                 return;
              }
           }
+          onShowToast?.('未能获取到集数信息', 'error');
       } else {
         onShowToast?.('未找到匹配的剧集信息', 'error');
       }
@@ -190,6 +234,51 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
                   <RefreshCw size={18} className={fetchingEpisodes ? 'animate-spin' : ''} />
                 </button>
               </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="workbench-form-item">
+              <label className="workbench-label">识别季</label>
+              <div className="relative group">
+                <Hash className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={14} />
+                <input
+                  type="text"
+                  value={seasonLabel || '未识别'}
+                  readOnly
+                  className="workbench-input pl-9 font-black text-blue-600 opacity-80"
+                />
+              </div>
+            </div>
+            <div className="workbench-form-item">
+              <label className="workbench-label">该季集数</label>
+              <div className="relative group">
+                <Hash className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-400" size={14} />
+                <input
+                  type="number"
+                  value={formData.tmdbSeasonEpisodes || ''}
+                  onChange={e => {
+                    const value = parseInt(e.target.value) || 0;
+                    setFormData({
+                      ...formData,
+                      tmdbSeasonEpisodes: value || null,
+                      totalEpisodes: value || formData.totalEpisodes
+                    });
+                  }}
+                  className="workbench-input pl-9 font-mono"
+                  placeholder="0"
+                />
+              </div>
+            </div>
+            <div className="workbench-form-item">
+              <label className="workbench-label">季名称</label>
+              <input
+                type="text"
+                value={formData.tmdbSeasonName || ''}
+                onChange={e => setFormData({...formData, tmdbSeasonName: e.target.value})}
+                className="workbench-input font-bold"
+                placeholder="自动识别后显示"
+              />
             </div>
           </div>
 

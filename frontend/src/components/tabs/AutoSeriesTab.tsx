@@ -9,9 +9,10 @@ interface AutoSeriesSettings { id: number; keyword: string; searchType: string; 
 
 interface Props {
   onShowToast: (message: string, type?: ToastType) => void;
+  onShowConfirm?: (title: string, message: string, onConfirm: () => void, type?: 'danger' | 'warning' | 'info') => void;
 }
 
-const AutoSeriesTab: React.FC<Props> = ({ onShowToast }) => {
+const AutoSeriesTab: React.FC<Props> = ({ onShowToast, onShowConfirm }) => {
   const [settings, setSettings] = useState<AutoSeriesSettings[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -50,12 +51,13 @@ const AutoSeriesTab: React.FC<Props> = ({ onShowToast }) => {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('确定删除此自动追剧规则？')) return;
-    try {
-      await fetch(`/api/auto-series/${id}`, { method: 'DELETE' });
-      fetchSettings();
-      onShowToast?.('规则已删除', 'success');
-    } catch (e) { onShowToast?.('删除失败', 'error'); }
+    onShowConfirm?.('删除规则', '确定删除此自动追剧规则？', async () => {
+      try {
+        await fetch(`/api/auto-series/${id}`, { method: 'DELETE' });
+        fetchSettings();
+        onShowToast?.('规则已删除', 'success');
+      } catch (e) { onShowToast?.('删除失败', 'error'); }
+    }, 'danger');
   };
 
   return (

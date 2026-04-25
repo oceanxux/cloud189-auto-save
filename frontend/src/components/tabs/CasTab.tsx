@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Zap, FileText, Download, Upload, Trash2, Loader2, AlertCircle, CheckCircle2, Copy, Search, ExternalLink, X } from 'lucide-react';
+import { Zap, FileText, Download, Upload, Trash2, Loader2, AlertCircle, CheckCircle2, Copy, Search, ExternalLink, X, FolderOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import FolderSelector, { SelectedFolder } from '../FolderSelector';
 import Modal from '../Modal';
@@ -15,6 +15,14 @@ interface Account {
 interface ExportedStub {
   name: string;
   content: string;
+}
+
+interface CloudCasResult {
+  totalFiles: number;
+  uploadedCount: number;
+  failedCount: number;
+  uploaded?: Array<{ name: string; fileId?: string }>;
+  failed?: Array<{ name: string; error: string }>;
 }
 
 interface CasTabProps {
@@ -38,6 +46,11 @@ const CasTab: React.FC<CasTabProps> = ({ onShowToast }) => {
   const [isExportResultModalOpen, setIsExportResultModalOpen] = useState(false);
   const [exportedStubs, setExportedStubs] = useState<ExportedStub[]>([]);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportSourceFolder, setExportSourceFolder] = useState<SelectedFolder | null>(null);
+  const [exportTargetFolder, setExportTargetFolder] = useState<SelectedFolder | null>(null);
+  const [exportFolderPickerMode, setExportFolderPickerMode] = useState<'source' | 'target' | null>(null);
+  const [isGeneratingCloudCas, setIsGeneratingCloudCas] = useState(false);
+  const [cloudCasResult, setCloudCasResult] = useState<CloudCasResult | null>(null);
 
   useEffect(() => {
     fetchAccounts();
@@ -58,7 +71,7 @@ const CasTab: React.FC<CasTabProps> = ({ onShowToast }) => {
 
   const handleRestore = async () => {
     if (!selectedAccountId || !casContent || !targetFolder) {
-      alert('请确保已选择账号、填写存根内容并选择目标目录');
+      if (onShowToast) onShowToast('请确保已选择账号、填写存根内容并选择目标目录', 'error');
       return;
     }
 
@@ -118,6 +131,43 @@ const CasTab: React.FC<CasTabProps> = ({ onShowToast }) => {
     } finally {
       setIsExporting(false);
       setIsExportFolderSelectorOpen(false);
+    }
+  };
+
+  const handleGenerateCloudCas = async () => {
+    if (!selectedAccountId) {
+      if (onShowToast) onShowToast('请先选择执行账号', 'error');
+      return;
+    }
+    if (!exportSourceFolder || !exportTargetFolder) {
+      if (onShowToast) onShowToast('请选择源目录和 .cas 保存目录', 'error');
+      return;
+    }
+
+    setIsGeneratingCloudCas(true);
+    try {
+      const res = await fetch('/api/cas/export-folder-to-cloud', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId: selectedAccountId,
+          sourceFolderId: exportSourceFolder.id,
+          targetFolderId: exportTargetFolder.id,
+          recursive: true,
+          overwrite: true
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCloudCasResult(data.data);
+        if (onShowToast) onShowToast(`已生成 ${data.data.uploadedCount}/${data.data.totalFiles} 个 .cas 文件`, data.data.failedCount ? 'info' : 'success');
+      } else {
+        if (onShowToast) onShowToast('生成失败: ' + (data.error || '未知错误'), 'error');
+      }
+    } catch (e) {
+      if (onShowToast) onShowToast('生成请求失败', 'error');
+    } finally {
+      setIsGeneratingCloudCas(false);
     }
   };
 
@@ -263,6 +313,46 @@ const CasTab: React.FC<CasTabProps> = ({ onShowToast }) => {
                </button>
             </div>
           </div>
+
+          <div className="workbench-panel p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <FolderOpen className="text-indigo-500" size={18} />
+              <h2 className="text-sm font-black text-[var(--text-primary)]">网盘文件另存为 .cas</h2>
+            </div>
+            <p className="text-xs text-slate-400 font-bold mb-4">选择已有电影文件所在目录，再选择 .cas 保存目录；系统会扫描媒体文件并在目标目录生成同名 .cas 小文件。</p>
+
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setExportFolderPickerMode('source')}
+                  className="flex-1 h-11 px-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-color)] text-left text-[10px] font-black hover:border-[var(--app-accent)] transition-all flex items-center justify-between gap-2"
+                >
+                  <span className={exportSourceFolder ? 'text-[var(--text-primary)] truncate' : 'text-slate-400'}>
+                    {exportSourceFolder ? exportSourceFolder.name : '选择源目录（已有电影文件）'}
+                  </span>
+                  <Search size={14} className="text-slate-400 shrink-0" />
+                </button>
+                <button
+                  onClick={() => setExportFolderPickerMode('target')}
+                  className="flex-1 h-11 px-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-color)] text-left text-[10px] font-black hover:border-[var(--app-accent)] transition-all flex items-center justify-between gap-2"
+                >
+                  <span className={exportTargetFolder ? 'text-[var(--text-primary)] truncate' : 'text-slate-400'}>
+                    {exportTargetFolder ? exportTargetFolder.name : '选择 .cas 保存目录'}
+                  </span>
+                  <Search size={14} className="text-slate-400 shrink-0" />
+                </button>
+              </div>
+
+              <button
+                onClick={handleGenerateCloudCas}
+                disabled={isGeneratingCloudCas || !exportSourceFolder || !exportTargetFolder}
+                className="workbench-primary-button w-full h-12 rounded-2xl shadow-lg shadow-indigo-500/20 disabled:opacity-50 disabled:shadow-none"
+              >
+                {isGeneratingCloudCas ? <Loader2 className="animate-spin" size={18} /> : <Upload size={18} strokeWidth={3} />}
+                另存为 .cas
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -285,6 +375,21 @@ const CasTab: React.FC<CasTabProps> = ({ onShowToast }) => {
         onSelect={handleExportStubs}
         title="选择要导出的目录"
         showFiles={true}
+      />
+
+      <FolderSelector
+        isOpen={!!exportFolderPickerMode}
+        onClose={() => setExportFolderPickerMode(null)}
+        accountId={selectedAccountId || 0}
+        onSelect={(folder) => {
+          if (exportFolderPickerMode === 'source') {
+            setExportSourceFolder(folder);
+          } else if (exportFolderPickerMode === 'target') {
+            setExportTargetFolder(folder);
+          }
+          setExportFolderPickerMode(null);
+        }}
+        title={exportFolderPickerMode === 'source' ? '选择源目录' : '选择 .cas 保存目录'}
       />
 
       {/* 格式说明弹窗 */}
@@ -365,6 +470,38 @@ const CasTab: React.FC<CasTabProps> = ({ onShowToast }) => {
               </div>
             ))
           )}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!cloudCasResult}
+        onClose={() => setCloudCasResult(null)}
+        title={`网盘生成结果 ${cloudCasResult?.uploadedCount || 0}/${cloudCasResult?.totalFiles || 0}`}
+        footer={
+          <div className="flex justify-end w-full">
+            <button onClick={() => setCloudCasResult(null)} className="px-10 h-11 border border-[var(--border-color)] rounded-xl text-xs font-black">关闭</button>
+          </div>
+        }
+      >
+        <div className="max-h-[60vh] overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+          <div className="p-4 rounded-2xl border border-[var(--border-color)] bg-slate-50 dark:bg-slate-900/50 space-y-2">
+            {(cloudCasResult?.uploaded || []).slice(0, 12).map((file) => (
+              <div key={file.name} className="flex items-center gap-2 text-[10px] font-bold text-emerald-600">
+                <CheckCircle2 size={12} /> <span className="truncate">{file.name}</span>
+              </div>
+            ))}
+            {(cloudCasResult?.uploaded?.length || 0) > 12 && (
+              <div className="text-[10px] font-bold text-slate-400">还有 {(cloudCasResult?.uploaded?.length || 0) - 12} 个成功文件未展开</div>
+            )}
+            {(cloudCasResult?.failed || []).map((file) => (
+              <div key={file.name} className="text-[10px] font-bold text-rose-500 leading-relaxed">
+                {file.name}: {file.error}
+              </div>
+            ))}
+            {cloudCasResult && cloudCasResult.totalFiles === 0 && (
+              <div className="text-center py-8 text-xs font-bold text-slate-400">源目录下没有可生成 .cas 的媒体文件</div>
+            )}
+          </div>
         </div>
       </Modal>
     </div>

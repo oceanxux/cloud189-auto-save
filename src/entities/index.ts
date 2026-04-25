@@ -204,6 +204,15 @@ export class Task {
 
     @Column({ nullable: true })
     tmdbId!: string; // tmdbId, 用于匹配tmdb和emby的电影
+
+    @Column('integer', { nullable: true })
+    tmdbSeasonNumber!: number;
+
+    @Column('text', { nullable: true })
+    tmdbSeasonName!: string;
+
+    @Column('integer', { nullable: true })
+    tmdbSeasonEpisodes!: number;
     
     @Column({ nullable: true })
     enableTaskScraper!: boolean; // 是否启用刮削

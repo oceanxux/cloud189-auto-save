@@ -20,6 +20,7 @@ const { LazyShareStrmService } = require('./lazyShareStrm');
 const { CasService } = require('./casService');
 const { AppDataSource } = require('../database');
 const { TaskProcessedFile } = require('../entities');
+const { parseMediaTitle } = require('../utils/mediaTitleParser');
 
 class TaskService {
     constructor(taskRepo, accountRepo, taskProcessedFileRepo) {
@@ -130,6 +131,9 @@ class TaskService {
             remark: taskDto.remark,
             taskGroup: taskDto.taskGroup,
             tmdbId: taskDto.tmdbId,
+            tmdbSeasonNumber: taskDto.tmdbSeasonNumber || null,
+            tmdbSeasonName: taskDto.tmdbSeasonName || null,
+            tmdbSeasonEpisodes: taskDto.tmdbSeasonEpisodes || null,
             realRootFolderId: taskDto.realRootFolderId,
             enableCron: taskDto.enableCron,
             cronExpression: taskDto.cronExpression,
@@ -140,6 +144,85 @@ class TaskService {
             enableOrganizer: taskDto.enableOrganizer,
             isFolder: taskDto.isFolder
         };
+    }
+
+    _buildTaskTitleContext(task) {
+        const rawTitle = String(task?.resourceName || task?.shareFolderName || task?.realFolderName || '').replace(/\(根\)$/g, '').trim();
+        const parsed = parseMediaTitle(rawTitle);
+        const year = parsed.year ? String(parsed.year) : ((rawTitle.match(/(19|20)\d{2}/) || [])[0] || '');
+        return { rawTitle, parsed, year };
+    }
+
+    async resolveTmdbSeasonInfo(task, { updateTask = false } = {}) {
+        if (!task?.id) {
+            throw new Error('任务不存在');
+        }
+
+        const { rawTitle, parsed, year } = this._buildTaskTitleContext(task);
+        const { TMDBService } = require('./tmdb');
+        const tmdb = new TMDBService();
+        let tmdbInfo = null;
+
+        if (task.tmdbId) {
+            tmdbInfo = await tmdb.getTVDetails(task.tmdbId);
+            if (tmdbInfo && parsed.season) {
+                const seasonDetail = await tmdb.getTVSeasonDetails(task.tmdbId, parsed.season);
+                if (seasonDetail) {
+                    tmdbInfo = {
+                        ...tmdbInfo,
+                        seasonNumber: parsed.season,
+                        seasonName: seasonDetail.name || '',
+                        seasonEpisodes: seasonDetail.episodeCount || 0,
+                        totalEpisodes: seasonDetail.episodeCount || tmdbInfo.totalEpisodes || 0,
+                        tmdbSeasonUrl: seasonDetail.tmdbUrl
+                    };
+                }
+            }
+        }
+
+        if (!tmdbInfo) {
+            tmdbInfo = await tmdb.searchTV(rawTitle, year, task.currentEpisodes || 0);
+        }
+
+        if (!tmdbInfo) {
+            throw new Error('未匹配到 TMDB 剧集');
+        }
+
+        const seasonNumber = Number(tmdbInfo.seasonNumber || parsed.season || 0) || null;
+        const seasonEpisodes = Number(tmdbInfo.seasonEpisodes || 0);
+        const totalEpisodes = seasonEpisodes || Number(tmdbInfo.totalEpisodes || 0);
+        const result = {
+            taskId: task.id,
+            rawTitle,
+            cleanTitle: parsed.cleanTitle || rawTitle,
+            year,
+            tmdbId: tmdbInfo.id || task.tmdbId || null,
+            title: tmdbInfo.title || '',
+            seasonNumber,
+            seasonName: tmdbInfo.seasonName || '',
+            seasonEpisodes,
+            totalEpisodes,
+            tmdbUrl: tmdbInfo.id ? `https://www.themoviedb.org/tv/${tmdbInfo.id}` : '',
+            tmdbSeasonUrl: tmdbInfo.tmdbSeasonUrl || (tmdbInfo.id && seasonNumber ? `https://www.themoviedb.org/tv/${tmdbInfo.id}/season/${seasonNumber}` : '')
+        };
+
+        if (updateTask && totalEpisodes > 0) {
+            const updates = {
+                totalEpisodes,
+                tmdbId: result.tmdbId ? String(result.tmdbId) : task.tmdbId,
+                tmdbSeasonNumber: seasonNumber,
+                tmdbSeasonName: result.seasonName,
+                tmdbSeasonEpisodes: seasonEpisodes || totalEpisodes
+            };
+            await this.taskRepo.update(task.id, updates);
+            Object.assign(task, updates);
+            this._syncTaskCompletionState(task);
+            if (task.status === 'completed') {
+                await this.taskRepo.update(task.id, { status: task.status });
+            }
+        }
+
+        return result;
     }
 
      // 验证并创建目标目录
@@ -451,6 +534,46 @@ class TaskService {
         });
     }
 
+    async syncProcessedRecordsWithActualFilesByTaskIds(taskIds) {
+        const normalizedTaskIds = Array.from(new Set(
+            (Array.isArray(taskIds) ? taskIds : [])
+                .map(id => Number(id))
+                .filter(id => Number.isInteger(id) && id > 0)
+        ));
+        if (normalizedTaskIds.length === 0) {
+            throw new Error('任务ID不能为空');
+        }
+
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        const pendingCount = await taskProcessedFileRepo.count({
+            where: {
+                taskId: In(normalizedTaskIds),
+                status: In(['pending', 'processing', 'failed'])
+            }
+        });
+        if (pendingCount === 0) {
+            return 0;
+        }
+
+        const tasks = await this.taskRepo.find({
+            where: {
+                id: In(normalizedTaskIds)
+            },
+            relations: {
+                account: true
+            }
+        });
+
+        let updatedCount = 0;
+        for (const task of tasks) {
+            updatedCount += await this._syncTaskDetailRecordsWithActualFiles(task);
+        }
+        if (updatedCount > 0) {
+            await this.syncTaskProgressFromProcessedRecords(tasks);
+        }
+        return updatedCount;
+    }
+
     async resetProcessedRecords(taskId) {
         const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
         await taskProcessedFileRepo.delete({ taskId });
@@ -484,6 +607,16 @@ class TaskService {
         await taskProcessedFileRepo.remove(record);
     }
 
+    async deleteProcessedRecordsByIds(recordIds) {
+        if (!Array.isArray(recordIds) || recordIds.length === 0) {
+            throw new Error('未选择要删除的记录');
+        }
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        await taskProcessedFileRepo.delete({
+            id: In(recordIds)
+        });
+    }
+
     async _getDoneProcessedSourceFileIds(taskId) {
         const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
         const records = await taskProcessedFileRepo.find({
@@ -492,7 +625,7 @@ class TaskService {
             },
             where: {
                 taskId,
-                status: 'done'
+                status: In(['done', 'completed', 'success'])
             }
         });
         return new Set(records.map(record => String(record.sourceFileId)));
@@ -503,13 +636,33 @@ class TaskService {
         const restoredFileName = CasService.isCasFile(file.name)
             ? CasService.getOriginalFileName(file.name)
             : file.name;
+        
+        // 1. 查找现有记录
         const existingRecord = await taskProcessedFileRepo.findOneBy({
             taskId: task.id,
             sourceFileId: String(file.id)
         });
-        if (existingRecord?.status === 'done' && status !== 'done') {
+
+        const oldStatus = existingRecord?.status || 'none';
+
+        // 2. 【核心保护逻辑】：禁止已成功的记录被覆盖为失败
+        if (existingRecord && ['done', 'completed', 'success'].includes(existingRecord.status) && status === 'failed') {
+            logTaskEvent(`[状态保护] 拦截到覆盖尝试: ${file.name} (当前:${existingRecord.status}, 尝试写入:${status})`, 'warn', 'transfer');
+            // 打印堆栈以便排查是谁在尝试回滚状态
+            console.warn(`[状态保护堆栈] 文件: ${file.name}`);
+            console.trace(); 
             return existingRecord;
         }
+
+        // 3. 打印详细日志
+        if (status === 'failed') {
+            console.error(`[Record写入] 任务ID:${task.id} | 文件:${file.name} | 状态:${oldStatus} -> ${status} | 错误:${errorMessage}`);
+            console.trace('[失败状态写入堆栈]'); 
+        } else {
+            console.log(`[Record写入] 任务ID:${task.id} | 文件:${file.name} | 状态:${oldStatus} -> ${status}`);
+        }
+
+        // 4. 执行 UPSERT
         await taskProcessedFileRepo.upsert({
             taskId: task.id,
             sourceFileId: String(file.id),
@@ -518,7 +671,7 @@ class TaskService {
             sourceShareId: task.shareId || '',
             restoredFileName,
             status,
-            lastError: errorMessage || ''
+            lastError: (status === 'done' || status === 'completed') ? null : (errorMessage || null)
         }, ['taskId', 'sourceFileId']);
     }
 
@@ -733,14 +886,25 @@ class TaskService {
                 }
                 const casInfo = await casService.downloadAndParseCas(cloud189, transferredCasFile.id);
                 const restoreName = CasService.getOriginalFileName(casFile.name, casInfo);
+                
+                // 核心：秒传恢复
                 await casService.restoreFromCas(cloud189, task.realFolderId, casInfo, restoreName);
-                await this._waitForFileByName(cloud189, task.realFolderId, restoreName, 30, 1000);
+                
+                // 非核心：物理确认 (降级)
+                try {
+                    await this._waitForFileByName(cloud189, task.realFolderId, restoreName, 10, 1000);
+                } catch (e) {
+                    logTaskEvent(`[警告] 等待恢复文件落盘确认超时: ${restoreName}`, 'warn', 'transfer');
+                }
+
                 await this._saveProcessedFileRecord(task, casFile, 'done');
+
+                // 非核心：清理源文件 (降级)
                 try {
                     await cloud189.deleteFile(transferredCasFile.id, transferredCasFile.name);
                     logTaskEvent(`普通任务已删除CAS文件: ${transferredCasFile.name}`, 'info', 'transfer');
                 } catch (deleteError) {
-                    logTaskEvent(`普通任务删除CAS文件失败: ${transferredCasFile.name}, 错误: ${deleteError.message}`, 'error', 'transfer');
+                    logTaskEvent(`[警告] 清理CAS临时文件失败: ${transferredCasFile.name}, 错误: ${deleteError.message}`, 'warn', 'transfer');
                 }
             } catch (error) {
                 await this._saveProcessedFileRecord(task, casFile, 'failed', error.message);
@@ -883,15 +1047,10 @@ class TaskService {
         // 增强：转存开始的同时，自动尝试通过 TMDB 获取总集数
         if (task && (!task.totalEpisodes || task.totalEpisodes === 0)) {
             try {
-                const { TMDBService } = require('./tmdb');
-                const tmdb = new TMDBService();
-                const title = String(task.resourceName).replace(/\(根\)$/g, '').trim();
-                const year = (title.match(/(19|20)\d{2}/) || [])[0] || '';
-                const tmdbInfo = await tmdb.searchTV(title, year);
-                if (tmdbInfo && tmdbInfo.totalEpisodes) {
-                    console.log(`[TaskService] 转存时自动对齐 TMDB 集数: ${task.resourceName} -> ${tmdbInfo.totalEpisodes}集`);
-                    task.totalEpisodes = tmdbInfo.totalEpisodes;
-                    await this.taskRepo.update(task.id, { totalEpisodes: tmdbInfo.totalEpisodes });
+                const seasonInfo = await this.resolveTmdbSeasonInfo(task, { updateTask: true });
+                if (seasonInfo?.totalEpisodes) {
+                    const seasonText = seasonInfo.seasonNumber ? ` S${String(seasonInfo.seasonNumber).padStart(2, '0')}` : '';
+                    console.log(`[TaskService] 转存时自动对齐 TMDB 集数: ${task.resourceName}${seasonText} -> ${seasonInfo.totalEpisodes}集`);
                 }
             } catch (e) {
                 console.warn(`[TaskService] 自动补全集数由于网络或名称问题跳过: ${e.message}`);
@@ -957,6 +1116,7 @@ class TaskService {
                     const daysDiff = (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24);
                     if (daysDiff >= ConfigService.getConfigValue('task.taskExpireDays')) {
                         task.status = 'completed';
+                        await this._syncTaskDetailRecordsWithActualFiles(task);
                     }
                     task.currentEpisodes = 0;
                     logTaskEvent(`${task.resourceName} 当前没有可生成懒转存STRM的媒体文件`, 'info', 'transfer');
@@ -964,9 +1124,9 @@ class TaskService {
 
                 if (task.totalEpisodes && task.currentEpisodes >= task.totalEpisodes) {
                     task.status = 'completed';
+                    await this._syncTaskDetailRecordsWithActualFiles(task);
                     logTaskEvent(`${task.resourceName} 已完结`, 'info', 'transfer');
                 }
-
                 task.lastCheckTime = new Date();
                 await this.taskRepo.save(task);
                 return saveResults.join('\n');
@@ -1049,6 +1209,7 @@ class TaskService {
                     const daysDiff = (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24);
                     if (daysDiff >= ConfigService.getConfigValue('task.taskExpireDays')) {
                         task.status = 'completed';
+                        await this._syncTaskDetailRecordsWithActualFiles(task);
                     }
                     logTaskEvent(`${task.resourceName} 没有增量剧集`, 'info', 'transfer')
                 }
@@ -1208,7 +1369,7 @@ class TaskService {
             new StrmService().deleteDir(path.join(task.account.localStrmPrefix, folderName))
         }
         // 只允许更新特定字段
-        const allowedFields = ['resourceName', 'targetFolderId', 'targetFolderName', 'organizerTargetFolderId', 'organizerTargetFolderName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm', 'enableOrganizer'];
+        const allowedFields = ['resourceName', 'targetFolderId', 'targetFolderName', 'organizerTargetFolderId', 'organizerTargetFolderName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'tmdbSeasonNumber', 'tmdbSeasonName', 'tmdbSeasonEpisodes', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm', 'enableOrganizer'];
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
                 task[field] = updates[field];
@@ -1712,23 +1873,63 @@ class TaskService {
     async _handleTaskFailure(task, error) {
         logTaskEvent(error, 'error', 'transfer');
         const maxRetries = ConfigService.getConfigValue('task.maxRetries');
-        const retryInterval = ConfigService.getConfigValue('task.retryInterval');
+        let retryInterval = ConfigService.getConfigValue('task.retryInterval');
+        
+        // 如果是流量超限错误，增加重试间隔（至少600秒）
+        const isTrafficLimit = /UserDayFlowOverLimited|data flow is out|FlowOverLimited|流量超限/i.test(error.message);
+        if (isTrafficLimit) {
+            retryInterval = Math.max(retryInterval, 600);
+            logTaskEvent(`检测到流量超限，将增加重试间隔至 ${retryInterval} 秒`, 'warn', 'transfer');
+        }
+
         // 初始化重试次数
         if (!task.retryCount) {
             task.retryCount = 0;
         }
         
+        const errorMsg = error.message || String(error);
+
         if (task.retryCount < maxRetries) {
             task.retryCount++;
+            await this._syncTaskDetailRecordsWithActualFiles(task);
             task.status = 'pending';
-            task.lastError = `${error.message} (重试 ${task.retryCount}/${maxRetries})`;
+            task.lastError = `${errorMsg} (重试 ${task.retryCount}/${maxRetries})`;
             // 设置下次重试时间
             task.nextRetryTime = new Date(Date.now() + retryInterval * 1000);
-            logTaskEvent(`任务将在 ${retryInterval} 秒后重试 (${task.retryCount}/${maxRetries})`, 'info', 'transfer');
+            
+            const retryLog = `任务将在 ${retryInterval} 秒后重试 (${task.retryCount}/${maxRetries})`;
+            logTaskEvent(retryLog, 'info', 'transfer');
+
+            // 推送失败重试日志
+            const pushMsg = `❌ 任务执行失败: ${task.resourceName}\n原因: ${errorMsg}\n状态: ${retryLog}`;
+            this.messageUtil.sendMessage(pushMsg).catch(e => console.error('推送失败:', e));
         } else {
+            // 在最终标记失败前，二次确认目标文件是否已存在（防止假失败）
+            try {
+                const isActuallySuccess = await this._verifyIfFilesActuallyExist(task);
+                if (isActuallySuccess) {
+                    await this._syncTaskDetailRecordsWithActualFiles(task);
+                    task.status = 'completed';
+                    task.lastError = `检测到文件已实际全部落盘，自动修正状态 (原错误: ${errorMsg})`;
+                    logTaskEvent(`任务[${task.resourceName}]物理校验成功，自动从 FAILED 修正为 COMPLETED`, 'info', 'transfer');
+                    await this.taskRepo.save(task);
+                    
+                    const pushMsg = `✅ 任务状态已自动修正: ${task.resourceName}\n检测到文件已实际全部落盘，状态已由失败修正为完成。`;
+                    this.messageUtil.sendMessage(pushMsg).catch(e => {});
+                    return '';
+                }
+            } catch (verifyErr) {
+                logTaskEvent(`状态二次确认过程异常: ${verifyErr.message}`, 'warn', 'transfer');
+            }
+
+            await this._syncTaskDetailRecordsWithActualFiles(task);
             task.status = 'failed';
-            task.lastError = `${error.message} (已达到最大重试次数 ${maxRetries})`;
+            task.lastError = `${errorMsg} (已达到最大重试次数 ${maxRetries})`;
             logTaskEvent(`任务达到最大重试次数 ${maxRetries}，标记为失败`, 'error', 'transfer');
+
+            // 推送最终失败日志
+            const pushMsg = `🚨 任务彻底失败: ${task.resourceName}\n原因: ${errorMsg}\n已重试 ${maxRetries} 次，停止重试。`;
+            this.messageUtil.sendMessage(pushMsg).catch(e => console.error('推送失败:', e));
         }
         
         await this.taskRepo.save(task);
@@ -2323,6 +2524,205 @@ class TaskService {
             throw new Error('获取分享目录失败');
         }
         return await this._getLazyStrmFiles(task, [...shareDir.fileListAO.fileList]);
+    }
+
+    /**
+     * 手动修复任务状态：基于物理文件扫描，强行同步子记录与主任务状态。
+     */
+    async repairTaskStatus(taskId) {
+        const task = await this.getTaskById(taskId);
+        if (!task) throw new Error('任务不存在');
+
+        logTaskEvent(`[强制修复] 开始物理校准任务: ${task.resourceName} (${taskId})`, 'info', 'transfer');
+
+        const account = task.account || await this.accountRepo.findOneBy({ id: task.accountId });
+        const cloud189 = Cloud189Service.getInstance(account);
+
+        // 1. 获取目标目录物理文件状况
+        const folderFiles = await this.getAllFolderFiles(cloud189, task);
+        const existingMD5s = new Set(folderFiles.map(f => String(f.md5 || '').toUpperCase()));
+        const existingNames = new Set(folderFiles.map(f => f.name));
+
+        // 2. 获取分享源文件，用于比对
+        const shareDir = await cloud189.listShareDir(task.shareId, task.shareFolderId, task.shareMode, task.accessCode, task.isFolder);
+        const shareFiles = (shareDir?.fileListAO?.fileList || []).filter(f => !f.isFolder);
+
+        // 3. 同步子记录 (Detail) - 该方法已包含对 .cas/restoreName 的多重匹配
+        const repairedCount = await this._syncTaskDetailRecordsWithActualFiles(task);
+
+        // 4. 重新读取修复后的子记录进行统计
+        const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+        const records = await taskProcessedFileRepo.find({ where: { taskId: task.id } });
+        
+        const successStatuses = new Set(['done', 'completed', 'success']);
+        const doneRecords = records.filter(r => successStatuses.has(r.status));
+        const failedRecords = records.filter(r => r.status === 'failed');
+        const missingFiles = [];
+
+        const mediaSuffixs = ConfigService.getConfigValue('task.mediaSuffix').split(';').map(s => s.toLowerCase());
+        const enableOnlySaveMedia = this._shouldOnlySaveMedia(task);
+        const requiredShareFiles = shareFiles.filter(sFile =>
+            this._checkFileSuffix(sFile, enableOnlySaveMedia, mediaSuffixs) &&
+            !this.isHarmonized(sFile)
+        );
+
+        for (const sFile of requiredShareFiles) {
+            const fileMd5 = String(sFile.md5 || '').toUpperCase();
+            const originalName = CasService.isCasFile(sFile.name) ? CasService.getOriginalFileName(sFile.name) : sFile.name;
+            
+            const isFound = (fileMd5.length > 20 && existingMD5s.has(fileMd5)) || 
+                            existingNames.has(originalName) || 
+                            existingNames.has(sFile.name);
+
+            if (!isFound) {
+                missingFiles.push(originalName);
+            }
+        }
+
+        // 5. 如果物理确认全部存在，修正主任务状态
+        let mainStatusUpdated = false;
+        if (missingFiles.length === 0 && requiredShareFiles.length > 0) {
+            task.status = 'completed';
+            task.lastError = '通过手动修复成功物理校准状态';
+            await this.taskRepo.save(task);
+            mainStatusUpdated = true;
+        }
+
+        return {
+            taskId: task.id,
+            resourceName: task.resourceName,
+            repairedCount: repairedCount,
+            doneCount: doneRecords.length,
+            totalCount: records.length,
+            failedCount: failedRecords.length,
+            failedList: failedRecords.map(r => r.sourceFileName),
+            missingCount: missingFiles.length,
+            missingFiles,
+            status: mainStatusUpdated ? 'SUCCESS_FIXED' : 'PARTIAL_FIXED'
+        };
+    }
+
+    /**
+     * 根据目标目录真实的物理文件，同步修正任务子记录（转存详情）状态。
+     * "MD5结果优先"：只要目标 MD5 已存在，子记录就必须从 failed/pending 修正为 done。
+     */
+    async _syncTaskDetailRecordsWithActualFiles(task) {
+        try {
+            const account = task.account || await this.accountRepo.findOneBy({ id: task.accountId });
+            if (!account) return 0;
+            const cloud189 = Cloud189Service.getInstance(account);
+
+            // 1. 获取目标目录物理文件并建立 MD5 集合 (真理来源)
+            const folderFiles = await this.getAllFolderFiles(cloud189, task);
+            const targetMd5Set = new Set(
+                folderFiles
+                    .map(f => String(f.md5 || '').toUpperCase())
+                    .filter(m => m && m.length > 20)
+            );
+            const targetNameSet = new Set(folderFiles.map(f => f.name));
+
+            // 2. 读取所有非完成状态的子记录 (包括 failed 和 processing)
+            const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
+            const records = await taskProcessedFileRepo.find({ where: { taskId: task.id } });
+            
+            let updatedCount = 0;
+            for (const record of records) {
+                // 如果已经是成功状态，跳过
+                if (['done', 'completed', 'success'].includes(record.status)) continue;
+
+                const recordMd5 = String(record.sourceMd5 || '').toUpperCase();
+                const sourceName = record.sourceFileName || '';
+                const originalName = CasService.isCasFile(sourceName) ? CasService.getOriginalFileName(sourceName) : sourceName;
+                const restoreName = record.restoredFileName || originalName;
+
+                let found = false;
+                // A. 物理 MD5 匹配 (第一优先级)
+                if (recordMd5 && recordMd5.length > 20 && targetMd5Set.has(recordMd5)) {
+                    found = true;
+                } 
+                // B. 物理文件名匹配 (第二优先级)
+                else if (targetNameSet.has(restoreName) || targetNameSet.has(originalName) || targetNameSet.has(sourceName.replace('.cas', ''))) {
+                    found = true;
+                }
+
+                if (found) {
+                    record.status = 'done';
+                    record.lastError = null;
+                    await taskProcessedFileRepo.save(record);
+                    updatedCount++;
+                }
+            }
+
+            if (updatedCount > 0) {
+                logTaskEvent(`[物理同步] 任务[${task.resourceName}]通过 MD5/文件名校准修正了 ${updatedCount} 条记录`, 'info', 'transfer');
+                // 同步主任务进度
+                await this.syncTaskProgressFromProcessedRecords([task]);
+            }
+            return updatedCount;
+        } catch (e) {
+            logTaskEvent(`同步子记录状态异常: ${e.message}`, 'warn', 'transfer');
+            return 0;
+        }
+    }
+
+    /**
+     * 在标记失败前，通过扫描云盘目录二次确认文件是否真的不存在。
+     * 只有当所有要求的媒体文件都已物理落盘（MD5匹配或还原名匹配）时，才返回 true。
+     */
+    async _verifyIfFilesActuallyExist(task) {
+        try {
+            const account = task.account || await this.accountRepo.findOneBy({ id: task.accountId });
+            if (!account) return false;
+            const cloud189 = Cloud189Service.getInstance(account);
+            
+            // 1. 获取分享源文件列表，确定“应该”有哪些文件
+            const shareDir = await cloud189.listShareDir(task.shareId, task.shareFolderId, task.shareMode, task.accessCode, task.isFolder);
+            const shareFiles = shareDir?.fileListAO?.fileList || [];
+            if (shareFiles.length === 0) return false;
+
+            // 2. 扫描目标目录真实存储状况
+            const folderFiles = await this.getAllFolderFiles(cloud189, task);
+            const existingMD5s = new Set(folderFiles.map(f => String(f.md5 || '').toUpperCase()));
+            const existingNames = new Set(folderFiles.map(f => f.name));
+
+            const mediaSuffixs = ConfigService.getConfigValue('task.mediaSuffix').split(';').map(s => s.toLowerCase());
+            const enableOnlySaveMedia = this._shouldOnlySaveMedia(task);
+
+            // 3. 筛选出本次任务“要求”转存的媒体文件
+            const requiredFiles = shareFiles.filter(file => 
+                !file.isFolder && 
+                this._checkFileSuffix(file, enableOnlySaveMedia, mediaSuffixs) &&
+                !this.isHarmonized(file)
+            );
+
+            if (requiredFiles.length === 0) return false;
+
+            // 4. 严格逐一比对：任何一个文件缺失即判定为不完整
+            for (const file of requiredFiles) {
+                const fileMd5 = String(file.md5 || '').toUpperCase();
+                const originalName = CasService.isCasFile(file.name) ? CasService.getOriginalFileName(file.name) : file.name;
+                
+                let found = false;
+                // A. 优先 MD5 校验 (强标准)
+                if (fileMd5.length > 20 && existingMD5s.has(fileMd5)) {
+                    found = true;
+                } 
+                // B. 次选还原后的文件名校验
+                else if (existingNames.has(originalName)) {
+                    found = true;
+                }
+                
+                // 如果以上标准都不满足，说明该文件未落盘
+                if (!found) {
+                    return false;
+                }
+            }
+
+            return true; // 只有全部应转存文件都已存在，才允许 Completed
+        } catch (e) {
+            logTaskEvent(`二次校验逻辑执行异常: ${e.message}`, 'warn', 'transfer');
+            return false;
+        }
     }
 }
 

@@ -163,6 +163,9 @@ class TMDBService {
 
     async searchTV(title, year = '', currentEpisodes = 0) {
         const result = await this._searchMedia('tv', title, year, currentEpisodes);
+        if (result) {
+            return await this._applySeasonContext(result, title);
+        }
         // 如果搜不到 TV 且只有 1 个文件，自动尝试电影模式
         // 注意：这里传原始标题 title，让 searchMovie 内部执行自己的分层搜索计划
         if (!result && currentEpisodes <= 1) {
@@ -189,10 +192,62 @@ class TMDBService {
         return null;
     }
 
+    async _applySeasonContext(tvInfo, rawTitle) {
+        const parsed = parseMediaTitle(rawTitle || '');
+        const seasonNumber = Number(parsed?.season || 0);
+        if (!seasonNumber || seasonNumber <= 0) {
+            return tvInfo;
+        }
+
+        const seasonDetail = await this.getTVSeasonDetails(tvInfo.id, seasonNumber);
+        if (!seasonDetail) {
+            return {
+                ...tvInfo,
+                seasonNumber
+            };
+        }
+
+        this._logSearch(`识别季: S${String(seasonNumber).padStart(2, '0')}，TMDB季集数: ${seasonDetail.episodeCount || 0}`);
+        return {
+            ...tvInfo,
+            seasonNumber,
+            seasonName: seasonDetail.name || '',
+            seasonEpisodes: seasonDetail.episodeCount || 0,
+            totalEpisodes: seasonDetail.episodeCount || tvInfo.totalEpisodes || 0,
+            tmdbSeasonUrl: `https://www.themoviedb.org/tv/${tvInfo.id}/season/${seasonNumber}`
+        };
+    }
+
     async getTVDetails(id) {
         try {
             const response = await this._request(`/tv/${id}`, { append_to_response: 'credits,images' });
-            return { id: response.id, title: response.name, releaseDate: response.first_air_date, type: 'tv', lastEpisodeToAir: response.last_episode_to_air, status: response.status };
+            return {
+                id: response.id,
+                title: response.name,
+                releaseDate: response.first_air_date,
+                type: 'tv',
+                totalEpisodes: response.number_of_episodes || 0,
+                number_of_episodes: response.number_of_episodes || 0,
+                seasons: response.seasons || [],
+                lastEpisodeToAir: response.last_episode_to_air,
+                status: response.status
+            };
+        } catch (e) { return null; }
+    }
+
+    async getTVSeasonDetails(id, seasonNumber) {
+        try {
+            const response = await this._request(`/tv/${id}/season/${seasonNumber}`);
+            return {
+                id: response.id,
+                title: response.name,
+                name: response.name,
+                seasonNumber: response.season_number || Number(seasonNumber),
+                episodeCount: Array.isArray(response.episodes) ? response.episodes.length : Number(response.episode_count || 0),
+                airDate: response.air_date || '',
+                episodes: response.episodes || [],
+                tmdbUrl: `https://www.themoviedb.org/tv/${id}/season/${seasonNumber}`
+            };
         } catch (e) { return null; }
     }
 

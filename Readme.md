@@ -52,6 +52,7 @@ docker run -d \
   -e PUID=0 \
   -e PGID=0 \
   -e DNS_LOOKUP_IP_VERSION=ipv4 \
+  -e TZ=Asia/Shanghai \
   ghcr.io/oceanxux/cloud189-auto-save:latest
 ```
 

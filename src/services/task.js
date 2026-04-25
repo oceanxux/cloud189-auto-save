@@ -1254,7 +1254,7 @@ class TaskService {
             .addSelect('COUNT(DISTINCT record.sourceFileId)', 'recordCount')
             .addSelect('MAX(record.updatedAt)', 'lastUpdatedAt')
             .where('record.taskId IN (:...taskIds)', { taskIds })
-            .andWhere('record.status IN (:...statuses)', { statuses: ['processing', 'done'] })
+            .andWhere('record.status IN (:...statuses)', { statuses: ['processing', 'done', 'completed', 'success'] })
             .groupBy('record.taskId')
             .getRawMany();
 

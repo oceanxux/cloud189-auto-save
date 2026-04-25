@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, ChevronRight, Filter, Search, RefreshCw, Files, PlayCircle, MoreVertical, CheckCircle2, AlertCircle, Clock, Trash2, ClipboardList, Edit3, Database, RotateCcw, X, ChevronDown, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Modal from '../Modal';
 import { ToastType } from '../Toast';
+import { useClickOutside } from '../../utils/useClickOutside';
 
 interface Account { id: number; username: string; accountType?: 'personal' | 'family'; driveLabel?: string; }
-interface Task { id: number; resourceName: string; currentEpisodes: number; totalEpisodes: number; lastFileUpdateTime: string; account: Account; enableLazyStrm: boolean; lastOrganizeError?: string; realFolderName?: string; tmdbSeasonNumber?: number | null; tmdbSeasonName?: string | null; tmdbSeasonEpisodes?: number | null; }
+interface Task { id: number; resourceName: string; status: string; currentEpisodes: number; totalEpisodes: number; lastFileUpdateTime: string; account: Account; enableLazyStrm: boolean; lastOrganizeError?: string; realFolderName?: string; tmdbSeasonNumber?: number | null; tmdbSeasonName?: string | null; tmdbSeasonEpisodes?: number | null; }
 interface ProcessedRecord { id: number; sourceFileName: string; sourceMd5?: string; status: string; updatedAt: string; lastError?: string | null; }
 
 interface TaskTabProps {
@@ -22,11 +23,49 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [openTaskMenuId, setOpenTaskMenuId] = useState<number | null>(null);
+  const topMenuRef = useRef<HTMLDivElement>(null);
+  const taskMenuRef = useRef<HTMLDivElement>(null);
 
   const [processedTasks, setProcessedTasks] = useState<Task[]>([]);
   const [processedRecords, setProcessedRecords] = useState<ProcessedRecord[]>([]);
   const [processedLoading, setProcessedLoading] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<number[]>([]);
+
+  const getTaskStatusMeta = (status?: string) => {
+    const normalized = String(status || 'pending').toLowerCase();
+    const statusMap: Record<string, { label: string; badgeClass: string; accentClass: string; progressClass: string }> = {
+      pending: {
+        label: '等待中',
+        badgeClass: 'bg-sky-500/10 text-sky-500',
+        accentClass: 'bg-sky-500',
+        progressClass: 'bg-sky-500'
+      },
+      processing: {
+        label: '追剧中',
+        badgeClass: 'bg-amber-500/10 text-amber-500',
+        accentClass: 'bg-amber-500',
+        progressClass: 'bg-blue-500'
+      },
+      completed: {
+        label: '已完结',
+        badgeClass: 'bg-emerald-500/10 text-emerald-500',
+        accentClass: 'bg-emerald-500',
+        progressClass: 'bg-emerald-500'
+      },
+      failed: {
+        label: '失败',
+        badgeClass: 'bg-red-500/10 text-red-500',
+        accentClass: 'bg-red-500',
+        progressClass: 'bg-red-500'
+      }
+    };
+    return statusMap[normalized] || {
+      label: normalized || '未知',
+      badgeClass: 'bg-slate-500/10 text-slate-500',
+      accentClass: 'bg-slate-400',
+      progressClass: 'bg-slate-400'
+    };
+  };
 
   const getRecordStatusMeta = (status?: string) => {
     const normalized = String(status || '').toLowerCase();
@@ -53,6 +92,8 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
   }, [searchTerm, statusFilter]);
 
   useEffect(() => { fetchTasks(); }, [fetchTasks]);
+  useClickOutside(topMenuRef, () => setIsTopMenuOpen(false), isTopMenuOpen);
+  useClickOutside(taskMenuRef, () => setOpenTaskMenuId(null), openTaskMenuId !== null);
 
   const handleOpenProcessedRecords = async (targetTasks: Task[]) => {
     setProcessedTasks(targetTasks);
@@ -122,6 +163,29 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
     }, 'danger');
   };
 
+  const handleDeleteSelectedTasks = async () => {
+    const ids = [...selectedTaskIds];
+    if (ids.length === 0) return;
+
+    onShowConfirm?.('批量删除任务', `确定要删除选中的 ${ids.length} 个任务吗？已转存的文件不会被自动移除。`, async () => {
+      try {
+        const res = await fetch('/api/tasks/batch', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskIds: ids, deleteCloud: false })
+        });
+        const data = await res.json();
+        if (data.success) {
+          onShowToast?.('选中任务已删除', 'success');
+          setSelectedTaskIds([]);
+          fetchTasks();
+        } else {
+          onShowToast?.('批量删除失败: ' + data.error, 'error');
+        }
+      } catch (e) { onShowToast?.('批量删除失败', 'error'); }
+    }, 'danger');
+  };
+
   const handleSyncSeasonEpisodes = async (task: Task) => {
     try {
       const res = await fetch(`/api/tasks/${task.id}/sync-season-episodes`, { method: 'POST' });
@@ -159,7 +223,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
              </div>
              <div className="h-8 w-px bg-[var(--border-color)]" />
              <div className="workbench-hero-metric">
-               <div className="workbench-hero-metric-value text-emerald-500">{tasks.filter(t => t.totalEpisodes > 0 && t.currentEpisodes >= t.totalEpisodes).length}</div>
+               <div className="workbench-hero-metric-value text-emerald-500">{tasks.filter(t => String(t.status || '').toLowerCase() === 'completed').length}</div>
                <div className="workbench-hero-metric-label">已完结</div>
              </div>
           </div>
@@ -170,11 +234,12 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div className="flex gap-2">
           <button onClick={() => onCreateTask()} className="workbench-primary-button py-2 text-xs"><Plus size={14} /> 新建任务</button>
-          <div className="relative">
-            <button onClick={() => setIsTopMenuOpen(!isTopMenuOpen)} className="workbench-toolbar-button py-2 text-xs">批量操作 <ChevronDown size={14} /></button>
+          <div ref={topMenuRef} className="relative">
+            <button onClick={() => { setOpenTaskMenuId(null); setIsTopMenuOpen(!isTopMenuOpen); }} className="workbench-toolbar-button py-2 text-xs">批量操作 <ChevronDown size={14} /></button>
             <AnimatePresence>{isTopMenuOpen && (
               <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute left-0 top-full mt-1.5 w-44 glass-modal rounded-2xl py-1 z-[2000] shadow-2xl border border-[var(--border-color)] overflow-hidden">
                 <button onClick={() => { setIsTopMenuOpen(false); handleOpenProcessedRecords(tasks.filter(t => selectedTaskIds.includes(t.id))); }} disabled={selectedTaskIds.length === 0} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold flex items-center gap-2 disabled:opacity-30"><Database size={14} /> 转存记录</button>
+                <button onClick={() => { setIsTopMenuOpen(false); handleDeleteSelectedTasks(); }} disabled={selectedTaskIds.length === 0} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold text-red-500 flex items-center gap-2 disabled:opacity-30"><Trash2 size={14} /> 删除选中任务</button>
                 <div className="h-px bg-[var(--border-color)] my-1" />
                 <button onClick={() => { setIsTopMenuOpen(false); setSelectedTaskIds(tasks.map(t => t.id)); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold">全选任务</button>
                 <button onClick={() => setSelectedTaskIds([])} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold text-red-500">取消选择</button>
@@ -183,7 +248,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
           </div>
         </div>
         <div className="flex gap-2">
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="workbench-select py-1.5 text-xs font-bold min-w-[80px]"><option value="all">全部</option><option value="processing">追更</option><option value="completed">完结</option></select>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="workbench-select py-1.5 text-xs font-bold min-w-[92px]"><option value="all">全部</option><option value="processing">追剧中</option><option value="completed">已完结</option><option value="failed">失败</option><option value="pending">等待中</option></select>
           <div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} /><input type="text" placeholder="搜索..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="workbench-input pl-8 py-1.5 text-xs w-32" /></div>
           <button onClick={fetchTasks} className="p-2 bg-[var(--bg-main)] border border-[var(--border-color)] rounded-xl"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
         </div>
@@ -191,55 +256,59 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
 
       {/* List */}
       <div className="grid grid-cols-1 gap-2.5">
-        {tasks.map(task => (
-          <div key={task.id} className={`workbench-panel p-3.5 group relative transition-all ${openTaskMenuId === task.id ? 'z-20 overflow-visible' : 'overflow-hidden'} ${selectedTaskIds.includes(task.id) ? 'ring-1 ring-blue-500 bg-blue-50/5' : ''}`}>
-            <div className={`absolute left-0 top-0 w-0.5 h-full ${task.lastOrganizeError ? 'bg-red-500' : (task.totalEpisodes > 0 && task.currentEpisodes >= task.totalEpisodes) ? 'bg-emerald-500' : 'bg-blue-500'}`} />
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3 min-w-0 flex-1">
-                <div onClick={() => setSelectedTaskIds(prev => prev.includes(task.id) ? prev.filter(i => i !== task.id) : [...prev, task.id])} className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer ${selectedTaskIds.includes(task.id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>{selectedTaskIds.includes(task.id) && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}</div>
-                <div className="min-w-0">
-                  <h3 className="font-black text-sm truncate max-w-[200px] md:max-w-md">{task.resourceName.replace(/\(根\)$/g, '')}</h3>
-                  <div className="flex items-center gap-3 text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">
-                    <span className="flex items-center gap-1"><User size={9} />{task.account.username}{task.account.accountType === 'family' ? ' [家庭云]' : ' [个人云]'}</span>
-                    {task.tmdbSeasonNumber && (
-                      <span className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-blue-500">
-                        S{String(task.tmdbSeasonNumber).padStart(2, '0')}{task.tmdbSeasonEpisodes ? ` · ${task.tmdbSeasonEpisodes}集` : ''}
-                      </span>
-                    )}
-                    <span className="truncate flex items-center gap-1"><Files size={9} />{task.realFolderName || '根'}</span>
-                  </div>
-                  {task.lastOrganizeError && (
-                    <div className="mt-1.5 flex items-start gap-1.5 p-1.5 rounded-lg bg-red-50/50 dark:bg-red-900/10 border border-red-100/50 dark:border-red-900/20">
-                      <AlertCircle size={10} className="text-red-500 shrink-0 mt-0.5" />
-                      <p className="text-[9px] font-bold text-red-600 line-clamp-1">{task.lastOrganizeError}</p>
+        {tasks.map(task => {
+          const statusMeta = getTaskStatusMeta(task.status);
+          return (
+            <div key={task.id} className={`workbench-panel p-3.5 group relative transition-all ${openTaskMenuId === task.id ? 'z-20 overflow-visible' : 'overflow-hidden'} ${selectedTaskIds.includes(task.id) ? 'ring-1 ring-blue-500 bg-blue-50/5' : ''}`}>
+              <div className={`absolute left-0 top-0 w-0.5 h-full ${task.lastOrganizeError ? 'bg-red-500' : statusMeta.accentClass}`} />
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div onClick={() => setSelectedTaskIds(prev => prev.includes(task.id) ? prev.filter(i => i !== task.id) : [...prev, task.id])} className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer ${selectedTaskIds.includes(task.id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>{selectedTaskIds.includes(task.id) && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}</div>
+                  <div className="min-w-0">
+                    <h3 className="font-black text-sm truncate max-w-[200px] md:max-w-md">{task.resourceName.replace(/\(根\)$/g, '')}</h3>
+                    <div className="flex items-center gap-3 text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">
+                      <span className="flex items-center gap-1"><User size={9} />{task.account.username}{task.account.accountType === 'family' ? ' [家庭云]' : ' [个人云]'}</span>
+                      {task.tmdbSeasonNumber && (
+                        <span className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-blue-500">
+                          S{String(task.tmdbSeasonNumber).padStart(2, '0')}{task.tmdbSeasonEpisodes ? ` · ${task.tmdbSeasonEpisodes}集` : ''}
+                        </span>
+                      )}
+                      <span className={`rounded-md px-1.5 py-0.5 ${statusMeta.badgeClass}`}>{statusMeta.label}</span>
+                      <span className="truncate flex items-center gap-1"><Files size={9} />{task.realFolderName || '根'}</span>
                     </div>
-                  )}
+                    {task.lastOrganizeError && (
+                      <div className="mt-1.5 flex items-start gap-1.5 p-1.5 rounded-lg bg-red-50/50 dark:bg-red-900/10 border border-red-100/50 dark:border-red-900/20">
+                        <AlertCircle size={10} className="text-red-500 shrink-0 mt-0.5" />
+                        <p className="text-[9px] font-bold text-red-600 line-clamp-1">{task.lastOrganizeError}</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-4 shrink-0">
-                <div className="text-right hidden sm:block">
-                  <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">进度 {task.currentEpisodes}/{task.totalEpisodes || '?'}</div>
-                  <div className="w-20 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"><div className="h-full bg-blue-500" style={{ width: `${task.totalEpisodes > 0 ? Math.min(100, (task.currentEpisodes / task.totalEpisodes) * 100) : 0}%` }} /></div>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button onClick={() => handleRunTask(task.id)} className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500 rounded-lg transition-all"><RefreshCw size={15} /></button>
-                  <div className="relative">
-                    <button onClick={() => setOpenTaskMenuId(openTaskMenuId === task.id ? null : task.id)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all"><MoreVertical size={16} /></button>
-                    <AnimatePresence>{openTaskMenuId === task.id && (
-                      <motion.div initial={{ opacity: 0, scale: 0.95, x: 5 }} animate={{ opacity: 1, scale: 1, x: 0 }} exit={{ opacity: 0, scale: 0.95 }} className="absolute right-0 top-full mt-1 w-36 glass-modal rounded-2xl py-1 z-[2100] shadow-2xl border border-[var(--border-color)] overflow-hidden">
-                        <button onClick={() => { setOpenTaskMenuId(null); handleOpenProcessedRecords([task]); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold flex items-center gap-2"><Database size={13} /> 转存记录</button>
-                        <button onClick={() => { setOpenTaskMenuId(null); handleSyncSeasonEpisodes(task); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold flex items-center gap-2"><RotateCcw size={13} /> 识别季集数</button>
-                        <button onClick={() => { setOpenTaskMenuId(null); onCreateTask(task); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold flex items-center gap-2"><Edit3 size={13} /> 修改任务</button>
-                        <div className="h-px bg-[var(--border-color)] my-1" />
-                        <button onClick={() => { setOpenTaskMenuId(null); handleDeleteTask(task.id); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold text-red-500 flex items-center gap-2"><Trash2 size={13} /> 删除任务</button>
-                      </motion.div>
-                    )}</AnimatePresence>
+                <div className="flex items-center gap-4 shrink-0">
+                  <div className="text-right hidden sm:block">
+                    <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">进度 {task.currentEpisodes}/{task.totalEpisodes || '?'}</div>
+                    <div className="w-20 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"><div className={`h-full ${statusMeta.progressClass}`} style={{ width: `${task.totalEpisodes > 0 ? Math.min(100, (task.currentEpisodes / task.totalEpisodes) * 100) : 0}%` }} /></div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => handleRunTask(task.id)} className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500 rounded-lg transition-all"><RefreshCw size={15} /></button>
+                    <div ref={openTaskMenuId === task.id ? taskMenuRef : undefined} className="relative">
+                      <button onClick={() => { setIsTopMenuOpen(false); setOpenTaskMenuId(openTaskMenuId === task.id ? null : task.id); }} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all"><MoreVertical size={16} /></button>
+                      <AnimatePresence>{openTaskMenuId === task.id && (
+                        <motion.div initial={{ opacity: 0, scale: 0.95, x: 5 }} animate={{ opacity: 1, scale: 1, x: 0 }} exit={{ opacity: 0, scale: 0.95 }} className="absolute right-0 top-full mt-1 w-36 glass-modal rounded-2xl py-1 z-[2100] shadow-2xl border border-[var(--border-color)] overflow-hidden">
+                          <button onClick={() => { setOpenTaskMenuId(null); handleOpenProcessedRecords([task]); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold flex items-center gap-2"><Database size={13} /> 转存记录</button>
+                          <button onClick={() => { setOpenTaskMenuId(null); handleSyncSeasonEpisodes(task); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold flex items-center gap-2"><RotateCcw size={13} /> 识别季集数</button>
+                          <button onClick={() => { setOpenTaskMenuId(null); onCreateTask(task); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold flex items-center gap-2"><Edit3 size={13} /> 修改任务</button>
+                          <div className="h-px bg-[var(--border-color)] my-1" />
+                          <button onClick={() => { setOpenTaskMenuId(null); handleDeleteTask(task.id); }} className="w-full text-left px-4 py-2 hover:bg-[var(--nav-hover-bg)] text-xs font-bold text-red-500 flex items-center gap-2"><Trash2 size={13} /> 删除任务</button>
+                        </motion.div>
+                      )}</AnimatePresence>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Modal - z-[1000] */}

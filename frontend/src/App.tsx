@@ -1,5 +1,5 @@
 // BUILD_VERSION: 1777002000000
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   User, Files, ClipboardList, PlayCircle, LayoutGrid, Rss, Link2, Settings, Monitor, Search, Bell, Menu, LogOut, MessageSquare, Moon, Sun, RotateCcw, ChevronDown, Terminal, Sparkles, X, Clapperboard, Zap
 } from 'lucide-react';
@@ -28,6 +28,7 @@ import SettingsTab from './components/tabs/SettingsTab';
 import Toast, { ToastType } from './components/Toast';
 import ConfirmDialog from './components/ConfirmDialog';
 import PromptDialog from './components/PromptDialog';
+import { useClickOutside } from './utils/useClickOutside';
 
 function App() {
   const [activeTab, setActiveTab] = useState('task');
@@ -91,6 +92,7 @@ function App() {
   const [isCloudSaverOpen, setIsCloudSaverOpen] = useState(false);
   const [createTaskData, setCreateTaskData] = useState<any>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [taskRefreshKey, setTaskRefreshKey] = useState(0);
   const [isRestarting, setIsRestarting] = useState(false);
@@ -104,6 +106,8 @@ function App() {
     if (isDarkMode) document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
+
+  useClickOutside(userMenuRef, () => setIsUserMenuOpen(false), isUserMenuOpen);
 
   const tabs = [
     { id: 'tmdb', label: 'TMDB资源', icon: Clapperboard },
@@ -126,7 +130,7 @@ function App() {
     fileManager: '云盘浏览、移动与重命名',
     autoSeries: '资源自动搜索与任务创建',
     tmdb: 'TMDB 热门影视与追剧入口',
-    cas: '秒传存根恢复与极速导入',
+    cas: '生成 .cas、共享与秒传恢复',
     organizer: '媒体库自动归档任务管理',
     subscription: '追更资源订阅与更新检查',
     strmConfig: 'STRM 生成模版与挂载规则',
@@ -135,8 +139,12 @@ function App() {
   };
 
   const handleLogout = () => {
-    showConfirm('退出登录', '确定要退出当前工作台并返回登录页面吗？', () => {
-       window.location.href = '/login.html';
+    showConfirm('退出登录', '确定要退出当前工作台并返回登录页面吗？', async () => {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } finally {
+        window.location.href = '/login.html';
+      }
     });
   };
 
@@ -217,7 +225,7 @@ function App() {
         </div>
         <div className="flex-1 px-2.5 space-y-1 overflow-y-auto pb-6 custom-scrollbar">
           {tabs.map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-xs font-black transition-all ${activeTab === tab.id ? 'bg-[var(--nav-active-bg)] text-[var(--nav-active-text)] shadow-sm ring-1 ring-slate-200/50 dark:ring-slate-700/50' : 'text-[var(--text-secondary)] hover:bg-[var(--nav-hover-bg)]'}`}>
+            <button key={tab.id} onClick={() => { setIsUserMenuOpen(false); setActiveTab(tab.id); }} className={`w-full flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-xs font-black transition-all ${activeTab === tab.id ? 'bg-[var(--nav-active-bg)] text-[var(--nav-active-text)] shadow-sm ring-1 ring-slate-200/50 dark:ring-slate-700/50' : 'text-[var(--text-secondary)] hover:bg-[var(--nav-hover-bg)]'}`}>
               <tab.icon size={16} strokeWidth={activeTab === tab.id ? 3 : 2.5} />{tab.label}
             </button>
           ))}
@@ -242,16 +250,16 @@ function App() {
             <button onClick={() => setIsAIChatOpen(true)} className="p-2 rounded-xl hover:bg-[var(--nav-hover-bg)] text-[var(--text-primary)]"><MessageSquare size={18} /></button>
             <button onClick={() => setIsLogsOpen(true)} className={`p-2 rounded-xl transition-all ${isLogsOpen ? 'bg-blue-100 text-blue-600' : 'hover:bg-[var(--nav-hover-bg)] text-[var(--text-primary)]'}`}><Terminal size={18} /></button>
             <div className="w-px h-4 bg-[var(--border-color)] mx-1" />
-            <div className="relative">
+            <div ref={userMenuRef} className="relative">
               <button onClick={() => setIsUserMenuOpen(!isUserMenuOpen)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--app-accent)] text-[10px] font-black text-[var(--bg-main)] shadow-sm">U</button>
               <AnimatePresence>
                 {isUserMenuOpen && (
                   <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="absolute right-0 top-11 z-[500] w-48 rounded-2xl border border-[var(--border-color)] bg-[var(--modal-bg)] p-1.5 shadow-2xl backdrop-blur-2xl" onClick={e => e.stopPropagation()}>
-                    <button onClick={handleRestart} disabled={isRestarting} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-black text-amber-600 hover:bg-amber-50 disabled:opacity-60">
+                    <button onClick={() => { setIsUserMenuOpen(false); handleRestart(); }} disabled={isRestarting} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-black text-amber-600 hover:bg-amber-50 disabled:opacity-60">
                       <RotateCcw size={16} className={isRestarting ? 'animate-spin' : ''} />
                       {isRestarting ? '重启中' : '重启服务'}
                     </button>
-                    <button onClick={handleLogout} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-black text-red-500 hover:bg-red-50"><LogOut size={16} />退出登录</button>
+                    <button onClick={() => { setIsUserMenuOpen(false); handleLogout(); }} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-black text-red-500 hover:bg-red-50"><LogOut size={16} />退出登录</button>
                   </motion.div>
                 )}
               </AnimatePresence>

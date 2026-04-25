@@ -15,6 +15,7 @@ const { logTaskEvent, initSSE, sendAIMessage } = require('./utils/logUtils');
 const TelegramBotManager = require('./utils/TelegramBotManager');
 const fs = require('fs').promises;
 const path = require('path');
+const crypto = require('crypto');
 const { setupCloudSaverRoutes, clearCloudSaverToken } = require('./sdk/cloudsaver');
 const { Like, Not, IsNull, In, Or } = require('typeorm');
 const cors = require('cors'); 
@@ -36,6 +37,108 @@ const { createWorkflowExecutors } = require('./services/workflow/executors');
 
 const appPort = Number(process.env.PORT || 3000);
 let embyStandaloneProxyServer = null;
+const SESSION_SECRET = process.env.SESSION_SECRET || ConfigService.getConfigValue('system.sessionSecret') || 'LhX2IyUcMAz2';
+const AUTH_COOKIE_NAME = 'cloud189_auto_save_auth';
+const AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
+
+const parseCookies = (cookieHeader = '') => {
+    return String(cookieHeader || '').split(';').reduce((cookies, item) => {
+        const separatorIndex = item.indexOf('=');
+        if (separatorIndex === -1) {
+            return cookies;
+        }
+        const key = item.slice(0, separatorIndex).trim();
+        const value = item.slice(separatorIndex + 1).trim();
+        if (!key) {
+            return cookies;
+        }
+        try {
+            cookies[key] = decodeURIComponent(value);
+        } catch (error) {
+            cookies[key] = value;
+        }
+        return cookies;
+    }, {});
+};
+
+const getAuthCookieSecret = () => [
+    SESSION_SECRET,
+    ConfigService.getConfigValue('system.username', ''),
+    ConfigService.getConfigValue('system.password', '')
+].join(':');
+
+const signAuthPayload = (payload) => {
+    return crypto
+        .createHmac('sha256', getAuthCookieSecret())
+        .update(payload)
+        .digest('base64url');
+};
+
+const createAuthToken = (username) => {
+    const payload = Buffer.from(JSON.stringify({
+        username,
+        expiresAt: Date.now() + AUTH_COOKIE_MAX_AGE
+    }), 'utf8').toString('base64url');
+    return `${payload}.${signAuthPayload(payload)}`;
+};
+
+const verifyAuthToken = (token) => {
+    const [payload, signature] = String(token || '').split('.');
+    if (!payload || !signature) {
+        return null;
+    }
+
+    const expectedSignature = signAuthPayload(payload);
+    const signatureBuffer = Buffer.from(signature);
+    const expectedBuffer = Buffer.from(expectedSignature);
+    if (signatureBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
+        return null;
+    }
+
+    try {
+        const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+        if (!data?.username || Number(data.expiresAt || 0) < Date.now()) {
+            return null;
+        }
+        if (data.username !== ConfigService.getConfigValue('system.username')) {
+            return null;
+        }
+        return data.username;
+    } catch (error) {
+        return null;
+    }
+};
+
+const getAuthCookieOptions = (req) => ({
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: Boolean(req.secure),
+    maxAge: AUTH_COOKIE_MAX_AGE,
+    path: '/'
+});
+
+const restoreSessionFromAuthCookie = (req) => {
+    if (req.session?.authenticated) {
+        return true;
+    }
+
+    const cookies = parseCookies(req.headers.cookie || '');
+    const username = verifyAuthToken(cookies[AUTH_COOKIE_NAME]);
+    if (!username || !req.session) {
+        return false;
+    }
+
+    req.session.authenticated = true;
+    req.session.username = username;
+    return true;
+};
+
+const persistAuthCookie = (req, res) => {
+    const username = req.session?.username || ConfigService.getConfigValue('system.username');
+    if (username) {
+        res.cookie(AUTH_COOKIE_NAME, createAuthToken(username), getAuthCookieOptions(req));
+    }
+};
 const resolvePublicDir = () => {
     const candidates = [
         path.join(__dirname, 'public'),
@@ -350,7 +453,7 @@ app.use(session({
         logFn: () => {},      // 禁用内部日志
         reapAsync: true,      // 异步清理过期session
     }),
-    secret: 'LhX2IyUcMAz2',
+    secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: { 
@@ -366,7 +469,8 @@ const authenticateSession = (req, res, next) => {
     if (apiKey && configApiKey && apiKey === configApiKey) {
         return next();
     }
-    if (req.session.authenticated) {
+    if (restoreSessionFromAuthCookie(req)) {
+        persistAuthCookie(req, res);
         next();
     } else {
         // API 请求返回 401，页面请求重定向到登录页
@@ -380,10 +484,11 @@ const authenticateSession = (req, res, next) => {
 
 // 添加根路径处理
 app.get('/', async (req, res) => {
-    if (!req.session.authenticated) {
+    if (!restoreSessionFromAuthCookie(req)) {
         res.redirect('/login');
         return;
     }
+    persistAuthCookie(req, res);
     await sendPublicFileOrFallback(res, 'index.html');
 });
 
@@ -400,7 +505,14 @@ app.post('/api/auth/login', (req, res) => {
         password === ConfigService.getConfigValue('system.password')) {
         req.session.authenticated = true;
         req.session.username = username;
-        res.json({ success: true });
+        res.cookie(AUTH_COOKIE_NAME, createAuthToken(username), getAuthCookieOptions(req));
+        req.session.save((error) => {
+            if (error) {
+                res.status(500).json({ success: false, error: '登录状态保存失败' });
+                return;
+            }
+            res.json({ success: true });
+        });
     } else {
         res.json({ success: false, error: '用户名或密码错误' });
     }
@@ -413,6 +525,7 @@ app.post('/api/auth/logout', (req, res) => {
             return;
         }
         res.clearCookie('connect.sid');
+        res.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
         res.json({ success: true });
     });
 });
@@ -760,13 +873,9 @@ AppDataSource.initialize().then(async () => {
     // 任务相关API
     app.get('/api/tasks', async (req, res) => {
         const { status, search } = req.query;
-        let whereClause = { }; // 用于构建最终的 where 条件
-
-        // 基础条件（AND）
-        if (status && status !== 'all') {
-            whereClause.status = status;
-        }
-        whereClause.enableSystemProxy = Or(IsNull(), false);
+        let whereClause = {
+            enableSystemProxy: Or(IsNull(), false)
+        };
 
         // 添加搜索过滤
         if (search) {
@@ -777,16 +886,12 @@ AppDataSource.initialize().then(async () => {
                 { taskGroup: Like(`%${search}%`) },
                 { account: { username: Like(`%${search}%`) } }
             ];
-            if (Object.keys(whereClause).length > 0) {
-                whereClause = searchConditions.map(searchCond => ({
-                    ...whereClause, // 包含基础条件 (如 status)
-                    ...searchCond   // 包含一个搜索条件
-                }));
-            }else{
-                whereClause = searchConditions;
-            }
+            whereClause = searchConditions.map(searchCond => ({
+                ...whereClause,
+                ...searchCond
+            }));
         }
-        const tasks = await taskRepo.find({
+        let tasks = await taskRepo.find({
             order: { id: 'DESC' },
             relations: {
                 account: true
@@ -794,6 +899,9 @@ AppDataSource.initialize().then(async () => {
             where: whereClause
         });
         await taskService.syncTaskProgressFromProcessedRecords(tasks);
+        if (status && status !== 'all') {
+            tasks = tasks.filter(task => String(task.status || '').toLowerCase() === String(status).toLowerCase());
+        }
         // username脱敏
         tasks.forEach(task => {
             task.account.username = task.account.username.replace(/(.{3}).*(.{4})/, '$1****$2');

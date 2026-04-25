@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Cpu, MessageSquare, Link2, X } from 'lucide-react';
+import { useClickOutside } from '../utils/useClickOutside';
 
 interface FloatingActionsProps {
   onAction?: (actionId: string) => void;
@@ -8,6 +9,8 @@ interface FloatingActionsProps {
 
 const FloatingActions: React.FC<FloatingActionsProps> = ({ onAction }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useClickOutside(rootRef, () => setIsOpen(false), isOpen);
   
   const actions = [
     { id: 'createTask', icon: Plus, label: '创建转存任务', color: 'bg-blue-600 text-white' },
@@ -22,7 +25,7 @@ const FloatingActions: React.FC<FloatingActionsProps> = ({ onAction }) => {
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-[1000] flex flex-col items-end gap-3">
+    <div ref={rootRef} className="fixed bottom-6 right-6 z-[1000] flex flex-col items-end gap-3">
       <AnimatePresence>
         {isOpen && (
           <div className="flex flex-col items-end gap-3 mb-2">

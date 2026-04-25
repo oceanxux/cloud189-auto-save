@@ -21,6 +21,7 @@ interface OrganizerTask {
 
 interface OrganizerTabProps {
   onShowToast?: (message: string, type: ToastType) => void;
+  onShowConfirm?: (title: string, message: string, onConfirm: () => void, type?: 'danger' | 'warning' | 'info') => void;
 }
 
 const stripRootSuffix = (value?: string | null) => String(value || '').replace(/\(根\)$/u, '').trim();

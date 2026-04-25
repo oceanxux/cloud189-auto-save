@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Rss, MoreVertical, RefreshCw, Edit2, Trash2, Folder, ExternalLink, Search, Play, Check, CheckCircle2, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Modal from '../Modal';
 import FolderSelector, { SelectedFolder } from '../FolderSelector';
 import { ToastType } from '../Toast';
+import { useClickOutside } from '../../utils/useClickOutside';
 
 interface Resource {
   id?: number;
@@ -48,8 +49,10 @@ const SubscriptionTab: React.FC<Props> = ({ onTransfer, onShowToast, onShowConfi
   const [resourceForm, setResourceForm] = useState<Resource>({ title: '', shareLink: '', checkRegex: '', replaceRegex: '', targetFolderId: '', targetFolderName: '', status: 'active', type: 'normal' });
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { fetchSubscriptions(); }, []);
+  useClickOutside(menuRef, () => setOpenMenuId(null), openMenuId !== null);
 
   const fetchSubscriptions = async () => {
     setLoading(true);
@@ -172,7 +175,7 @@ const SubscriptionTab: React.FC<Props> = ({ onTransfer, onShowToast, onShowConfi
       <div className="grid grid-cols-1 gap-3">
         <AnimatePresence mode="popLayout">
           {subscriptions.map(sub => (
-            <motion.div layout key={sub.id} className="workbench-panel p-5 group relative overflow-hidden transition-all">
+            <motion.div layout key={sub.id} className={`workbench-panel p-5 group relative transition-all ${openMenuId === sub.id ? 'z-20 overflow-visible' : 'overflow-hidden'}`}>
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                 <div className="flex items-start gap-4 min-w-0 flex-1">
                   <div className="w-12 h-12 rounded-xl bg-orange-500/10 text-orange-500 flex items-center justify-center shrink-0"><Rss size={24} /></div>
@@ -183,7 +186,7 @@ const SubscriptionTab: React.FC<Props> = ({ onTransfer, onShowToast, onShowConfi
                 </div>
                 <div className="flex items-center gap-2 justify-end">
                   <button onClick={() => handleRunSubscription(sub.id)} className="p-2.5 bg-orange-500 text-white rounded-xl shadow-sm hover:scale-110 transition-all"><Play size={16} fill="currentColor" /></button>
-                  <div className="relative">
+                  <div ref={openMenuId === sub.id ? menuRef : undefined} className="relative">
                     <button onClick={() => setOpenMenuId(openMenuId === sub.id ? null : sub.id)} className="p-2.5 hover:bg-slate-100 rounded-xl transition-all"><MoreVertical size={18} /></button>
                     <AnimatePresence>{openMenuId === sub.id && (
                       <motion.div initial={{ opacity: 0, scale: 0.95, x: 5 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute right-0 top-full mt-1 w-40 glass-modal rounded-2xl py-1 z-[2000] shadow-2xl border border-[var(--border-color)] overflow-hidden">

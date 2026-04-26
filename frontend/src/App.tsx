@@ -271,7 +271,7 @@ function App() {
           <div>
             {activeTab === 'account' && <AccountTab onShowToast={showToast} onShowConfirm={showConfirm} onShowPrompt={showPrompt} />}
             {activeTab === 'fileManager' && <FileManagerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
-            {activeTab === 'task' && <TaskTab key={`task-${taskRefreshKey}`} onCreateTask={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'task' && <TaskTab refreshToken={taskRefreshKey} onCreateTask={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} onShowConfirm={showConfirm} />}
             {activeTab === 'autoSeries' && <AutoSeriesTab onShowToast={showToast} onShowConfirm={showConfirm} />}
             {activeTab === 'tmdb' && <TMDBTab onShowToast={showToast} />}
             {activeTab === 'cas' && <CasTab onShowToast={showToast} onShowConfirm={showConfirm} />}

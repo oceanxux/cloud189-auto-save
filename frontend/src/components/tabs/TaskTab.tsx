@@ -16,6 +16,7 @@ interface TaskTabProps {
   onCreateTask?: (data?: any) => void;
   onShowToast?: (message: string, type: ToastType) => void;
   onShowConfirm?: (title: string, message: string, onConfirm: () => void, type?: 'danger' | 'warning' | 'info') => void;
+  refreshToken?: number;
 }
 
 const loadSessionMap = (key: string) => {
@@ -38,7 +39,7 @@ const saveSessionMap = (key: string, value: Record<string, any>) => {
 
 const tmdbRemarkCache = new Map<string, any>(Object.entries(loadSessionMap(TMDB_REMARK_DETAIL_CACHE_KEY)));
 
-const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConfirm }) => {
+const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConfirm, refreshToken = 0 }) => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -221,6 +222,10 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
     const nextEntries = Object.fromEntries(resolvedEntries.filter(Boolean) as Array<readonly [number, string]>);
     if (Object.keys(nextEntries).length > 0) {
       setResolvedRemarkMap(prev => {
+        const changed = Object.entries(nextEntries).some(([key, value]) => prev[Number(key)] !== value);
+        if (!changed) {
+          return prev;
+        }
         const nextMap = { ...prev, ...nextEntries };
         saveSessionMap(TASK_REMARK_CACHE_KEY, nextMap);
         return nextMap;
@@ -243,6 +248,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
   }, [resolveTaskRemarksFromTmdb, searchTerm, statusFilter]);
 
   useEffect(() => { fetchTasks(); }, [fetchTasks]);
+  useEffect(() => { if (refreshToken > 0) fetchTasks(); }, [refreshToken]);
   useClickOutside(topMenuRef, () => setIsTopMenuOpen(false), isTopMenuOpen);
   useClickOutside(taskMenuRef, () => setOpenTaskMenuId(null), openTaskMenuId !== null);
   useClickOutside(statusMenuRef, () => setOpenStatusMenuId(null), openStatusMenuId !== null);

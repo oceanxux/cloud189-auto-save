@@ -98,6 +98,10 @@ class TelegramBotService {
         // 添加错误处理
         this.bot.on('polling_error', (error) => {
             console.error('Telegram Bot polling error:', error.message);
+            if (String(error.message || '').includes('409 Conflict')) {
+                console.error('Telegram Bot polling disabled due to conflict with another active instance.');
+                this.stop().catch(() => {});
+            }
         });
 
         this.bot.on('error', (error) => {
@@ -1119,7 +1123,7 @@ class TelegramBotService {
                 await this.bot.sendMessage(chatId, '已开启 Bot 静默模式，但系统未配置默认保存目录 task.autoCreate.targetFolderId');
                 return;
             }
-            const targetFolder = await this.commonFolderRepo.findOne({ where: { id: Number(defaultTargetFolderId) } });
+            const targetFolder = await this.commonFolderRepo.findOne({ where: { id: defaultTargetFolderId, accountId: this.currentAccountId } });
             if (!targetFolder) {
                 await this.bot.sendMessage(chatId, '已开启 Bot 静默模式，但默认保存目录不在当前账号常用目录中');
                 return;

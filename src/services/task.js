@@ -174,6 +174,16 @@ class TaskService {
         };
     }
 
+    _safeJoinPath(...parts) {
+        const validParts = parts
+            .map(part => typeof part === 'string' ? part : (part == null ? '' : String(part)))
+            .filter(part => part !== '');
+        if (validParts.length === 0) {
+            return '';
+        }
+        return path.join(...validParts);
+    }
+
     _buildTaskTitleContext(task) {
         const rawTitle = String(task?.resourceName || task?.shareFolderName || task?.realFolderName || '').replace(/\(根\)$/g, '').trim();
         const parsed = parseMediaTitle(rawTitle);
@@ -262,16 +272,20 @@ class TaskService {
      // 验证并创建目标目录
      async _validateAndCreateTargetFolder(cloud189, taskDto, shareInfo) {
         const rootSelected = this.checkFolderInList(taskDto, '-1');
+        const existingFolder = await cloud189.listFiles(taskDto.targetFolderId);
+        const folderList = existingFolder?.fileListAO?.folderList || [];
+        const matchedFolder = folderList.find(folder => folder.name === shareInfo.fileName);
+
+        if (matchedFolder?.id) {
+            await logTaskEvent(`目标目录已存在同名文件夹，复用目录: ${matchedFolder.name} (${matchedFolder.id})`, 'info', 'task');
+            return {
+                ...matchedFolder,
+                oldFolder: true
+            };
+        }
+
         if (!rootSelected) {
-            const existingFolder = await cloud189.listFiles(taskDto.targetFolderId);
-            const folderList = existingFolder?.fileListAO?.folderList || [];
-            const matchedFolder = folderList.find(folder => folder.name === shareInfo.fileName);
-            if (matchedFolder?.id) {
-                return {
-                    ...matchedFolder,
-                    oldFolder: true
-                };
-            }
+            await logTaskEvent(`未选择根目录，后续将仅为子目录创建任务: ${shareInfo.fileName}`, 'info', 'task');
         }
         // 检查目标文件夹是否存在
         await this.checkFolderExists(cloud189, taskDto.targetFolderId, shareInfo.fileName, taskDto.overwriteFolder);
@@ -290,7 +304,7 @@ class TaskService {
         const { fileList: rootFiles = [], folderList: subFolders = [] } = result.fileListAO;
         const selectedSubFolders = subFolders.filter(folder => this.checkFolderInList(taskDto, folder.id));
         // 处理根目录文件 如果用户选择了根目录, 则生成根目录任务
-        if (rootFiles.length > 0 && !rootFolder?.oldFolder) {
+        if (rootFiles.length > 0) {
             const enableOnlySaveMedia = ConfigService.getConfigValue('task.enableOnlySaveMedia');
             // mediaSuffixs转为小写
             const mediaSuffixs = ConfigService.getConfigValue('task.mediaSuffix').split(';').map(suffix => suffix.toLowerCase())
@@ -301,6 +315,7 @@ class TaskService {
             }
             if (!shouldContinue) {
                 taskDto.realRootFolderId = rootFolder.id;
+                await logTaskEvent(`创建根目录任务: rootFolderId=${rootFolder.id}, rootFolderName=${rootFolder.name}, reused=${!!rootFolder?.oldFolder}, rootFiles=${rootFiles.length}`, 'info', 'task');
                 const rootTask = this.taskRepo.create(
                     this._createTaskConfig(
                         taskDto,
@@ -308,6 +323,8 @@ class TaskService {
                     )
                 );
                 tasks.push(await this.taskRepo.save(rootTask));
+            } else {
+                await logTaskEvent(`根目录任务已跳过: rootFolderId=${rootFolder.id}, reason=没有匹配媒体文件`, 'warn', 'task');
             }
         }
         if (subFolders.length > 0) {
@@ -358,7 +375,7 @@ class TaskService {
                     await this.checkFolderExists(cloud189, rootFolder.id, folder.fileName, taskDto.overwriteFolder);
                     realFolder = await cloud189.createFolder(folder.name, rootFolder.id);
                     if (!realFolder?.id) throw new Error('创建目录失败');
-                    realFolder.name = path.join(rootFolder.name, realFolder.name);
+                    realFolder.name = this._safeJoinPath(rootFolder.name, realFolder.name);
                 }
                 const subTask = this.taskRepo.create(
                     this._createTaskConfig(
@@ -408,6 +425,7 @@ class TaskService {
     async createTask(params) {
         const taskDto = new CreateTaskDto(params);
         taskDto.validate();
+        await logTaskEvent(`开始创建任务: accountId=${taskDto.accountId}, shareLink=${taskDto.shareLink}, targetFolderId=${taskDto.targetFolderId}, targetFolderName=${taskDto.targetFolderName || ''}, selectedFolders=${JSON.stringify(taskDto.selectedFolders || [])}`, 'info', 'task');
         // 获取分享信息
         const account = await this.accountRepo.findOneBy({ id: taskDto.accountId });
         if (!account) throw new Error('账号不存在');
@@ -421,6 +439,7 @@ class TaskService {
         const cloud189 = Cloud189Service.getInstance(account);
         const shareCode = cloud189Utils.parseShareCode(taskDto.shareLink);
         const shareInfo = await this.getShareInfo(cloud189, shareCode);
+        await logTaskEvent(`分享信息解析完成: shareId=${shareInfo.shareId || ''}, fileId=${shareInfo.fileId || ''}, fileName=${shareInfo.fileName || ''}, isFolder=${!!shareInfo.isFolder}, shareMode=${shareInfo.shareMode}`, 'info', 'task');
         // 如果分享链接是加密链接, 且没有提供访问码, 则抛出错误
         if (shareInfo.shareMode == 1 ) {
             if (!taskDto.accessCode) {
@@ -458,8 +477,11 @@ class TaskService {
         await this.increaseShareFileAccessCount(cloud189, shareInfo.shareId)
         // 检查并创建目标目录
         const rootFolder = await this._validateAndCreateTargetFolder(cloud189, taskDto, shareInfo);
+        await logTaskEvent(`目标目录准备完成: rootFolderId=${rootFolder?.id || ''}, rootFolderName=${rootFolder?.name || ''}, oldFolder=${!!rootFolder?.oldFolder}`, 'info', 'task');
         const tasks = [];
-        rootFolder.name = path.join(taskDto.targetFolder, rootFolder.name)
+        const targetFolderBase = taskDto.targetFolder || taskDto.targetFolderName || '';
+        rootFolder.name = this._safeJoinPath(targetFolderBase, rootFolder.name);
+        await logTaskEvent(`任务根目录映射完成: targetFolderBase=${targetFolderBase || '空'}, mappedRoot=${rootFolder.name || ''}`, 'info', 'task');
         if (shareInfo.isFolder) {
             await this._handleFolderShare(cloud189, shareInfo, taskDto, rootFolder, tasks);
         }
@@ -474,6 +496,7 @@ class TaskService {
                 SchedulerService.saveTaskJob(task, this)   
             }
         }
+        await logTaskEvent(`任务创建完成: created=${tasks.length}, resource=${shareInfo.fileName || taskDto.taskName || ''}`, 'info', 'task');
         return tasks;
     }
 
@@ -719,7 +742,7 @@ class TaskService {
     async deleteTask(taskId, deleteCloud) {
         const task = await this.getTaskById(taskId);
         if (!task) throw new Error('任务不存在');
-        const hasExplicitStatusUpdate = updates.status !== undefined;
+        await logTaskEvent(`开始删除任务: taskId=${taskId}, deleteCloud=${!!deleteCloud}, resourceName=${task.resourceName || ''}`, 'info', 'task');
         const folderName = task.realFolderName.substring(task.realFolderName.indexOf('/') + 1);
         if (!task.enableSystemProxy && deleteCloud) {
             const account = await this.accountRepo.findOneBy({ id: task.accountId });
@@ -741,6 +764,7 @@ class TaskService {
         }
         await this.resetProcessedRecords(task.id);
         await this.taskRepo.remove(task);
+        await logTaskEvent(`任务删除完成: taskId=${taskId}, resourceName=${task.resourceName || ''}`, 'info', 'task');
     }
 
     // 批量删除

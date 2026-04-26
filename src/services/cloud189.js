@@ -383,7 +383,13 @@ class Cloud189Service {
     // 创建批量执行任务
     async createBatchTask(batchTaskDto) {
         logTaskEvent("创建批量任务")
-        logTaskEvent(`batchTaskDto: ${batchTaskDto.toString()}`)
+        let taskInfos = [];
+        try {
+            taskInfos = JSON.parse(batchTaskDto.taskInfos || '[]');
+        } catch {
+            taskInfos = [];
+        }
+        logTaskEvent(`batchTaskDto摘要: type=${batchTaskDto.type}, targetFolderId=${batchTaskDto.targetFolderId}, shareId=${batchTaskDto.shareId}, familyId=${batchTaskDto.familyId || 'null'}, taskCount=${taskInfos.length}, sample=${taskInfos.slice(0, 3).map(item => item.fileName).join(' | ')}`)
         const payload = { ...batchTaskDto };
         // 去除 null/undefined 字段，避免 form 里出现 "null" 字符串
         for (const key of Object.keys(payload)) {

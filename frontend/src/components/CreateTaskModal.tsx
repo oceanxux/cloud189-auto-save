@@ -6,6 +6,8 @@ import { ToastType } from './Toast';
 import FolderSelector, { SelectedFolder } from './FolderSelector';
 import { extractEpisodeCountFromTitle } from '../utils/episodeCount';
 
+const tmdbDetailCache = new Map<string, any>();
+
 interface CreateTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -15,6 +17,7 @@ interface CreateTaskModalProps {
 }
 
 const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSuccess, initialData, onShowToast }) => {
+  const isEditingTask = Boolean(initialData && Number.isFinite(Number(initialData.id)) && initialData.shareId && initialData.targetFolderId);
   const [formData, setFormData] = useState({
     shareLink: '',
     accessCode: '',
@@ -23,12 +26,14 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
     targetFolderName: '',
     realFolderId: '',
     realFolderName: '',
+    selectedFolders: [] as Array<string | number>,
     totalEpisodes: 0,
     tmdbSeasonNumber: null as number | null,
     tmdbSeasonName: '',
     tmdbSeasonEpisodes: null as number | null,
     type: 'normal',
     accountId: '',
+    enableTaskScraper: true,
     enableOrganizer: true
   });
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -36,6 +41,8 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
   const [fetchingEpisodes, setFetchingEpisodes] = useState(false);
   const [isFolderSelectorOpen, setIsFolderSelectorOpen] = useState(false);
   const [folderSelectorMode, setFolderSelectorMode] = useState<'target' | 'real'>('target');
+  const [shareFolders, setShareFolders] = useState<Array<{ id: string | number; name: string }>>([]);
+  const [loadingShareFolders, setLoadingShareFolders] = useState(false);
   const seasonLabel = formData.tmdbSeasonNumber
     ? `S${String(formData.tmdbSeasonNumber).padStart(2, '0')}`
     : '';
@@ -88,9 +95,17 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
       const fallbackType = preferredType === 'tv' ? 'movie' : 'tv';
 
       const fetchDetail = async (type: 'tv' | 'movie') => {
+        const cacheKey = `${type}:${tmdbId}`;
+        if (tmdbDetailCache.has(cacheKey)) {
+          return tmdbDetailCache.get(cacheKey);
+        }
         const res = await fetch(`/api/tmdb/${type}/${tmdbId}`);
         const data = await res.json();
-        return data.success ? data.data : null;
+        const detail = data.success ? data.data : null;
+        if (detail) {
+          tmdbDetailCache.set(cacheKey, detail);
+        }
+        return detail;
       };
 
       const detail = await fetchDetail(preferredType) || await fetchDetail(fallbackType);
@@ -104,6 +119,7 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
   useEffect(() => {
     const init = async () => {
       await fetchAccounts();
+      setShareFolders([]);
       if (initialData) {
         const { rawResourceName, resourceName } = await resolveTaskDisplayTitle(initialData);
         const shareLink = initialData.shareLink || initialData.url || initialData.cloudLinks?.[0]?.link || '';
@@ -112,15 +128,16 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
           || extractEpisodeCountFromTitle(initialData.taskName)
           || extractEpisodeCountFromTitle(initialData.title)
           || extractEpisodeCountFromTitle(rawResourceName);
-        setFormData(prev => ({ 
-          ...prev, 
-          ...initialData,
-          shareLink,
-          accessCode: initialData.accessCode || '',
-          resourceName,
-          totalEpisodes: inferredTotalEpisodes,
-          accountId: initialData.account?.id || initialData.accountId || ''
-        }));
+          setFormData(prev => ({
+            ...prev,
+            ...initialData,
+            shareLink,
+            accessCode: initialData.accessCode || '',
+            resourceName,
+            selectedFolders: initialData.selectedFolders || prev.selectedFolders,
+            totalEpisodes: inferredTotalEpisodes,
+            accountId: initialData.account?.id || initialData.accountId || ''
+          }));
       } else {
         // 获取系统默认配置
         try {
@@ -138,12 +155,14 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
             targetFolderName: defaultTargetName,
             realFolderId: '',
             realFolderName: '',
+            selectedFolders: [],
             totalEpisodes: 0,
             tmdbSeasonNumber: null,
             tmdbSeasonName: '',
             tmdbSeasonEpisodes: null,
             type: 'normal',
             accountId: defaultAccId,
+            enableTaskScraper: true,
             enableOrganizer: true
           });
         } catch(e) {
@@ -169,68 +188,143 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
     }
     setFetchingEpisodes(true);
     try {
-      const res = await fetch(`/api/auto-series/search?title=${encodeURIComponent(formData.resourceName)}`);
-      const data = await res.json();
-      if (data.success) {
-          const payload = data.data;
-          const bestMatch = Array.isArray(payload) ? payload[0] : payload?.tmdbInfo;
-          const directTotalEpisodes = Number(
-            bestMatch?.totalEpisodes
-            || bestMatch?.number_of_episodes
-            || bestMatch?.lastEpisodeToAir?.episode_number
-            || 0
-          );
-          if (directTotalEpisodes > 0) {
-            setFormData(prev => ({
-              ...prev,
-              totalEpisodes: directTotalEpisodes,
-              tmdbSeasonNumber: bestMatch?.seasonNumber || prev.tmdbSeasonNumber,
-              tmdbSeasonName: bestMatch?.seasonName || prev.tmdbSeasonName,
-              tmdbSeasonEpisodes: bestMatch?.seasonEpisodes || prev.tmdbSeasonEpisodes
-            }));
-            onShowToast?.(`已获取 TMDB 最新集数: ${directTotalEpisodes}`, 'success');
-            return;
-          }
-
-          const tmdbId = bestMatch?.tmdbId || bestMatch?.id;
+      if (formData.shareLink) {
+        const searchRes = await fetch(`/api/tmdb/search?title=${encodeURIComponent(formData.resourceName)}`);
+        const searchData = await searchRes.json();
+        if (searchData.success) {
+          const bestMatch = searchData.data?.tvShows?.[0] || searchData.data?.movies?.[0];
+          const tmdbId = bestMatch?.id;
+          const type = bestMatch?.media_type === 'movie' ? 'movie' : 'tv';
           if (tmdbId) {
-             const detailRes = await fetch(`/api/tmdb/tv/${tmdbId}`);
-             const detail = await detailRes.json();
-             const totalEpisodes = Number(
-              detail.data?.totalEpisodes
-              || detail.data?.number_of_episodes
-              || detail.data?.lastEpisodeToAir?.episode_number
+            const cacheKey = `${type}:${tmdbId}`;
+            let detail = tmdbDetailCache.get(cacheKey);
+            if (!detail) {
+              const detailRes = await fetch(`/api/tmdb/${type}/${tmdbId}`);
+              const detailData = await detailRes.json();
+              detail = detailData.data;
+              if (detailData.success && detail) {
+                tmdbDetailCache.set(cacheKey, detail);
+              }
+            }
+            const totalEpisodes = Number(
+              detail?.totalEpisodes
+              || detail?.number_of_episodes
+              || detail?.lastEpisodeToAir?.episode_number
               || 0
-             );
-             if (detail.success && totalEpisodes > 0) {
-                 setFormData(prev => ({ ...prev, totalEpisodes }));
-                 onShowToast?.(`已获取 TMDB 最新集数: ${totalEpisodes}`, 'success');
-                 return;
-             }
+            );
+            if (totalEpisodes > 0) {
+              setFormData(prev => ({
+                ...prev,
+                totalEpisodes,
+                tmdbId: String(tmdbId),
+                tmdbSeasonNumber: detail?.seasonNumber || prev.tmdbSeasonNumber,
+                tmdbSeasonName: detail?.seasonName || prev.tmdbSeasonName,
+                tmdbSeasonEpisodes: detail?.seasonEpisodes || prev.tmdbSeasonEpisodes
+              }));
+              onShowToast?.(`已获取 TMDB 最新集数: ${totalEpisodes}`, 'success');
+              return;
+            }
           }
-          onShowToast?.('未能获取到集数信息', 'error');
+        }
+        onShowToast?.('未能获取到 TMDB 集数信息', 'error');
       } else {
-        onShowToast?.('未找到匹配的剧集信息', 'error');
+        const res = await fetch(`/api/auto-series/search?title=${encodeURIComponent(formData.resourceName)}`);
+        const data = await res.json();
+        if (data.success) {
+            const payload = data.data;
+            const bestMatch = Array.isArray(payload) ? payload[0] : payload?.tmdbInfo;
+            const directTotalEpisodes = Number(
+              bestMatch?.totalEpisodes
+              || bestMatch?.number_of_episodes
+              || bestMatch?.lastEpisodeToAir?.episode_number
+              || 0
+            );
+            if (directTotalEpisodes > 0) {
+              setFormData(prev => ({
+                ...prev,
+                totalEpisodes: directTotalEpisodes,
+                tmdbSeasonNumber: bestMatch?.seasonNumber || prev.tmdbSeasonNumber,
+                tmdbSeasonName: bestMatch?.seasonName || prev.tmdbSeasonName,
+                tmdbSeasonEpisodes: bestMatch?.seasonEpisodes || prev.tmdbSeasonEpisodes
+              }));
+              onShowToast?.(`已获取 TMDB 最新集数: ${directTotalEpisodes}`, 'success');
+              return;
+            }
+            onShowToast?.('未能获取到集数信息', 'error');
+        } else {
+          onShowToast?.('未找到匹配的剧集信息', 'error');
+        }
       }
     } catch (e) { onShowToast?.('获取集数失败', 'error'); }
     finally { setFetchingEpisodes(false); }
+  };
+
+  const handleParseShareFolders = async () => {
+    if (!formData.shareLink || !formData.accountId) {
+      onShowToast?.('请先填写分享链接并选择账号', 'info');
+      return;
+    }
+    setLoadingShareFolders(true);
+    try {
+      const res = await fetch('/api/share/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shareLink: formData.shareLink,
+          accountId: formData.accountId,
+          accessCode: formData.accessCode
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        const folders = data.data || [];
+        setShareFolders(folders);
+        const rootFolder = folders[0];
+        if (folders.length <= 1 && rootFolder) {
+          setFormData(prev => ({
+            ...prev,
+            realFolderId: String(rootFolder.id),
+            realFolderName: String(rootFolder.name || ''),
+            selectedFolders: [String(rootFolder.id)]
+          }));
+          onShowToast?.('该分享没有可选子目录，已默认选择根目录', 'info');
+        } else {
+          setFormData(prev => ({
+            ...prev,
+            realFolderId: '',
+            realFolderName: '',
+            selectedFolders: []
+          }));
+          onShowToast?.(`已解析 ${folders.length} 个分享目录，请继续选择`, 'success');
+        }
+      } else {
+        onShowToast?.('解析分享目录失败: ' + data.error, 'error');
+      }
+    } catch (e) {
+      onShowToast?.('解析分享目录失败', 'error');
+    } finally {
+      setLoadingShareFolders(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const method = initialData ? 'PUT' : 'POST';
-      const url = initialData ? `/api/tasks/${initialData.id}` : '/api/tasks';
+      const method = isEditingTask ? 'PUT' : 'POST';
+      const url = isEditingTask ? `/api/tasks/${initialData.id}` : '/api/tasks';
       
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({
+          ...formData,
+          executeNow: !isEditingTask
+        })
       });
       const data = await res.json();
       if (data.success) { 
-        onShowToast?.(initialData ? '任务已更新' : '任务已创建', 'success');
+        onShowToast?.(isEditingTask ? '任务已更新' : '任务已创建', 'success');
         onSuccess(); 
         onClose(); 
       } else {
@@ -242,7 +336,7 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
 
   return (
     <>
-      <Modal isOpen={isOpen} onClose={onClose} title={initialData ? "修改转存任务" : "创建全新转存任务"}>
+      <Modal isOpen={isOpen} onClose={onClose} title={isEditingTask ? "修改转存任务" : "创建全新转存任务"}>
         <form id="modal-form" onSubmit={handleSubmit} className="space-y-6 py-2">
           
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -268,6 +362,28 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
                 />
               </div>
             </div>
+          </div>
+
+          <div className="workbench-form-item">
+            <label className="workbench-label">分享目录选择</label>
+            <div className="flex gap-2">
+              <button type="button" onClick={handleParseShareFolders} disabled={loadingShareFolders || !formData.shareLink || !formData.accountId} className="workbench-toolbar-button px-5 disabled:opacity-30">
+                {loadingShareFolders ? '解析中...' : '读取分享目录'}
+              </button>
+              <select value={String(formData.selectedFolders?.[0] || '')} onChange={e => {
+                const selected = shareFolders.find(folder => String(folder.id) === e.target.value);
+                setFormData({
+                  ...formData,
+                  realFolderId: selected ? String(selected.id) : '',
+                  realFolderName: selected?.name || '',
+                  selectedFolders: e.target.value ? [e.target.value] : []
+                });
+              }} className="workbench-select flex-1 font-bold" disabled={shareFolders.length === 0 || (shareFolders.length === 1 && String(shareFolders[0]?.id) === String(formData.selectedFolders?.[0] || ''))}>
+                <option value="">{shareFolders.length <= 1 ? '当前分享无子目录可选' : '选择分享内目录...'}</option>
+                {shareFolders.map(folder => <option key={String(folder.id)} value={String(folder.id)}>{folder.name}</option>)}
+              </select>
+            </div>
+            <p className="text-[9px] font-bold text-slate-400 mt-1">可先解析分享目录，再指定从根目录或某个子目录创建任务。若仅解析出 1 项，表示该分享只有根目录。</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

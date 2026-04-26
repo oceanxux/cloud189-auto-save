@@ -45,17 +45,18 @@ class ConfigService {
         enable: false,
         webhook: ''
       },
-      telegram: {
-        enable: false,
-        proxyDomain: '',
-        botToken: '',
-        chatId: '',
-        bot: {
+        telegram: {
           enable: false,
+          proxyDomain: '',
           botToken: '',
-          chatId: ''
-        }
-      },
+          chatId: '',
+          bot: {
+            enable: false,
+            botToken: '',
+            chatId: '',
+            silentMode: false
+          }
+        },
       wxpusher: {
         enable: false,
         spt: ''

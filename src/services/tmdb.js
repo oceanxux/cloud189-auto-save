@@ -3,12 +3,90 @@ const ConfigService = require('./ConfigService');
 const ProxyUtil = require('../utils/ProxyUtil');
 const { logTaskEvent } = require('../utils/logUtils');
 const { parseMediaTitle } = require('../utils/mediaTitleParser');
+const { AppDataSource } = require('../database');
+const { TmdbCache } = require('../entities');
 
 class TMDBService {
     constructor() {
         this.apiKey = ConfigService.getConfigValue('tmdb.tmdbApiKey') || ConfigService.getConfigValue('tmdb.apiKey');
         this.baseURL = 'https://api.themoviedb.org/3';
         this.language = 'zh-CN';
+        this.cacheRepo = AppDataSource.isInitialized ? AppDataSource.getRepository(TmdbCache) : null;
+    }
+
+    _getCacheRepo() {
+        if (this.cacheRepo) {
+            return this.cacheRepo;
+        }
+        if (AppDataSource.isInitialized) {
+            this.cacheRepo = AppDataSource.getRepository(TmdbCache);
+            return this.cacheRepo;
+        }
+        return null;
+    }
+
+    async _readCache(cacheKey) {
+        const repo = this._getCacheRepo();
+        if (!repo) return null;
+        const record = await repo.findOneBy({ cacheKey });
+        if (!record) return null;
+        if (record.expiresAt && new Date(record.expiresAt).getTime() < Date.now()) {
+            await repo.delete({ id: record.id });
+            return null;
+        }
+        try {
+            return JSON.parse(record.content);
+        } catch {
+            return null;
+        }
+    }
+
+    async _writeCache(cacheKey, category, data, ttlSeconds = 21600) {
+        const repo = this._getCacheRepo();
+        if (!repo) return;
+        const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+        const existing = await repo.findOneBy({ cacheKey });
+        if (existing) {
+            existing.category = category;
+            existing.content = JSON.stringify(data);
+            existing.expiresAt = expiresAt;
+            await repo.save(existing);
+            return;
+        }
+        await repo.save(repo.create({
+            cacheKey,
+            category,
+            content: JSON.stringify(data),
+            expiresAt
+        }));
+    }
+
+    async _withCache(cacheKey, category, fetcher, ttlSeconds = 21600) {
+        const cached = await this._readCache(cacheKey);
+        if (cached != null) {
+            logTaskEvent(`TMDB缓存命中: ${cacheKey}`, 'info', 'tmdb');
+            return cached;
+        }
+        logTaskEvent(`TMDB缓存未命中，回源请求: ${cacheKey}`, 'info', 'tmdb');
+        const fresh = await fetcher();
+        await this._writeCache(cacheKey, category, fresh, ttlSeconds);
+        return fresh;
+    }
+
+    async getCacheSummary() {
+        const repo = this._getCacheRepo();
+        if (!repo) {
+            return { total: 0, categories: [] };
+        }
+        const records = await repo.find();
+        const categoryMap = new Map();
+        for (const record of records) {
+            categoryMap.set(record.category, (categoryMap.get(record.category) || 0) + 1);
+        }
+        return {
+            total: records.length,
+            categories: Array.from(categoryMap.entries()).map(([category, count]) => ({ category, count }))
+        };
     }
 
     _logSearch(message) {
@@ -133,25 +211,30 @@ class TMDBService {
     
     async search(title, year = '') {
         try {
-            const response = await this._request('/search/multi', { query: title, year: year });
-            const movies = response.results.filter(item => item.media_type === 'movie').map(item => ({ 
-                id: item.id, 
-                title: item.title, 
-                release_date: item.release_date, 
-                poster_path: item.poster_path,
-                vote_average: item.vote_average,
-                overview: item.overview,
-                media_type: 'movie' 
-            }));
-            const tvShows = response.results.filter(item => item.media_type === 'tv').map(item => ({ 
-                id: item.id, 
-                name: item.name, 
-                first_air_date: item.first_air_date, 
-                poster_path: item.poster_path,
-                vote_average: item.vote_average,
-                overview: item.overview,
-                media_type: 'tv' 
-            }));
+            const cacheKey = `tmdb:search:${String(title).trim().toLowerCase()}:${String(year || '').trim()}`;
+            const { movies, tvShows } = await this._withCache(cacheKey, 'search', async () => {
+                const response = await this._request('/search/multi', { query: title, year: year });
+                return {
+                    movies: response.results.filter(item => item.media_type === 'movie').map(item => ({ 
+                        id: item.id, 
+                        title: item.title, 
+                        release_date: item.release_date, 
+                        poster_path: item.poster_path,
+                        vote_average: item.vote_average,
+                        overview: item.overview,
+                        media_type: 'movie' 
+                    })),
+                    tvShows: response.results.filter(item => item.media_type === 'tv').map(item => ({ 
+                        id: item.id, 
+                        name: item.name, 
+                        first_air_date: item.first_air_date, 
+                        poster_path: item.poster_path,
+                        vote_average: item.vote_average,
+                        overview: item.overview,
+                        media_type: 'tv' 
+                    }))
+                };
+            }, 86400);
             console.log(`[TMDB] Search results for "${title}": found ${movies.length} movies, ${tvShows.length} TV shows`);
             return { movies: movies.slice(0, 5), tvShows: tvShows.slice(0, 5) };
         } catch (error) { throw new Error(`TMDB搜索失败: ${error.message}`); }
@@ -220,7 +303,9 @@ class TMDBService {
 
     async getTVDetails(id) {
         try {
-            const response = await this._request(`/tv/${id}`, { append_to_response: 'credits,images' });
+            const response = await this._withCache(`tmdb:tv:${id}`, 'tv_detail', async () => {
+                return await this._request(`/tv/${id}`, { append_to_response: 'credits,images' });
+            }, 86400 * 7);
             return {
                 id: response.id,
                 title: response.name,
@@ -240,7 +325,9 @@ class TMDBService {
 
     async getTVSeasonDetails(id, seasonNumber) {
         try {
-            const response = await this._request(`/tv/${id}/season/${seasonNumber}`);
+            const response = await this._withCache(`tmdb:tv:${id}:season:${seasonNumber}`, 'tv_season_detail', async () => {
+                return await this._request(`/tv/${id}/season/${seasonNumber}`);
+            }, 86400 * 7);
             return {
                 id: response.id,
                 title: response.name,
@@ -256,7 +343,9 @@ class TMDBService {
 
     async getMovieDetails(id) {
         try {
-            const response = await this._request(`/movie/${id}`, { append_to_response: 'credits,images' });
+            const response = await this._withCache(`tmdb:movie:${id}`, 'movie_detail', async () => {
+                return await this._request(`/movie/${id}`, { append_to_response: 'credits,images' });
+            }, 86400 * 7);
             return {
                 id: response.id,
                 title: response.title,
@@ -277,8 +366,10 @@ class TMDBService {
 
     async getTrending(mediaType = 'all', timeWindow = 'day') {
         try {
-            const response = await this._request(`/trending/${mediaType}/${timeWindow}`);
-            return response.results;
+            return await this._withCache(`tmdb:trending:${mediaType}:${timeWindow}`, 'trending', async () => {
+                const response = await this._request(`/trending/${mediaType}/${timeWindow}`);
+                return response.results;
+            }, 21600);
         } catch (error) {
             throw new Error(`获取 TMDB 趋势失败: ${error.message}`);
         }
@@ -286,8 +377,9 @@ class TMDBService {
 
     async getPopular(mediaType = 'movie', page = 1) {
         try {
-            const response = await this._request(`/${mediaType}/popular`, { page });
-            return response;
+            return await this._withCache(`tmdb:popular:${mediaType}:${page}`, 'popular', async () => {
+                return await this._request(`/${mediaType}/popular`, { page });
+            }, 21600);
         } catch (error) {
             throw new Error(`获取 TMDB 热门失败: ${error.message}`);
         }

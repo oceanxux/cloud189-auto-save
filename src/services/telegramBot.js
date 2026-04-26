@@ -1,6 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { AppDataSource } = require('../database');
-const { Task, Account, CommonFolder } = require('../entities');
+const { Task, Account, CommonFolder, Subscription, SubscriptionResource } = require('../entities');
 const { TaskService } = require('./task');
 const { EmbyService } = require('./emby');
 const { Cloud189Service } = require('./cloud189');
@@ -13,6 +13,7 @@ const { default: cloudSaverSDK } = require('../sdk/cloudsaver/sdk');
 const ProxyUtil = require('../utils/ProxyUtil');
 const cloud189Utils = require('../utils/Cloud189Utils');
 const { LazyShareStrmService } = require('./lazyShareStrm');
+const { SubscriptionService } = require('./subscription');
 
 class TelegramBotService {
     constructor(token, chatId, proxyDomain, workflowRunner = null) {
@@ -23,14 +24,20 @@ class TelegramBotService {
         this.accountRepo = AppDataSource.getRepository(Account);
         this.commonFolderRepo = AppDataSource.getRepository(CommonFolder);
         this.taskRepo = AppDataSource.getRepository(Task);
+        this.subscriptionRepo = AppDataSource.getRepository(Subscription);
+        this.subscriptionResourceRepo = AppDataSource.getRepository(SubscriptionResource);
         this.taskService = new TaskService(this.taskRepo, this.accountRepo);
         this.organizerService = new OrganizerService(this.taskService, this.taskRepo);
         this.lazyShareStrmService = new LazyShareStrmService(this.accountRepo, this.taskService);
         this.autoSeriesService = new AutoSeriesService(this.taskService, this.accountRepo, this.lazyShareStrmService);
+        this.subscriptionService = new SubscriptionService(this.subscriptionRepo, this.subscriptionResourceRepo, this.accountRepo);
         this.currentAccountId = null;
         this.currentAccount = null;
         this.currentShareLink = null;
         this.currentAccessCode = null;
+        this.subscriptionSelection = { subscriptionId: null, page: 1, items: [] };
+        this.subscriptionSearchResults = [];
+        this.isSubscriptionMode = false;
         this.lastButtonMessageId = null;  // 上次按钮消息
         this.currentFolderPath = '';  // 当前路径
         this.currentFolderId = '-11';  // 当前文件夹ID
@@ -105,6 +112,9 @@ class TelegramBotService {
             { command: 'lazy_series', description: '自动追剧(懒转存STRM)' },
             { command: 'accounts', description: '账号列表' },
             { command: 'tasks', description: '任务列表' },
+            { command: 'subs', description: '订阅资源列表' },
+            { command: 'subsearch', description: '搜索订阅资源' },
+            { command: 'silent', description: '切换静默模式' },
             { command: 'execute_all', description: '执行所有任务' },
             { command: 'organize', description: '执行任务整理' },
             { command: 'fl', description: '常用目录列表' },
@@ -121,6 +131,15 @@ class TelegramBotService {
         this.currentAccountId = account?.id;
         this.initCommands();
         return true;
+    }
+
+    async _safeDeleteMessage(chatId, messageId) {
+        if (!messageId) return;
+        try {
+            await this.bot.deleteMessage(chatId, messageId);
+        } catch (error) {
+            // Ignore delete failures for already removed/expired messages
+        }
     }
 
     async stop() {
@@ -160,6 +179,7 @@ class TelegramBotService {
                 '/tasks - 显示下载任务列表\n' +
                 '/fl - 显示常用目录列表\n' +
                 '/fs - 添加常用目录\n' +
+                '/silent on|off|status - 切换/查看 Bot 静默模式\n' +
                 '/search_cs - 搜索CloudSaver资源\n' +
                 '/series 剧名 [年份] - 自动追剧(正常任务)\n' +
                 '/lazy_series 剧名 [年份] - 自动追剧(懒转存STRM)\n' +
@@ -187,7 +207,10 @@ class TelegramBotService {
                 '1. 输入 /search_cs 进入搜索模式\n' +
                 '2. 直接输入关键字搜索资源\n' +
                 '3. 点击搜索结果中的链接可复制\n' +
-                '4. 输入 /cancel 退出搜索模式';
+                '4. 输入 /cancel 退出搜索模式\n\n' +
+                '📡 订阅资源：\n' +
+                '/subs - 查看订阅与分页资源\n' +
+                '/subsearch 关键词 - 在订阅资源里按名称搜索';
 
             await this.bot.sendMessage(msg.chat.id, helpText);
         });
@@ -252,6 +275,16 @@ class TelegramBotService {
                     }
                 }
                 this.cloudSaverSearch(chatId, msg)
+                return;
+            }
+
+            if (this.isSubscriptionMode) {
+                const input = String(msg.text || '').trim();
+                if (!input) {
+                    return;
+                }
+                await this.searchSubscriptionResources(chatId, input);
+                return;
             }
         });
 
@@ -286,6 +319,46 @@ class TelegramBotService {
             if (!this._checkChatId(chatId)) return
             if (!this._checkUserId(chatId)) return
             await this.showTasks(msg.chat.id);
+        });
+
+        this.bot.onText(/\/subs/, async (msg) => {
+            const chatId = msg.chat.id;
+            if (!this._checkChatId(chatId)) return
+            if (!this._checkUserId(chatId)) return
+            this.isSubscriptionMode = true;
+            await this.bot.sendMessage(chatId, '已进入订阅资源模式，可直接输入关键词搜索资源，或点击列表分页浏览。\n输入 /cancel 退出。');
+            await this.showSubscriptions(chatId);
+        });
+
+        this.bot.onText(/\/subsearch(?:\s+(.+))?$/, async (msg, match) => {
+            const chatId = msg.chat.id;
+            if (!this._checkChatId(chatId)) return
+            if (!this._checkUserId(chatId)) return
+            const keyword = String(match?.[1] || '').trim();
+            if (!keyword) {
+                await this.bot.sendMessage(chatId, '用法: /subsearch 关键词');
+                return;
+            }
+            await this.searchSubscriptionResources(chatId, keyword);
+        });
+
+        this.bot.onText(/\/silent(?:\s+(on|off|status))?$/, async (msg, match) => {
+            const chatId = msg.chat.id;
+            if (!this._checkChatId(chatId)) return
+            if (!this._checkUserId(chatId)) return
+            const action = String(match?.[1] || 'status').trim().toLowerCase();
+            if (!match?.[1]) {
+                await this.showSilentModePanel(chatId);
+                return;
+            }
+            if (action === 'status') {
+                const enabled = !!ConfigService.getConfigValue('telegram.bot.silentMode', false);
+                await this.bot.sendMessage(chatId, `Bot 静默模式当前为: ${enabled ? '开启' : '关闭'}`);
+                return;
+            }
+            const nextValue = action === 'on';
+            ConfigService.setConfigValue('telegram.bot.silentMode', nextValue);
+            await this.bot.sendMessage(chatId, `Bot 静默模式已${nextValue ? '开启' : '关闭'}`);
         });
 
         // 添加常用目录查询命令
@@ -508,6 +581,8 @@ class TelegramBotService {
             this.currentShareLink = null;
             this.currentAccessCode = null;
             this.isSearchMode = false;  // 退出搜索模式
+            this.isSubscriptionMode = false;
+            this.subscriptionSearchResults = [];
             this._resetRenameState();  // 退出重命名模式
             this.aiSessionEnabled = false;
             try {
@@ -559,6 +634,21 @@ class TelegramBotService {
                         break;
                     case 'tp': // 任务分页
                         await this.showTasks(chatId, data.p, messageId);
+                        break;
+                    case 'subp':
+                        await this.showSubscriptions(chatId, data.p, messageId);
+                        break;
+                    case 'subr':
+                        await this.showSubscriptionResources(chatId, data.i, data.p || 1, messageId);
+                        break;
+                    case 'subc':
+                        await this.createTaskFromSubscriptionResource(chatId, data.k, messageId);
+                        break;
+                    case 'subsc':
+                        await this.createTaskFromSubscriptionSearch(chatId, data.k, messageId);
+                        break;
+                    case 'silent':
+                        await this.toggleSilentMode(chatId, data.v, messageId);
                         break;
                     case 'dt': // 删除任务
                         if (!data.c) {
@@ -776,6 +866,158 @@ class TelegramBotService {
         }
     }
 
+    async showSubscriptions(chatId, page = 1, messageId = null) {
+        const pageSize = 8;
+        const skip = (page - 1) * pageSize;
+        const [subscriptions, total] = await this.subscriptionRepo.findAndCount({
+            order: { id: 'DESC' },
+            take: pageSize,
+            skip
+        });
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const keyboard = subscriptions.map(subscription => [{
+            text: `📡 ${subscription.name}`,
+            callback_data: JSON.stringify({ t: 'subr', i: subscription.id, p: 1 })
+        }]);
+
+        if (totalPages > 1) {
+            const pageButtons = [];
+            if (page > 1) {
+                pageButtons.push({ text: '⬅️', callback_data: JSON.stringify({ t: 'subp', p: page - 1 }) });
+            }
+            pageButtons.push({ text: `${page}/${totalPages}`, callback_data: JSON.stringify({ t: 'subp', p: page }) });
+            if (page < totalPages) {
+                pageButtons.push({ text: '➡️', callback_data: JSON.stringify({ t: 'subp', p: page + 1 }) });
+            }
+            keyboard.push(pageButtons);
+        }
+
+        const message = subscriptions.length > 0
+            ? `订阅列表 (第${page}页)\n\n${subscriptions.map(item => `• ${item.name}`).join('\n')}`
+            : '📭 暂无订阅';
+
+        if (messageId) {
+            await this.bot.editMessageText(message, {
+                chat_id: chatId,
+                message_id: messageId,
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        } else {
+            await this.bot.sendMessage(chatId, message, {
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        }
+    }
+
+    async showSubscriptionResources(chatId, subscriptionId, page = 1, messageId = null) {
+        const result = await this.subscriptionService.listRemoteResources(Number(subscriptionId), { pageNum: page, pageSize: 8 });
+        this.subscriptionSelection = {
+            subscriptionId: Number(subscriptionId),
+            page: Number(result.pageNum || page),
+            items: Array.isArray(result.items) ? result.items : []
+        };
+
+        const keyboard = this.subscriptionSelection.items.map((item, index) => [{
+            text: `🎞 ${item.title}`,
+            callback_data: JSON.stringify({ t: 'subc', k: index })
+        }]);
+
+        const pageButtons = [];
+        if (page > 1) {
+            pageButtons.push({ text: '⬅️', callback_data: JSON.stringify({ t: 'subr', i: subscriptionId, p: page - 1 }) });
+        }
+        pageButtons.push({ text: `${page}`, callback_data: JSON.stringify({ t: 'subr', i: subscriptionId, p: page }) });
+        if (page * 8 < Number(result.total || 0)) {
+            pageButtons.push({ text: '➡️', callback_data: JSON.stringify({ t: 'subr', i: subscriptionId, p: page + 1 }) });
+        }
+        keyboard.push(pageButtons);
+        keyboard.push([{ text: '📚 返回订阅列表', callback_data: JSON.stringify({ t: 'subp', p: 1 }) }]);
+
+        const message = this.subscriptionSelection.items.length > 0
+            ? `订阅资源 (第${page}页 / 共${result.total || 0}条)\n\n${this.subscriptionSelection.items.map((item, index) => `${index + 1}. ${item.title}`).join('\n')}`
+            : '当前页暂无资源';
+
+        if (messageId) {
+            await this.bot.editMessageText(message, {
+                chat_id: chatId,
+                message_id: messageId,
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        } else {
+            await this.bot.sendMessage(chatId, message, {
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        }
+    }
+
+    async createTaskFromSubscriptionResource(chatId, itemIndex, messageId) {
+        const item = this.subscriptionSelection.items[Number(itemIndex)];
+        if (!item) {
+            await this.bot.editMessageText('资源已失效，请重新打开订阅列表', {
+                chat_id: chatId,
+                message_id: messageId
+            });
+            return;
+        }
+        await this.handleFolderSelection(chatId, item.shareLink, messageId, item.accessCode || '');
+    }
+
+    async searchSubscriptionResources(chatId, keyword) {
+        const results = await this.subscriptionService.searchRemoteResources(keyword, { limit: 10 });
+        this.subscriptionSearchResults = results;
+        if (!results.length) {
+            await this.bot.sendMessage(chatId, `未找到匹配订阅资源: ${keyword}`);
+            return;
+        }
+        const keyboard = results.map((item, index) => [{
+            text: `🎞 ${item.title}`,
+            callback_data: JSON.stringify({ t: 'subsc', k: index })
+        }]);
+        const message = `订阅资源搜索结果: ${keyword}\n\n${results.map((item, index) => `${index + 1}. [${item.subscriptionName}] ${item.title}`).join('\n')}`;
+        await this.bot.sendMessage(chatId, message, {
+            reply_markup: { inline_keyboard: keyboard }
+        });
+    }
+
+    async createTaskFromSubscriptionSearch(chatId, itemIndex, messageId) {
+        const item = this.subscriptionSearchResults[Number(itemIndex)];
+        if (!item) {
+            await this.bot.editMessageText('搜索结果已失效，请重新执行 /subsearch', {
+                chat_id: chatId,
+                message_id: messageId
+            });
+            return;
+        }
+        await this.handleFolderSelection(chatId, item.shareLink, messageId, item.accessCode || '');
+    }
+
+    async showSilentModePanel(chatId, messageId = null) {
+        const enabled = !!ConfigService.getConfigValue('telegram.bot.silentMode', false);
+        const message = `Bot 静默模式当前为: ${enabled ? '开启' : '关闭'}\n\n开启后，Bot 处理资源时将直接使用系统默认保存目录，不再每次询问。`;
+        const keyboard = [[
+            { text: enabled ? '✅ 已开启' : '开启', callback_data: JSON.stringify({ t: 'silent', v: true }) },
+            { text: !enabled ? '✅ 已关闭' : '关闭', callback_data: JSON.stringify({ t: 'silent', v: false }) }
+        ]];
+        if (messageId) {
+            await this.bot.editMessageText(message, {
+                chat_id: chatId,
+                message_id: messageId,
+                reply_markup: { inline_keyboard: keyboard }
+            });
+            return;
+        }
+        await this.bot.sendMessage(chatId, message, {
+            reply_markup: { inline_keyboard: keyboard }
+        });
+    }
+
+    async toggleSilentMode(chatId, enabled, messageId) {
+        const nextValue = !!enabled;
+        ConfigService.setConfigValue('telegram.bot.silentMode', nextValue);
+        await this._safeDeleteMessage(chatId, messageId);
+        await this.bot.sendMessage(chatId, `Bot 静默模式已${nextValue ? '开启' : '关闭'}`);
+    }
+
     async showOrganizerTasks(chatId) {
         const tasks = await this.taskRepo.find({
             where: {
@@ -837,6 +1079,8 @@ class TelegramBotService {
 
     async handleFolderSelection(chatId, shareLink, messageId = null, accessCode) {
         const folders = await this.commonFolderRepo.find({ where: { accountId: this.currentAccountId } });
+        const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
+        const botSilentMode = !!ConfigService.getConfigValue('telegram.bot.silentMode', false);
 
         if (folders.length === 0) {
             const keyboard = [[{
@@ -866,6 +1110,22 @@ class TelegramBotService {
             taskName = shareFolders[0].name;
         } catch (e) {
             await this.bot.sendMessage(chatId, `解析分享链接失败: ${e.message}`);
+            return;
+        }
+
+        if (botSilentMode) {
+            const defaultTargetFolderId = String(autoCreateConfig.targetFolderId || '').trim();
+            if (!defaultTargetFolderId) {
+                await this.bot.sendMessage(chatId, '已开启 Bot 静默模式，但系统未配置默认保存目录 task.autoCreate.targetFolderId');
+                return;
+            }
+            const targetFolder = await this.commonFolderRepo.findOne({ where: { id: Number(defaultTargetFolderId) } });
+            if (!targetFolder) {
+                await this.bot.sendMessage(chatId, '已开启 Bot 静默模式，但默认保存目录不在当前账号常用目录中');
+                return;
+            }
+            const pseudoMessageId = messageId || (await this.bot.sendMessage(chatId, `静默模式已启用，资源名称: ${taskName}\n将直接保存到: ${targetFolder.path}`)).message_id;
+            await this.createTask(chatId, { f: targetFolder.id }, pseudoMessageId);
             return;
         }
 
@@ -936,9 +1196,9 @@ class TelegramBotService {
             if (taskIds.length > 0) {
                 await this.taskService.processAllTasks(true, taskIds)
             }
-            this.bot.deleteMessage(chatId, message.message_id);
+            await this._safeDeleteMessage(chatId, message.message_id);
             // 发送任务执行完成消息
-            this.bot.sendMessage(chatId, '任务执行完成');
+            await this.bot.sendMessage(chatId, '任务执行完成');
             // 清空缓存
             this.currentShareLink = null;
             this.currentAccessCode = null;
@@ -987,10 +1247,8 @@ class TelegramBotService {
             });
 
             await this.taskService.deleteTask(parseInt(data.i), data.df);
-            await this.bot.editMessageText('任务删除成功', {
-                chat_id: chatId,
-                message_id: messageId
-            });
+            await this._safeDeleteMessage(chatId, messageId);
+            await this.bot.sendMessage(chatId, '任务删除成功');
             // 刷新任务列表
             setTimeout(() => this.showTasks(chatId, 1), 800);
         } catch (e) {

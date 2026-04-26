@@ -5,6 +5,9 @@ import Modal from '../Modal';
 import { ToastType } from '../Toast';
 import { useClickOutside } from '../../utils/useClickOutside';
 
+const TASK_REMARK_CACHE_KEY = 'task-tmdb-remarks';
+const TMDB_REMARK_DETAIL_CACHE_KEY = 'task-tmdb-detail-cache';
+
 interface Account { id: number; username: string; accountType?: 'personal' | 'family'; driveLabel?: string; }
 interface Task { id: number; resourceName: string; status: string; currentEpisodes: number; totalEpisodes: number; lastFileUpdateTime: string; account: Account; enableLazyStrm: boolean; lastOrganizeError?: string; realFolderName?: string; tmdbSeasonNumber?: number | null; tmdbSeasonName?: string | null; tmdbSeasonEpisodes?: number | null; tmdbId?: string | null; remark?: string | null; tmdbContent?: string | null; }
 interface ProcessedRecord { id: number; sourceFileName: string; sourceMd5?: string; status: string; updatedAt: string; lastError?: string | null; }
@@ -14,6 +17,26 @@ interface TaskTabProps {
   onShowToast?: (message: string, type: ToastType) => void;
   onShowConfirm?: (title: string, message: string, onConfirm: () => void, type?: 'danger' | 'warning' | 'info') => void;
 }
+
+const loadSessionMap = (key: string) => {
+  if (typeof window === 'undefined') return {} as Record<string, any>;
+  try {
+    return JSON.parse(window.sessionStorage.getItem(key) || '{}');
+  } catch {
+    return {} as Record<string, any>;
+  }
+};
+
+const saveSessionMap = (key: string, value: Record<string, any>) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore session storage quota/availability errors
+  }
+};
+
+const tmdbRemarkCache = new Map<string, any>(Object.entries(loadSessionMap(TMDB_REMARK_DETAIL_CACHE_KEY)));
 
 const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConfirm }) => {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -32,7 +55,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
   const [processedRecords, setProcessedRecords] = useState<ProcessedRecord[]>([]);
   const [processedLoading, setProcessedLoading] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<number[]>([]);
-  const [resolvedRemarkMap, setResolvedRemarkMap] = useState<Record<number, string>>({});
+  const [resolvedRemarkMap, setResolvedRemarkMap] = useState<Record<number, string>>(() => loadSessionMap(TASK_REMARK_CACHE_KEY));
 
   const taskStatusOptions = [
     { value: 'processing', label: '追剧中' },
@@ -156,9 +179,10 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
   };
 
   const resolveTaskRemarksFromTmdb = useCallback(async (taskList: Task[]) => {
+    const currentResolved = resolvedRemarkMap;
     const targets = taskList.filter(task => {
       const localRemark = getTaskRemarkTag(task);
-      return !localRemark && task.tmdbId && !resolvedRemarkMap[task.id];
+      return !localRemark && task.tmdbId && !currentResolved[task.id];
     });
 
     if (targets.length === 0) return;
@@ -171,9 +195,18 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
       const fallbackType = preferredType === 'tv' ? 'movie' : 'tv';
 
       const fetchDetail = async (type: 'tv' | 'movie') => {
+        const cacheKey = `${type}:${tmdbId}`;
+        if (tmdbRemarkCache.has(cacheKey)) {
+          return tmdbRemarkCache.get(cacheKey);
+        }
         const res = await fetch(`/api/tmdb/${type}/${tmdbId}`);
         const data = await res.json();
-        return data.success ? data.data : null;
+        const detail = data.success ? data.data : null;
+        if (detail) {
+          tmdbRemarkCache.set(cacheKey, detail);
+          saveSessionMap(TMDB_REMARK_DETAIL_CACHE_KEY, Object.fromEntries(tmdbRemarkCache.entries()));
+        }
+        return detail;
       };
 
       try {
@@ -187,9 +220,13 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
 
     const nextEntries = Object.fromEntries(resolvedEntries.filter(Boolean) as Array<readonly [number, string]>);
     if (Object.keys(nextEntries).length > 0) {
-      setResolvedRemarkMap(prev => ({ ...prev, ...nextEntries }));
+      setResolvedRemarkMap(prev => {
+        const nextMap = { ...prev, ...nextEntries };
+        saveSessionMap(TASK_REMARK_CACHE_KEY, nextMap);
+        return nextMap;
+      });
     }
-  }, [resolvedRemarkMap]);
+  }, []);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);

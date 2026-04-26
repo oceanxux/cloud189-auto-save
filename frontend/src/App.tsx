@@ -276,7 +276,7 @@ function App() {
             {activeTab === 'tmdb' && <TMDBTab onShowToast={showToast} />}
             {activeTab === 'cas' && <CasTab onShowToast={showToast} onShowConfirm={showConfirm} />}
             {activeTab === 'organizer' && <OrganizerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
-            {activeTab === 'subscription' && <SubscriptionTab onTransfer={() => setIsCreateTaskOpen(true)} onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'subscription' && <SubscriptionTab onTransfer={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} onShowConfirm={showConfirm} />}
             {activeTab === 'strmConfig' && <StrmConfigTab onShowToast={showToast} onShowConfirm={showConfirm} />}
             {activeTab === 'media' && <MediaTab onShowToast={showToast} />}
             {activeTab === 'settings' && <SettingsTab onShowToast={showToast} />}
@@ -294,9 +294,9 @@ function App() {
       />
       <CreateTaskModal 
         isOpen={isCreateTaskOpen} 
-        onClose={() => setIsCreateTaskOpen(false)} 
+        onClose={() => { setIsCreateTaskOpen(false); setCreateTaskData(null); }} 
         initialData={createTaskData} 
-        onSuccess={() => { setIsCreateTaskOpen(false); setTaskRefreshKey(v => v + 1); }} 
+        onSuccess={() => { setIsCreateTaskOpen(false); setCreateTaskData(null); setTaskRefreshKey(v => v + 1); setActiveTab('task'); }} 
         onShowToast={showToast}
       />
       <LogConsole isOpen={isLogsOpen} onClose={() => setIsLogsOpen(false)} />

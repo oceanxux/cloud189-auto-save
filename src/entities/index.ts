@@ -583,4 +583,42 @@ export class SystemLog {
     createdAt!: Date;
 }
 
-export default { Account, Task, TaskProcessedFile, CommonFolder, Subscription, SubscriptionResource, StrmConfig, WorkflowRun, SystemLog };
+@Entity()
+@Index(['cacheKey'], { unique: true })
+export class TmdbCache {
+    @PrimaryGeneratedColumn()
+    id!: number;
+
+    @Column('text')
+    cacheKey!: string;
+
+    @Column('text')
+    category!: string;
+
+    @Column('text')
+    content!: string;
+
+    @Column('datetime', { nullable: true, transformer: {
+        from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+        to: (date: Date) => date
+    } })
+    expiresAt!: Date;
+
+    @CreateDateColumn({
+        transformer: {
+            from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+            to: (date: Date) => date
+        }
+    })
+    createdAt!: Date;
+
+    @UpdateDateColumn({
+        transformer: {
+            from: (date: Date) => date && new Date(date.getTime() + (8 * 60 * 60 * 1000)),
+            to: (date: Date) => date
+        }
+    })
+    updatedAt!: Date;
+}
+
+export default { Account, Task, TaskProcessedFile, CommonFolder, Subscription, SubscriptionResource, StrmConfig, WorkflowRun, SystemLog, TmdbCache };

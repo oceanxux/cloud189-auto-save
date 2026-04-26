@@ -30,6 +30,7 @@ const TMDBTab: React.FC<Props> = ({ onShowToast }) => {
   const [activeCategory, setActiveCategory] = useState<'movie' | 'tv'>('movie');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [processingId, setProcessingId] = useState<number | null>(null);
+  const [cacheSummary, setCacheSummary] = useState<{ total: number; categories: Array<{ category: string; count: number }> } | null>(null);
 
   useEffect(() => {
     if (!isSearched) fetchInitialData();
@@ -39,14 +40,17 @@ const TMDBTab: React.FC<Props> = ({ onShowToast }) => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const [trendingRes, popularRes] = await Promise.all([
+      const [trendingRes, popularRes, cacheRes] = await Promise.all([
         fetch(`/api/tmdb/trending?type=${activeCategory}&window=week`),
-        fetch(`/api/tmdb/popular?type=${activeCategory}`)
+        fetch(`/api/tmdb/popular?type=${activeCategory}`),
+        fetch('/api/tmdb/cache-summary')
       ]);
       const trendingData = await trendingRes.json();
       const popularData = await popularRes.json();
+      const cacheData = await cacheRes.json();
       if (trendingData.success) setTrending(trendingData.data);
       if (popularData.success) setPopular(popularData.data.results);
+      if (cacheData.success) setCacheSummary(cacheData.data);
     } catch (e: any) {
       console.error('Failed to fetch TMDB data', e);
       setErrorMsg('获取数据失败');
@@ -162,6 +166,7 @@ const TMDBTab: React.FC<Props> = ({ onShowToast }) => {
             <p className="workbench-kicker mb-2">资源广场</p>
             <h1 className="text-[var(--text-primary)]">TMDB 影视资源</h1>
             <p>浏览热门影视作品，一键开启自动追剧，系统将自动监控全网更新。</p>
+            {cacheSummary && <p className="mt-2 text-[10px] font-bold text-slate-400">本地缓存 {cacheSummary.total} 条 • {cacheSummary.categories.map(item => `${item.category}:${item.count}`).join(' / ')}</p>}
           </div>
           <div className="flex bg-[var(--bg-sidebar)] p-1 rounded-2xl border border-[var(--border-color)] self-center">
             <button onClick={() => setActiveCategory('movie')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${activeCategory === 'movie' ? 'bg-[var(--app-accent)] text-[var(--bg-main)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--nav-hover-bg)]'}`}><Film size={14} /> 电影</button>

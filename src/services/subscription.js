@@ -1,5 +1,6 @@
 const cloud189Utils = require('../utils/Cloud189Utils');
 const { Cloud189Service } = require('./cloud189');
+const { logTaskEvent } = require('../utils/logUtils');
 
 class SubscriptionService {
     constructor(subscriptionRepo, resourceRepo, accountRepo) {
@@ -44,7 +45,10 @@ class SubscriptionService {
             availableAccountCount: 0,
             totalAccountCount: 0
         });
-        return await this.subscriptionRepo.save(subscription);
+        const savedSubscription = await this.subscriptionRepo.save(subscription);
+        await logTaskEvent(`创建订阅成功: ${savedSubscription.name} (${savedSubscription.uuid})，开始同步远端资源`, 'info', 'subscription');
+        await this.syncSubscriptionResources(savedSubscription.id);
+        return await this.subscriptionRepo.findOneBy({ id: savedSubscription.id }) || savedSubscription;
     }
 
     async previewSubscriptionCreation(data) {
@@ -135,12 +139,108 @@ class SubscriptionService {
     }
 
     async listResources(subscriptionId) {
-        await this._ensureSubscription(subscriptionId);
-        const resources = await this.resourceRepo.find({
+        const subscription = await this._ensureSubscription(subscriptionId);
+        let resources = await this.resourceRepo.find({
             where: { subscriptionId },
             order: { id: 'DESC' }
         });
+        if (!resources.length) {
+            await logTaskEvent(`订阅[${subscription.name}]本地资源为空，尝试自动同步远端资源`, 'info', 'subscription');
+            await this._syncRemoteResources(subscription);
+            resources = await this.resourceRepo.find({
+                where: { subscriptionId },
+                order: { id: 'DESC' }
+            });
+        }
         return await this._decorateResources(resources);
+    }
+
+    async listRemoteResources(subscriptionId, options = {}) {
+        const subscription = await this._ensureSubscription(subscriptionId);
+        const account = await this._getAvailableAccount();
+        const cloud189 = Cloud189Service.getInstance(account);
+        const pageNum = Math.max(1, Number(options.pageNum || 1));
+        const pageSize = Math.min(100, Math.max(1, Number(options.pageSize || 30)));
+
+        const result = await cloud189.request('https://api.cloud.189.cn/open/share/getUpResourceShare.action', {
+            method: 'GET',
+            searchParams: {
+                iconOption: 5,
+                pageNum,
+                pageSize,
+                upUserId: subscription.uuid
+            }
+        });
+
+        if (!result || result.code !== 'success') {
+            const message = result?.message || result?.msg || result?.errorMsg || '获取订阅资源失败';
+            throw new Error(message);
+        }
+
+        const data = result.data || {};
+        const fileList = Array.isArray(data.fileList) ? data.fileList : [];
+        const mapped = fileList.map(item => ({
+            id: String(item.id || ''),
+            title: item.name || '',
+            shareLink: item.accessURL ? `https://cloud.189.cn/web/share?code=${encodeURIComponent(item.accessURL)}` : '',
+            detailLink: item.accessURL ? `https://content.21cn.com/h5/subscrip/index.html#/pages/details/index?uuid=${encodeURIComponent(subscription.uuid)}&shareCode=${encodeURIComponent(item.accessURL)}` : '',
+            subscriptionUuid: subscription.uuid,
+            shareCode: item.accessURL || '',
+            accessCode: '',
+            shareId: item.shareId ? String(item.shareId) : '',
+            shareMode: item.shareType ? String(item.shareType) : '',
+            shareFileId: item.id ? String(item.id) : '',
+            shareFileName: item.name || '',
+            isFolder: item.folder !== undefined ? !!item.folder : true,
+            heat: Number(item.heat || 0),
+            createDate: item.createDate || '',
+            accessURL: item.accessURL || ''
+        }));
+
+        return {
+            pageNum,
+            pageSize,
+            total: Number(data.count || mapped.length || 0),
+            items: mapped
+        };
+    }
+
+    async searchRemoteResources(keyword, options = {}) {
+        const query = String(keyword || '').trim().toLowerCase();
+        if (!query) {
+            return [];
+        }
+
+        const subscriptions = await this.subscriptionRepo.find({
+            where: { enabled: true },
+            order: { id: 'DESC' }
+        });
+
+        const limit = Math.max(1, Math.min(20, Number(options.limit || 10)));
+        const pageSize = Math.max(limit, 50);
+        const matched = [];
+
+        for (const subscription of subscriptions) {
+            const firstPage = await this.listRemoteResources(subscription.id, { pageNum: 1, pageSize });
+            const items = Array.isArray(firstPage.items) ? firstPage.items : [];
+            for (const item of items) {
+                const title = String(item.title || '').toLowerCase();
+                if (!title.includes(query)) {
+                    continue;
+                }
+                matched.push({
+                    ...item,
+                    subscriptionId: subscription.id,
+                    subscriptionName: subscription.name,
+                    subscriptionUuid: subscription.uuid
+                });
+                if (matched.length >= limit) {
+                    return matched;
+                }
+            }
+        }
+
+        return matched;
     }
 
     async createResource(subscriptionId, data) {
@@ -176,6 +276,41 @@ class SubscriptionService {
         return refreshedResource || savedResource;
     }
 
+    async updateResource(id, data) {
+        const resource = await this.resourceRepo.findOneBy({ id });
+        if (!resource) {
+            throw new Error('资源不存在');
+        }
+
+        if (data.title !== undefined) {
+            resource.title = data.title?.trim() || resource.title;
+        }
+
+        if (data.shareLink !== undefined || data.accessCode !== undefined) {
+            const account = await this._getAvailableAccount();
+            const shareData = await this._resolveShare(
+                data.shareLink ?? resource.shareLink,
+                data.accessCode ?? resource.accessCode,
+                account
+            );
+            resource.shareLink = shareData.shareLink;
+            resource.accessCode = shareData.accessCode || '';
+            resource.shareId = shareData.shareInfo.shareId;
+            resource.shareMode = shareData.shareInfo.shareMode;
+            resource.shareFileId = shareData.shareInfo.fileId;
+            resource.shareFileName = shareData.shareInfo.fileName;
+            resource.isFolder = !!shareData.shareInfo.isFolder;
+            if (!data.title?.trim()) {
+                resource.title = resource.title || shareData.shareInfo.fileName;
+            }
+        }
+
+        const savedResource = await this.resourceRepo.save(resource);
+        await this.refreshSubscription(resource.subscriptionId);
+        const refreshedResource = await this.resourceRepo.findOneBy({ id: savedResource.id });
+        return refreshedResource || savedResource;
+    }
+
     async deleteResource(id) {
         const resource = await this.resourceRepo.findOneBy({ id });
         if (!resource) {
@@ -188,6 +323,8 @@ class SubscriptionService {
 
     async refreshSubscription(subscriptionId) {
         const subscription = await this._ensureSubscription(subscriptionId);
+        await logTaskEvent(`开始刷新订阅[${subscription.name}]，UUID=${subscription.uuid}`, 'info', 'subscription');
+        await this._syncRemoteResources(subscription);
         const resources = await this.resourceRepo.find({
             where: { subscriptionId },
             order: { id: 'DESC' }
@@ -225,6 +362,7 @@ class SubscriptionService {
             subscription.lastRefreshMessage = `全部 ${validResourceCount} 个资源校验成功`;
         }
         await this.subscriptionRepo.save(subscription);
+        await logTaskEvent(`订阅[${subscription.name}]校验完成: 可用 ${validResourceCount}，异常 ${invalidResourceCount}，账号覆盖 ${allAvailableAccountIds.size}/${accounts.length}`, invalidResourceCount > 0 ? 'warn' : 'info', 'subscription');
         return {
             subscriptionId,
             validResourceCount,
@@ -233,6 +371,11 @@ class SubscriptionService {
             totalAccountCount: accounts.length,
             failedResources
         };
+    }
+
+    async syncSubscriptionResources(subscriptionId) {
+        const subscription = await this._ensureSubscription(subscriptionId);
+        return await this._syncRemoteResources(subscription);
     }
 
     async browseResource(resourceId, folderId, keyword = '') {
@@ -303,6 +446,100 @@ class SubscriptionService {
         return subscription;
     }
 
+    async _syncRemoteResources(subscription) {
+        const account = await this._getAvailableAccount();
+        const cloud189 = Cloud189Service.getInstance(account);
+        const pageSize = 100;
+        const remoteResources = [];
+        let pageNum = 1;
+        let totalCount = 0;
+
+        await logTaskEvent(`开始同步订阅资源: ${subscription.name} (${subscription.uuid})，使用账号 ${account.alias?.trim() || account.username}`, 'info', 'subscription');
+
+        do {
+            const result = await cloud189.request('https://api.cloud.189.cn/open/share/getUpResourceShare.action', {
+                method: 'GET',
+                searchParams: {
+                    iconOption: 5,
+                    pageNum,
+                    pageSize,
+                    upUserId: subscription.uuid
+                }
+            });
+
+            if (!result || result.code !== 'success') {
+                const message = result?.message || result?.msg || result?.errorMsg || '获取订阅资源失败';
+                await logTaskEvent(`订阅资源同步失败: ${subscription.name} (${subscription.uuid}) 第 ${pageNum} 页拉取失败: ${message}`, 'error', 'subscription');
+                throw new Error(message);
+            }
+
+            const data = result.data || {};
+            const fileList = Array.isArray(data.fileList) ? data.fileList : [];
+            totalCount = Number(data.count || fileList.length || 0);
+            remoteResources.push(...fileList);
+            await logTaskEvent(`订阅资源分页拉取成功: ${subscription.name} 第 ${pageNum} 页 ${fileList.length} 条，累计 ${remoteResources.length}/${totalCount || remoteResources.length}`, 'info', 'subscription');
+            if (!fileList.length) {
+                break;
+            }
+            pageNum += 1;
+        } while (remoteResources.length < totalCount);
+
+        const existingResources = await this.resourceRepo.find({
+            where: { subscriptionId: subscription.id }
+        });
+        const existingMap = new Map(existingResources.map(resource => [resource.shareLink, resource]));
+
+        let importedCount = 0;
+        for (const item of remoteResources) {
+            const shareCode = String(item?.accessURL || '').trim();
+            if (!shareCode) {
+                continue;
+            }
+            const shareLink = `https://cloud.189.cn/web/share?code=${encodeURIComponent(shareCode)}`;
+            const current = existingMap.get(shareLink);
+            if (current) {
+                current.title = item.name?.trim() || current.title;
+                current.shareId = item.shareId ? String(item.shareId) : current.shareId;
+                current.shareMode = item.shareType ? String(item.shareType) : current.shareMode;
+                current.shareFileId = item.id ? String(item.id) : current.shareFileId;
+                current.shareFileName = item.name?.trim() || current.shareFileName;
+                current.isFolder = item.folder !== undefined ? !!item.folder : current.isFolder;
+                await this.resourceRepo.save(current);
+                continue;
+            }
+
+            const resource = this.resourceRepo.create({
+                subscriptionId: subscription.id,
+                title: item.name?.trim() || `资源-${shareCode}`,
+                shareLink,
+                accessCode: '',
+                shareId: item.shareId ? String(item.shareId) : '',
+                shareMode: item.shareType ? String(item.shareType) : '',
+                shareFileId: item.id ? String(item.id) : '',
+                shareFileName: item.name?.trim() || '',
+                isFolder: item.folder !== undefined ? !!item.folder : true,
+                verifyStatus: 'unknown',
+                lastVerifyError: '',
+                availableAccountIds: '',
+                verifyDetails: ''
+            });
+            await this.resourceRepo.save(resource);
+            importedCount += 1;
+        }
+
+        subscription.lastRefreshStatus = remoteResources.length ? 'unknown' : 'success';
+        subscription.lastRefreshMessage = remoteResources.length
+            ? `已同步 ${remoteResources.length} 条订阅资源，等待校验`
+            : '未获取到订阅资源';
+        await this.subscriptionRepo.save(subscription);
+        await logTaskEvent(`订阅资源同步完成: ${subscription.name} 共拉取 ${remoteResources.length} 条，新增 ${importedCount} 条，本地已存在 ${remoteResources.length - importedCount} 条`, 'info', 'subscription');
+
+        return {
+            totalCount: remoteResources.length,
+            importedCount
+        };
+    }
+
     async _getAvailableAccounts() {
         return await this.accountRepo.find({
             order: {
@@ -317,8 +554,9 @@ class SubscriptionService {
         if (defaultAccount) {
             return defaultAccount;
         }
-        const account = await this.accountRepo.findOne({
-            order: { id: 'ASC' }
+        const [account] = await this.accountRepo.find({
+            order: { id: 'ASC' },
+            take: 1
         });
         if (!account) {
             throw new Error('请先添加账号');

@@ -1153,6 +1153,29 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
+    app.get('/api/tmdb/search', async (req, res) => {
+        try {
+            const title = String(req.query.title || '').trim();
+            const year = String(req.query.year || '').trim();
+            if (!title) {
+                throw new Error('title 不能为空');
+            }
+            const result = await tmdbService.search(title, year);
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.get('/api/tmdb/cache-summary', async (req, res) => {
+        try {
+            const result = await tmdbService.getCacheSummary();
+            res.json({ success: true, data: result });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
     // CAS 秒传相关 API
     app.post('/api/cas/restore', async (req, res) => {
         try {
@@ -1928,9 +1951,11 @@ AppDataSource.initialize().then(async () => {
 
     app.post('/api/subscriptions/:id/refresh', async (req, res) => {
         try {
+            logTaskEvent(`收到订阅刷新请求: subscriptionId=${req.params.id}`, 'info', 'subscription');
             const result = await subscriptionService.refreshSubscription(parseInt(req.params.id));
             res.json({ success: true, data: result });
         } catch (error) {
+            logTaskEvent(`订阅刷新请求失败: subscriptionId=${req.params.id}, error=${error.message}`, 'error', 'subscription');
             res.json({ success: false, error: error.message });
         }
     });
@@ -1946,9 +1971,25 @@ AppDataSource.initialize().then(async () => {
 
     app.get('/api/subscriptions/:id/resources', async (req, res) => {
         try {
+            logTaskEvent(`收到订阅资源列表请求: subscriptionId=${req.params.id}`, 'info', 'subscription');
             const resources = await subscriptionService.listResources(parseInt(req.params.id));
             res.json({ success: true, data: resources });
         } catch (error) {
+            logTaskEvent(`获取订阅资源列表失败: subscriptionId=${req.params.id}, error=${error.message}`, 'error', 'subscription');
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.get('/api/subscriptions/:id/remote-resources', async (req, res) => {
+        try {
+            logTaskEvent(`收到订阅远端资源分页请求: subscriptionId=${req.params.id}, page=${req.query.pageNum || 1}, size=${req.query.pageSize || 30}`, 'info', 'subscription');
+            const result = await subscriptionService.listRemoteResources(parseInt(req.params.id), {
+                pageNum: req.query.pageNum,
+                pageSize: req.query.pageSize
+            });
+            res.json({ success: true, data: result });
+        } catch (error) {
+            logTaskEvent(`获取订阅远端资源失败: subscriptionId=${req.params.id}, error=${error.message}`, 'error', 'subscription');
             res.json({ success: false, error: error.message });
         }
     });
@@ -1956,6 +1997,15 @@ AppDataSource.initialize().then(async () => {
     app.post('/api/subscriptions/:id/resources', async (req, res) => {
         try {
             const resource = await subscriptionService.createResource(parseInt(req.params.id), req.body);
+            res.json({ success: true, data: resource });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.put('/api/subscriptions/resources/:id', async (req, res) => {
+        try {
+            const resource = await subscriptionService.updateResource(parseInt(req.params.id), req.body);
             res.json({ success: true, data: resource });
         } catch (error) {
             res.json({ success: false, error: error.message });
@@ -2078,8 +2128,10 @@ AppDataSource.initialize().then(async () => {
             const accountId = req.body.accountId;
             const accessCode = req.body.accessCode;
             const shareFolders = await taskService.parseShareFolderByShareLink(shareLink, accountId, accessCode);
+            logTaskEvent(`解析分享目录成功: accountId=${accountId}, folders=${shareFolders.length}, shareLink=${shareLink}`, 'info', 'task');
             res.json({success: true, data: shareFolders})
         }catch (error) {
+            logTaskEvent(`解析分享目录失败: accountId=${req.body.accountId}, error=${error.message}`, 'error', 'task');
             res.status(500).json({ success: false, error: error.message });
         }
     })

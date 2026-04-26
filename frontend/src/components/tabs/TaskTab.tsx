@@ -6,7 +6,7 @@ import { ToastType } from '../Toast';
 import { useClickOutside } from '../../utils/useClickOutside';
 
 interface Account { id: number; username: string; accountType?: 'personal' | 'family'; driveLabel?: string; }
-interface Task { id: number; resourceName: string; status: string; currentEpisodes: number; totalEpisodes: number; lastFileUpdateTime: string; account: Account; enableLazyStrm: boolean; lastOrganizeError?: string; realFolderName?: string; tmdbSeasonNumber?: number | null; tmdbSeasonName?: string | null; tmdbSeasonEpisodes?: number | null; }
+interface Task { id: number; resourceName: string; status: string; currentEpisodes: number; totalEpisodes: number; lastFileUpdateTime: string; account: Account; enableLazyStrm: boolean; lastOrganizeError?: string; realFolderName?: string; tmdbSeasonNumber?: number | null; tmdbSeasonName?: string | null; tmdbSeasonEpisodes?: number | null; tmdbId?: string | null; remark?: string | null; tmdbContent?: string | null; }
 interface ProcessedRecord { id: number; sourceFileName: string; sourceMd5?: string; status: string; updatedAt: string; lastError?: string | null; }
 
 interface TaskTabProps {
@@ -23,13 +23,23 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
   const [isTopMenuOpen, setIsTopMenuOpen] = useState(false);
   const [openTaskMenuId, setOpenTaskMenuId] = useState<number | null>(null);
+  const [openStatusMenuId, setOpenStatusMenuId] = useState<number | null>(null);
   const topMenuRef = useRef<HTMLDivElement>(null);
   const taskMenuRef = useRef<HTMLDivElement>(null);
+  const statusMenuRef = useRef<HTMLDivElement>(null);
 
   const [processedTasks, setProcessedTasks] = useState<Task[]>([]);
   const [processedRecords, setProcessedRecords] = useState<ProcessedRecord[]>([]);
   const [processedLoading, setProcessedLoading] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<number[]>([]);
+  const [resolvedRemarkMap, setResolvedRemarkMap] = useState<Record<number, string>>({});
+
+  const taskStatusOptions = [
+    { value: 'processing', label: '追剧中' },
+    { value: 'completed', label: '已完结' },
+    { value: 'failed', label: '失败' },
+    { value: 'pending', label: '等待中' }
+  ];
 
   const getTaskStatusMeta = (status?: string) => {
     const normalized = String(status || 'pending').toLowerCase();
@@ -95,19 +105,110 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
     return `S${String(seasonNumber).padStart(2, '0')}${progressText}`;
   };
 
+  const getTaskRemarkTag = (task: Task) => {
+    const manualRemark = String(task.remark || '').trim();
+    if (manualRemark) return manualRemark;
+
+    try {
+      const tmdbContent = task.tmdbContent ? JSON.parse(task.tmdbContent) : null;
+      const candidates = [
+        tmdbContent?.title,
+        tmdbContent?.name,
+        tmdbContent?.zhTitle,
+        tmdbContent?.chineseTitle,
+        tmdbContent?.originalTitle,
+        tmdbContent?.original_name
+      ];
+      const chineseTitle = candidates.find((value: unknown) => /[\u4e00-\u9fff]/.test(String(value || '').trim()));
+      return String(chineseTitle || '').trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const buildTmdbDisplayTitle = (tmdbContentRaw: unknown) => {
+    try {
+      const tmdbContent = typeof tmdbContentRaw === 'string'
+        ? JSON.parse(tmdbContentRaw)
+        : tmdbContentRaw;
+      const chineseTitleCandidates = [
+        tmdbContent?.title,
+        tmdbContent?.name,
+        tmdbContent?.zhTitle,
+        tmdbContent?.chineseTitle
+      ].map((value: unknown) => String(value || '').trim()).filter(Boolean);
+      const originalTitleCandidates = [
+        tmdbContent?.originalTitle,
+        tmdbContent?.original_name,
+        tmdbContent?.originalName
+      ].map((value: unknown) => String(value || '').trim()).filter(Boolean);
+
+      const chineseTitle = chineseTitleCandidates.find(value => /[\u4e00-\u9fff]/.test(value)) || '';
+      const originalTitle = originalTitleCandidates.find(value => !/[\u4e00-\u9fff]/.test(value)) || '';
+
+      if (chineseTitle && originalTitle && chineseTitle !== originalTitle) {
+        return `${chineseTitle} (${originalTitle})`;
+      }
+      return chineseTitle || originalTitle || '';
+    } catch {
+      return '';
+    }
+  };
+
+  const resolveTaskRemarksFromTmdb = useCallback(async (taskList: Task[]) => {
+    const targets = taskList.filter(task => {
+      const localRemark = getTaskRemarkTag(task);
+      return !localRemark && task.tmdbId && !resolvedRemarkMap[task.id];
+    });
+
+    if (targets.length === 0) return;
+
+    const resolvedEntries = await Promise.all(targets.map(async task => {
+      const tmdbId = String(task.tmdbId || '').trim();
+      if (!tmdbId) return null;
+
+      const preferredType = Number(task.tmdbSeasonNumber || 0) > 0 || Number(task.tmdbSeasonEpisodes || 0) > 0 ? 'tv' : 'movie';
+      const fallbackType = preferredType === 'tv' ? 'movie' : 'tv';
+
+      const fetchDetail = async (type: 'tv' | 'movie') => {
+        const res = await fetch(`/api/tmdb/${type}/${tmdbId}`);
+        const data = await res.json();
+        return data.success ? data.data : null;
+      };
+
+      try {
+        const detail = await fetchDetail(preferredType) || await fetchDetail(fallbackType);
+        const remark = buildTmdbDisplayTitle(detail);
+        return remark ? [task.id, remark] as const : null;
+      } catch {
+        return null;
+      }
+    }));
+
+    const nextEntries = Object.fromEntries(resolvedEntries.filter(Boolean) as Array<readonly [number, string]>);
+    if (Object.keys(nextEntries).length > 0) {
+      setResolvedRemarkMap(prev => ({ ...prev, ...nextEntries }));
+    }
+  }, [resolvedRemarkMap]);
+
   const fetchTasks = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/tasks?search=${encodeURIComponent(searchTerm)}&status=${statusFilter}`);
       const data = await res.json();
-      if (data.success) setTasks(data.data || []);
+      if (data.success) {
+        const nextTasks = data.data || [];
+        setTasks(nextTasks);
+        void resolveTaskRemarksFromTmdb(nextTasks);
+      }
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [searchTerm, statusFilter]);
+  }, [resolveTaskRemarksFromTmdb, searchTerm, statusFilter]);
 
   useEffect(() => { fetchTasks(); }, [fetchTasks]);
   useClickOutside(topMenuRef, () => setIsTopMenuOpen(false), isTopMenuOpen);
   useClickOutside(taskMenuRef, () => setOpenTaskMenuId(null), openTaskMenuId !== null);
+  useClickOutside(statusMenuRef, () => setOpenStatusMenuId(null), openStatusMenuId !== null);
 
   const handleOpenProcessedRecords = async (targetTasks: Task[]) => {
     setProcessedTasks(targetTasks);
@@ -221,6 +322,31 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
     } catch (e) { onShowToast?.('识别失败', 'error'); }
   };
 
+  const handleChangeTaskStatus = async (task: Task, status: string) => {
+    if (String(task.status || 'pending').toLowerCase() === status) {
+      setOpenStatusMenuId(null);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTasks(prev => prev.map(item => item.id === task.id ? { ...item, status: data.data?.status || status } : item));
+        setOpenStatusMenuId(null);
+        onShowToast?.('任务状态已更新', 'success');
+      } else {
+        onShowToast?.('状态更新失败: ' + data.error, 'error');
+      }
+    } catch (e) {
+      onShowToast?.('状态更新失败', 'error');
+    }
+  };
+
   return (
     <div className="workbench-page">
       <section className="workbench-hero">
@@ -262,7 +388,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
           </div>
         </div>
         <div className="flex gap-2">
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="workbench-select py-1.5 text-xs font-bold min-w-[92px]"><option value="all">全部</option><option value="processing">追剧中</option><option value="completed">已完结</option><option value="failed">失败</option><option value="pending">等待中</option></select>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="workbench-select py-1.5 text-xs font-bold min-w-[92px]"><option value="all">全部</option>{taskStatusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
           <div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} /><input type="text" placeholder="搜索..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="workbench-input pl-8 py-1.5 text-xs w-32" /></div>
           <button onClick={fetchTasks} className="p-2 bg-[var(--bg-main)] border border-[var(--border-color)] rounded-xl"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
         </div>
@@ -277,14 +403,23 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
             ? Math.min(Number(task.currentEpisodes || 0), episodeTotal)
             : Number(task.currentEpisodes || 0);
           const seasonTag = getTaskSeasonTag(task);
+          const remarkTag = getTaskRemarkTag(task) || resolvedRemarkMap[task.id] || '';
+          const rawTaskName = task.resourceName.replace(/\(根\)$/g, '').trim();
+          const displayTaskName = remarkTag || rawTaskName;
+          const isTaskLayerOpen = openTaskMenuId === task.id || openStatusMenuId === task.id;
           return (
-            <div key={task.id} className={`workbench-panel p-3.5 group relative transition-all ${openTaskMenuId === task.id ? 'z-20 overflow-visible' : 'overflow-hidden'} ${selectedTaskIds.includes(task.id) ? 'ring-1 ring-blue-500 bg-blue-50/5' : ''}`}>
+            <div key={task.id} className={`workbench-panel p-3.5 group relative transition-all ${isTaskLayerOpen ? 'z-20 overflow-visible' : 'overflow-hidden'} ${selectedTaskIds.includes(task.id) ? 'ring-1 ring-blue-500 bg-blue-50/5' : ''}`}>
               <div className={`absolute left-0 top-0 w-0.5 h-full ${task.lastOrganizeError ? 'bg-red-500' : statusMeta.accentClass}`} />
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div onClick={() => setSelectedTaskIds(prev => prev.includes(task.id) ? prev.filter(i => i !== task.id) : [...prev, task.id])} className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer ${selectedTaskIds.includes(task.id) ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>{selectedTaskIds.includes(task.id) && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}</div>
                   <div className="min-w-0">
-                    <h3 className="font-black text-sm truncate max-w-[200px] md:max-w-md">{task.resourceName.replace(/\(根\)$/g, '')}</h3>
+                    <h3 className="font-black text-sm truncate max-w-[200px] md:max-w-md" title={displayTaskName}>{displayTaskName}</h3>
+                    {remarkTag && rawTaskName && rawTaskName !== remarkTag && (
+                      <p className="mt-0.5 max-w-[200px] truncate text-[10px] font-bold text-slate-400 md:max-w-md" title={rawTaskName}>
+                        转存任务: {rawTaskName}
+                      </p>
+                    )}
                     <div className="flex items-center gap-3 text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">
                       <span className="flex items-center gap-1"><User size={9} />{task.account.username}{task.account.accountType === 'family' ? ' [家庭云]' : ' [个人云]'}</span>
                       {seasonTag && (
@@ -292,7 +427,46 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
                           {seasonTag}
                         </span>
                       )}
-                      <span className={`rounded-md px-1.5 py-0.5 ${statusMeta.badgeClass}`}>{statusMeta.label}</span>
+                      <div ref={openStatusMenuId === task.id ? statusMenuRef : undefined} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsTopMenuOpen(false);
+                            setOpenTaskMenuId(null);
+                            setOpenStatusMenuId(openStatusMenuId === task.id ? null : task.id);
+                          }}
+                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-bold ${statusMeta.badgeClass}`}
+                        >
+                          {statusMeta.label}
+                          <ChevronDown size={10} />
+                        </button>
+                        <AnimatePresence>
+                          {openStatusMenuId === task.id && (
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.96, y: 4 }}
+                              animate={{ opacity: 1, scale: 1, y: 0 }}
+                              exit={{ opacity: 0, scale: 0.96, y: 4 }}
+                              className="absolute left-0 top-full mt-1 min-w-[112px] glass-modal rounded-2xl py-1 z-[2200] shadow-2xl border border-[var(--border-color)] overflow-hidden"
+                            >
+                              {taskStatusOptions.map(option => {
+                                const optionMeta = getTaskStatusMeta(option.value);
+                                const isActive = String(task.status || 'pending').toLowerCase() === option.value;
+                                return (
+                                  <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => handleChangeTaskStatus(task, option.value)}
+                                    className={`w-full text-left px-3 py-2 text-xs font-bold hover:bg-[var(--nav-hover-bg)] flex items-center justify-between gap-3 ${isActive ? 'bg-[var(--nav-hover-bg)]' : ''}`}
+                                  >
+                                    <span>{option.label}</span>
+                                    <span className={`rounded-md px-1.5 py-0.5 text-[9px] ${optionMeta.badgeClass}`}>{optionMeta.label}</span>
+                                  </button>
+                                );
+                              })}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
                       <span className="truncate flex items-center gap-1"><Files size={9} />{task.realFolderName || '根'}</span>
                     </div>
                     {task.lastOrganizeError && (

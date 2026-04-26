@@ -233,9 +233,6 @@ function App() {
             </button>
           ))}
         </div>
-        <div className="p-3 border-t border-[var(--border-color)]">
-          <button onClick={handleLogout} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-black text-red-500 hover:bg-red-50"><LogOut size={16} />退出</button>
-        </div>
       </nav>
 
       {/* 主体内容 */}

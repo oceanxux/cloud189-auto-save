@@ -719,6 +719,7 @@ class TaskService {
     async deleteTask(taskId, deleteCloud) {
         const task = await this.getTaskById(taskId);
         if (!task) throw new Error('任务不存在');
+        const hasExplicitStatusUpdate = updates.status !== undefined;
         const folderName = task.realFolderName.substring(task.realFolderName.indexOf('/') + 1);
         if (!task.enableSystemProxy && deleteCloud) {
             const account = await this.accountRepo.findOneBy({ id: task.accountId });
@@ -1398,6 +1399,24 @@ class TaskService {
             }
         });
         if (!task) throw new Error('任务不存在');
+        const hasExplicitStatusUpdate = updates.status !== undefined;
+        const previousTaskSnapshot = {
+            resourceName: task.resourceName,
+            remark: task.remark,
+            status: task.status,
+            currentEpisodes: task.currentEpisodes,
+            totalEpisodes: task.totalEpisodes,
+            realFolderName: task.realFolderName,
+            targetFolderName: task.targetFolderName,
+            tmdbId: task.tmdbId,
+            tmdbSeasonNumber: task.tmdbSeasonNumber,
+            tmdbSeasonEpisodes: task.tmdbSeasonEpisodes,
+            enableCron: task.enableCron,
+            cronExpression: task.cronExpression,
+            enableTaskScraper: task.enableTaskScraper,
+            enableLazyStrm: task.enableLazyStrm,
+            enableOrganizer: task.enableOrganizer
+        };
 
         // 如果原realFolderName和现realFolderName不一致 则需要删除原strm
         if (updates.realFolderName && updates.realFolderName !== task.realFolderName && ConfigService.getConfigValue('strm.enable')) {
@@ -1438,8 +1457,40 @@ class TaskService {
             throw new Error('匹配模式需要提供匹配值');
         }
         this._alignTaskTotalEpisodesToSeason(task);
-        this._syncTaskCompletionState(task);
+        // 手动修改状态时，以用户选择为准，避免被自动完结逻辑立即改回 completed。
+        if (!hasExplicitStatusUpdate) {
+            this._syncTaskCompletionState(task);
+        }
+        const changeMessages = [];
+        const trackedFields = [
+            ['resourceName', '任务名'],
+            ['remark', '备注'],
+            ['status', '状态'],
+            ['currentEpisodes', '当前集数'],
+            ['totalEpisodes', '总集数'],
+            ['realFolderName', '资源目录'],
+            ['targetFolderName', '目标目录'],
+            ['tmdbId', 'TMDB ID'],
+            ['tmdbSeasonNumber', 'TMDB 季号'],
+            ['tmdbSeasonEpisodes', 'TMDB 该季集数'],
+            ['enableCron', '定时执行'],
+            ['cronExpression', 'Cron 表达式'],
+            ['enableTaskScraper', '任务刮削'],
+            ['enableLazyStrm', '懒转存 STRM'],
+            ['enableOrganizer', '自动整理']
+        ];
+        for (const [field, label] of trackedFields) {
+            const beforeValue = previousTaskSnapshot[field];
+            const afterValue = task[field];
+            if (String(beforeValue ?? '') !== String(afterValue ?? '')) {
+                changeMessages.push(`${label}: ${beforeValue ?? '空'} -> ${afterValue ?? '空'}`);
+            }
+        }
+
         const newTask = await this.taskRepo.save(task)
+        if (changeMessages.length > 0) {
+            await logTaskEvent(`任务[${task.resourceName || task.id}]配置已更新: ${changeMessages.join('；')}`, 'info', 'system');
+        }
         SchedulerService.removeTaskJob(task.id)
         if (task.enableCron && task.cronExpression) {
             SchedulerService.saveTaskJob(newTask, this)

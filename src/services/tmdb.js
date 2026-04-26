@@ -224,6 +224,9 @@ class TMDBService {
             return {
                 id: response.id,
                 title: response.name,
+                name: response.name,
+                originalTitle: response.original_name,
+                original_name: response.original_name,
                 releaseDate: response.first_air_date,
                 type: 'tv',
                 totalEpisodes: response.number_of_episodes || 0,
@@ -254,7 +257,15 @@ class TMDBService {
     async getMovieDetails(id) {
         try {
             const response = await this._request(`/movie/${id}`, { append_to_response: 'credits,images' });
-            return { id: response.id, title: response.title, releaseDate: response.release_date, type: 'movie' };
+            return {
+                id: response.id,
+                title: response.title,
+                name: response.title,
+                originalTitle: response.original_title,
+                original_name: response.original_title,
+                releaseDate: response.release_date,
+                type: 'movie'
+            };
         } catch (e) { return null; }
     }
 

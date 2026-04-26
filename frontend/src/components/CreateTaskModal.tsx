@@ -40,17 +40,78 @@ const CreateTaskModal: React.FC<CreateTaskModalProps> = ({ isOpen, onClose, onSu
     ? `S${String(formData.tmdbSeasonNumber).padStart(2, '0')}`
     : '';
 
+  const buildTmdbDisplayTitle = (tmdbContentRaw: unknown, fallbackTitle = '') => {
+    try {
+      const tmdbContent = typeof tmdbContentRaw === 'string'
+        ? JSON.parse(tmdbContentRaw)
+        : tmdbContentRaw;
+      const chineseTitleCandidates = [
+        tmdbContent?.title,
+        tmdbContent?.name,
+        tmdbContent?.zhTitle,
+        tmdbContent?.chineseTitle
+      ].map((value: unknown) => String(value || '').trim()).filter(Boolean);
+      const originalTitleCandidates = [
+        tmdbContent?.originalTitle,
+        tmdbContent?.original_name,
+        tmdbContent?.originalName
+      ].map((value: unknown) => String(value || '').trim()).filter(Boolean);
+
+      const chineseTitle = chineseTitleCandidates.find(value => /[\u4e00-\u9fff]/.test(value)) || '';
+      const originalTitle = originalTitleCandidates.find(value => !/[\u4e00-\u9fff]/.test(value)) || '';
+
+      if (chineseTitle && originalTitle && chineseTitle !== originalTitle) {
+        return `${chineseTitle} (${originalTitle})`;
+      }
+      if (chineseTitle) return chineseTitle;
+      if (originalTitle) return originalTitle;
+      return String(fallbackTitle || '').trim();
+    } catch {
+      return String(fallbackTitle || '').trim();
+    }
+  };
+
+  const resolveTaskDisplayTitle = async (taskData: any) => {
+    const rawResourceName = taskData.resourceName || taskData.taskName || taskData.title || taskData.resourceTitle || '';
+    const localTitle = buildTmdbDisplayTitle(taskData.tmdbContent, rawResourceName);
+    if (localTitle && localTitle !== rawResourceName) {
+      return { rawResourceName, resourceName: localTitle };
+    }
+
+    const tmdbId = String(taskData.tmdbId || '').trim();
+    if (!tmdbId) {
+      return { rawResourceName, resourceName: localTitle || rawResourceName };
+    }
+
+    try {
+      const preferredType = Number(taskData.tmdbSeasonNumber || 0) > 0 || Number(taskData.tmdbSeasonEpisodes || 0) > 0 ? 'tv' : 'movie';
+      const fallbackType = preferredType === 'tv' ? 'movie' : 'tv';
+
+      const fetchDetail = async (type: 'tv' | 'movie') => {
+        const res = await fetch(`/api/tmdb/${type}/${tmdbId}`);
+        const data = await res.json();
+        return data.success ? data.data : null;
+      };
+
+      const detail = await fetchDetail(preferredType) || await fetchDetail(fallbackType);
+      const resolvedTitle = buildTmdbDisplayTitle(detail, rawResourceName);
+      return { rawResourceName, resourceName: resolvedTitle || rawResourceName };
+    } catch {
+      return { rawResourceName, resourceName: localTitle || rawResourceName };
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
       await fetchAccounts();
       if (initialData) {
-        const resourceName = initialData.resourceName || initialData.taskName || initialData.title || initialData.resourceTitle || '';
+        const { rawResourceName, resourceName } = await resolveTaskDisplayTitle(initialData);
         const shareLink = initialData.shareLink || initialData.url || initialData.cloudLinks?.[0]?.link || '';
         const inferredTotalEpisodes = Number(initialData.totalEpisodes || 0)
           || extractEpisodeCountFromTitle(initialData.resourceTitle)
           || extractEpisodeCountFromTitle(initialData.taskName)
           || extractEpisodeCountFromTitle(initialData.title)
-          || extractEpisodeCountFromTitle(resourceName);
+          || extractEpisodeCountFromTitle(rawResourceName);
         setFormData(prev => ({ 
           ...prev, 
           ...initialData,

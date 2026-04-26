@@ -10,10 +10,14 @@ interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   className?: string;
+  variant?: 'default' | 'plain';
+  hideDefaultFooter?: boolean;
 }
 
-const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer, className = "" }) => {
+const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer, className = "", variant = 'default', hideDefaultFooter = false }) => {
   if (typeof document === 'undefined') return null;
+
+  const isPlain = variant === 'plain';
 
   return createPortal(
     <AnimatePresence>
@@ -35,20 +39,24 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer,
             exit={{ opacity: 0, scale: 0.9, y: 30, filter: 'blur(15px)' }}
             transition={{ type: 'spring', damping: 28, stiffness: 300, mass: 0.8 }}
             className={`relative flex flex-col w-full max-w-2xl max-h-[90vh] overflow-hidden rounded-[32px] 
-              bg-white/80 dark:bg-slate-900/80 shadow-[0_32px_128px_-16px_rgba(0,0,0,0.3)]
-              border border-white/40 dark:border-white/10 backdrop-blur-3xl transition-all ${className}`}
+              ${isPlain
+                ? 'bg-white dark:bg-slate-900 shadow-[0_18px_60px_-18px_rgba(15,23,42,0.28)] border-0 backdrop-blur-none'
+                : 'bg-white/80 dark:bg-slate-900/80 shadow-[0_32px_128px_-16px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 backdrop-blur-3xl'}
+              transition-all ${className}`}
           >
             {/* Glossy Overlay for Header */}
-            <div className="absolute top-0 inset-x-0 h-40 bg-gradient-to-b from-white/40 dark:from-white/5 to-transparent pointer-events-none" />
+            {!isPlain && <div className="absolute top-0 inset-x-0 h-40 bg-gradient-to-b from-white/40 dark:from-white/5 to-transparent pointer-events-none" />}
 
             {/* Header */}
-            <div className="relative flex items-center justify-between px-10 py-8">
+            <div className={`relative flex items-center justify-between ${isPlain ? 'px-7 py-5 border-b border-[var(--border-color)]' : 'px-10 py-8'}`}>
               <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                   <div className="w-2 h-2 rounded-full bg-[var(--app-accent)] animate-pulse" />
-                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--app-accent)] opacity-80">Workspace Action</p>
-                </div>
-                <h3 className="text-2xl font-black tracking-tight text-[var(--text-primary)] drop-shadow-sm">{title}</h3>
+                {!isPlain && (
+                  <div className="flex items-center gap-2">
+                     <div className="w-2 h-2 rounded-full bg-[var(--app-accent)] animate-pulse" />
+                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--app-accent)] opacity-80">Workspace Action</p>
+                  </div>
+                )}
+                <h3 className={`${isPlain ? 'text-lg' : 'text-2xl drop-shadow-sm'} font-black tracking-tight text-[var(--text-primary)]`}>{title}</h3>
               </div>
               <button 
                 onClick={onClose} 
@@ -61,18 +69,18 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer,
             </div>
 
             {/* Content with subtle scroll indicator */}
-            <div className="relative flex-1 overflow-y-auto px-10 pb-10 pt-2 custom-scrollbar-hidden scroll-smooth">
+            <div className={`relative flex-1 overflow-y-auto custom-scrollbar-hidden scroll-smooth ${isPlain ? 'px-7 pb-7 pt-5' : 'px-10 pb-10 pt-2'}`}>
               <div className="text-[var(--text-primary)]">
                 {children}
               </div>
             </div>
 
             {/* Footer with high contrast layout */}
-            {footer !== undefined ? (
+            {footer != null ? (
               <div className="relative border-t border-slate-200/40 dark:border-white/5 bg-slate-50/30 dark:bg-black/10 px-10 py-6">
                 {footer}
               </div>
-            ) : (
+            ) : !hideDefaultFooter ? (
               <div className="relative border-t border-slate-200/40 dark:border-white/5 bg-slate-50/30 dark:bg-black/10 px-10 py-6 flex flex-col sm:flex-row justify-end gap-4">
                 <button 
                   onClick={onClose} 
@@ -91,7 +99,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer,
                   确认并执行
                 </button>
               </div>
-            )}
+            ) : null}
           </motion.div>
         </div>
       )}

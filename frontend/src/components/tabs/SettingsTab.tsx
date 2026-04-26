@@ -163,7 +163,7 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
   if (loading) return <div className="flex items-center justify-center py-20"><RefreshCw size={32} className="text-blue-500 animate-spin" /></div>;
 
   return (
-    <div className="workbench-page max-w-5xl pb-12">
+    <div className="settings-page workbench-page max-w-5xl pb-12">
       <section className="workbench-hero !py-3">
         <h1 className="text-xl font-black tracking-tight text-[var(--text-primary)]">系统与自动化设置</h1>
         <p className="mt-1 max-w-2xl text-[10px] font-medium leading-relaxed text-[var(--text-secondary)] opacity-60">管理认证权限、网络代理及自动化任务的核心逻辑。</p>
@@ -171,7 +171,7 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
 
       <section className="space-y-4">
         <h3 className="workbench-section-title px-2"><Shield size={20} className="text-blue-500" /> 访问认证安全</h3>
-        <div className="workbench-panel p-8 space-y-6">
+        <div className="workbench-panel p-5 md:p-8 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="workbench-form-item">
               <label className="workbench-label">管理员用户名</label>
@@ -186,15 +186,15 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-2">
             <div className="workbench-form-item">
               <label className="workbench-label">系统内部通信密钥 (API Key)</label>
-              <div className="flex gap-3">
-                <input type="text" value={settings.system.apiKey} onChange={(e) => updateSettings('system.apiKey', e.target.value)} className="flex-1 workbench-input font-mono text-xs" />
+              <div className="flex min-w-0 flex-col gap-3 sm:flex-row">
+                <input type="text" value={settings.system.apiKey} onChange={(e) => updateSettings('system.apiKey', e.target.value)} className="min-w-0 flex-1 workbench-input font-mono text-xs" />
                 <button onClick={generateApiKey} className="workbench-toolbar-button px-6 shrink-0">重新生成</button>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                <div className="workbench-form-item">
                   <label className="workbench-label">日志保留天数</label>
-                  <div className="flex items-center gap-4">
+                  <div className="flex min-w-0 items-center gap-4">
                     <input 
                       type="range" min="1" max="30" step="1"
                       value={settings.system.logExpireDays || 7} 
@@ -224,7 +224,7 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
 
       <section className="space-y-4">
         <h3 className="workbench-section-title px-2"><Database size={20} className="text-emerald-500" /> 任务执行策略</h3>
-        <div className="workbench-panel p-8 space-y-8">
+        <div className="workbench-panel p-5 md:p-8 space-y-8">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             <div className="workbench-form-item"><label className="workbench-label">任务超时天数</label><input type="number" value={settings.task.taskExpireDays} onChange={(e) => updateSettings('task.taskExpireDays', parseInt(e.target.value))} className="workbench-input font-bold" /></div>
             <div className="workbench-form-item"><label className="workbench-label">全量检查 Cron</label><input type="text" value={settings.task.taskCheckCron} onChange={(e) => updateSettings('task.taskCheckCron', e.target.value)} className="workbench-input font-mono" /></div>
@@ -270,7 +270,7 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
 
           <div className="pt-8 border-t border-[var(--border-color)] space-y-6">
             <h4 className="text-sm font-black uppercase tracking-widest flex items-center gap-2"><PlayCircle size={18} className="text-blue-500" /> 自动化追剧默认全局配置</h4>
-            <div className="settings-field-grid">
+            <div className="settings-field-grid settings-auto-grid">
               <SettingField label="执行账号">
                 <select value={settings.task.autoCreate.accountId} onChange={(e) => updateSettings('task.autoCreate.accountId', e.target.value)} className="workbench-select font-bold">
                   <option value="">请选择默认账号...</option>
@@ -284,14 +284,14 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
                 </select>
               </SettingField>
               <SettingField label="默认存入路径">
-                <div className="flex gap-2">
-                  <input type="text" value={settings.task.autoCreate.targetFolder || '根目录'} readOnly className="flex-1 workbench-input font-bold opacity-60 text-xs" />
+                <div className="settings-auto-folder-control">
+                  <input type="text" value={settings.task.autoCreate.targetFolder || '根目录'} readOnly className="min-w-0 flex-1 workbench-input font-bold opacity-60 text-xs" />
                   <button onClick={() => { setFolderSelectorMode('target'); setIsFolderSelectorOpen(true); }} disabled={!settings.task.autoCreate.accountId} className="workbench-toolbar-button px-3 shadow-none shrink-0"><Folder size={18} /></button>
                 </div>
               </SettingField>
               <SettingField label="默认归档路径">
-                <div className="flex gap-2">
-                  <input type="text" value={settings.task.autoCreate.organizerTargetFolderName || '默认继承'} readOnly className="flex-1 workbench-input font-bold opacity-60 text-xs" />
+                <div className="settings-auto-folder-control">
+                  <input type="text" value={settings.task.autoCreate.organizerTargetFolderName || '默认继承'} readOnly className="min-w-0 flex-1 workbench-input font-bold opacity-60 text-xs" />
                   <button onClick={() => { setFolderSelectorMode('organizer'); setIsFolderSelectorOpen(true); }} disabled={!settings.task.autoCreate.accountId} className="workbench-toolbar-button px-3 shadow-none shrink-0"><Folder size={18} /></button>
                 </div>
               </SettingField>
@@ -302,7 +302,7 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
 
       <section className="space-y-4">
         <h3 className="workbench-section-title px-2"><Bell size={20} className="text-amber-500" /> 通知与推送</h3>
-        <div className="workbench-panel p-8 space-y-8">
+        <div className="workbench-panel p-5 md:p-8 space-y-8">
           <div className="settings-channel-grid">
             <div className="settings-channel">
               <ToggleHeading
@@ -385,7 +385,7 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
 
       <section className="space-y-4">
         <h3 className="workbench-section-title px-2"><Globe size={20} className="text-sky-500" /> 网络代理与系统地址</h3>
-        <div className="workbench-panel p-8 space-y-8">
+        <div className="workbench-panel p-5 md:p-8 space-y-8">
           <div className="settings-field-grid">
             <SettingField label="代理 Host">
               <input type="text" value={settings.proxy.host} onChange={(e) => updateSettings('proxy.host', e.target.value)} className="workbench-input font-mono text-xs" />
@@ -400,7 +400,7 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
               <input type="password" value={settings.proxy.password} onChange={(e) => updateSettings('proxy.password', e.target.value)} className="workbench-input" />
             </SettingField>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-5">
             {(['telegram', 'tmdb', 'openai', 'cloud189', 'customPush'] as const).map((key) => (
               <div key={key} className="flex items-center gap-3">
                 <div onClick={() => updateSettings(`proxy.services.${key}`, !settings.proxy.services[key])} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${settings.proxy.services[key] ? 'bg-sky-500 border-sky-500' : 'border-slate-300'}`}>{settings.proxy.services[key] && <Check size={14} strokeWidth={4} className="text-white" />}</div>
@@ -419,9 +419,9 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
         </div>
       </section>
 
-      <div className="mt-12 flex justify-end gap-3 px-2">
-        <button onClick={loadSettings} className="workbench-toolbar-button px-8 border-none"><RotateCcw size={16} /> 放弃修改</button>
-        <button onClick={handleSave} disabled={saving} className="workbench-primary-button px-10">
+      <div className="mt-12 flex flex-col justify-end gap-3 px-2 sm:flex-row">
+        <button onClick={loadSettings} className="workbench-toolbar-button w-full px-8 border-none sm:w-auto"><RotateCcw size={16} /> 放弃修改</button>
+        <button onClick={handleSave} disabled={saving} className="workbench-primary-button w-full px-10 sm:w-auto">
           {saving ? <RefreshCw className="animate-spin" size={16} /> : <Save size={16} />}
           确认并保存设置
         </button>

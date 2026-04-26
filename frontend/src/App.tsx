@@ -103,8 +103,8 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem('darkMode', JSON.stringify(isDarkMode));
-    if (isDarkMode) document.documentElement.classList.add('dark');
-    else document.documentElement.classList.remove('dark');
+    document.documentElement.classList.toggle('dark', isDarkMode);
+    document.documentElement.style.colorScheme = isDarkMode ? 'dark' : 'light';
   }, [isDarkMode]);
 
   useClickOutside(userMenuRef, () => setIsUserMenuOpen(false), isUserMenuOpen);
@@ -196,19 +196,19 @@ function App() {
   };
 
   return (
-    <div className={`flex h-screen w-full transition-colors duration-300 ${isDarkMode ? 'dark' : ''} overflow-hidden`}>
+    <div className={`app-shell flex w-full ${isDarkMode ? 'dark' : ''} overflow-hidden`}>
       
       {/* 移动端菜单 */}
       <AnimatePresence>
         {isMobileMenuOpen && (
           <div className="fixed inset-0 z-[2000] md:hidden">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsMobileMenuOpen(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
-            <motion.nav initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="absolute inset-y-0 left-0 w-64 bg-[var(--bg-sidebar)] p-6 shadow-2xl">
+            <motion.nav initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="absolute inset-y-0 left-0 flex w-[min(82vw,18rem)] flex-col bg-[var(--bg-sidebar)] p-5 shadow-2xl">
               <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-2.5"><Sparkles size={20} className="text-[var(--app-accent)]" /><h1 className="text-xl font-black text-[var(--text-primary)]">工作台</h1></div>
                 <button onClick={() => setIsMobileMenuOpen(false)}><X size={24} /></button>
               </div>
-              <div className="space-y-1.5 overflow-y-auto custom-scrollbar">
+              <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pb-4 custom-scrollbar">
                 {tabs.map(tab => (
                   <button key={tab.id} onClick={() => { setActiveTab(tab.id); setIsMobileMenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${activeTab === tab.id ? 'bg-[var(--app-accent)] text-[var(--bg-main)] shadow-sm' : 'text-[var(--text-secondary)]'}`}>
                     <tab.icon size={20} />{tab.label}
@@ -236,16 +236,16 @@ function App() {
       </nav>
 
       {/* 主体内容 */}
-      <main className="relative flex flex-1 flex-col overflow-hidden bg-[var(--bg-surface)] z-0">
-        <header className="sticky top-0 z-30 flex min-h-[56px] items-center justify-between border-b border-[var(--border-color)] bg-[var(--bg-main)]/80 px-5 backdrop-blur-xl transition-colors duration-200">
-          <div className="flex items-center gap-3">
+      <main className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg-surface)]">
+        <header className="app-header sticky top-0 z-30 flex min-h-[56px] shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--border-color)] bg-[var(--bg-main)]/95 px-3 backdrop-blur-md transition-colors duration-200 md:bg-[var(--bg-main)]/80 md:px-5 md:backdrop-blur-xl">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <button onClick={() => setIsMobileMenuOpen(true)} className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-[var(--text-primary)] md:hidden"><Menu size={20} /></button>
-            <div className="flex items-baseline gap-2">
-              <h2 className="text-base font-black text-[var(--text-primary)]">{activeTabLabel}</h2>
+            <div className="flex min-w-0 items-baseline gap-2">
+              <h2 className="truncate text-base font-black text-[var(--text-primary)]">{activeTabLabel}</h2>
               <span className="hidden text-[10px] font-bold text-slate-400 md:block opacity-60">/ {tabDescriptions[activeTab]}</span>
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="ml-auto flex shrink-0 items-center gap-1">
             <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-xl hover:bg-[var(--nav-hover-bg)] text-[var(--text-primary)]">{isDarkMode ? <Sun size={18} /> : <Moon size={18} />}</button>
             <button onClick={() => setIsAIChatOpen(true)} className="p-2 rounded-xl hover:bg-[var(--nav-hover-bg)] text-[var(--text-primary)]"><MessageSquare size={18} /></button>
             <button onClick={() => setIsLogsOpen(true)} className={`p-2 rounded-xl transition-all ${isLogsOpen ? 'bg-blue-100 text-blue-600' : 'hover:bg-[var(--nav-hover-bg)] text-[var(--text-primary)]'}`}><Terminal size={18} /></button>
@@ -267,8 +267,8 @@ function App() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-5 pb-20 pt-4 md:px-6 custom-scrollbar z-0">
-          <div>
+        <div className="app-content z-0 flex-1 overflow-y-auto px-3 pb-24 pt-3 sm:px-5 md:px-6 md:pt-4 custom-scrollbar">
+          <div className="min-w-0">
             {activeTab === 'account' && <AccountTab onShowToast={showToast} onShowConfirm={showConfirm} onShowPrompt={showPrompt} />}
             {activeTab === 'fileManager' && <FileManagerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
             {activeTab === 'task' && <TaskTab refreshToken={taskRefreshKey} onCreateTask={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} onShowConfirm={showConfirm} />}

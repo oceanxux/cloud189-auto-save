@@ -415,7 +415,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
 
       {/* Toolbar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={() => onCreateTask()} className="workbench-primary-button py-2 text-xs"><Plus size={14} /> 新建任务</button>
           <div ref={topMenuRef} className="relative">
             <button onClick={() => { setOpenTaskMenuId(null); setIsTopMenuOpen(!isTopMenuOpen); }} className="workbench-toolbar-button py-2 text-xs">批量操作 <ChevronDown size={14} /></button>
@@ -430,9 +430,9 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
             )}</AnimatePresence>
           </div>
         </div>
-        <div className="flex gap-2">
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="workbench-select py-1.5 text-xs font-bold min-w-[92px]"><option value="all">全部</option>{taskStatusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-          <div className="relative"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} /><input type="text" placeholder="搜索..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="workbench-input pl-8 py-1.5 text-xs w-32" /></div>
+        <div className="flex w-full flex-col gap-2 sm:flex-row md:w-auto">
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="workbench-select py-1.5 text-xs font-bold sm:min-w-[92px]"><option value="all">全部</option>{taskStatusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+          <div className="relative min-w-0 flex-1 md:flex-none"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} /><input type="text" placeholder="搜索..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="workbench-input w-full pl-8 py-1.5 text-xs md:w-32" /></div>
           <button onClick={fetchTasks} className="p-2 bg-[var(--bg-main)] border border-[var(--border-color)] rounded-xl"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
         </div>
       </div>

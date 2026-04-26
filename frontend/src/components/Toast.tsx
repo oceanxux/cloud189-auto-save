@@ -35,10 +35,10 @@ const Toast: React.FC<ToastProps> = ({ message, type, isVisible, onClose }) => {
     <AnimatePresence>
       {isVisible && (
         <motion.div
-          initial={{ opacity: 0, y: -20, scale: 0.9, filter: 'blur(10px)' }}
-          animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
-          exit={{ opacity: 0, y: -20, scale: 0.9, filter: 'blur(10px)' }}
-          className={`fixed top-6 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-3 px-5 py-3.5 
+          initial={{ opacity: 0, y: -20, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -20, scale: 0.96 }}
+          className={`fixed left-1/2 top-[calc(env(safe-area-inset-top)+0.75rem)] -translate-x-1/2 z-[9999] flex max-w-[calc(100vw-1.5rem)] items-center gap-3 px-5 py-3.5 sm:top-6
             rounded-2xl border backdrop-blur-xl shadow-[0_12px_40px_-12px_rgba(0,0,0,0.2)] ${colors[type]}`}
         >
           {icons[type]}

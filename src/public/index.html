@@ -1,14 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('darkMode');
+          var isDark = saved ? JSON.parse(saved) : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.classList.toggle('dark', !!isDark);
+          document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
+        } catch (error) {}
+      })();
+    </script>
     <title>天翼云盘自动转存系统</title>
-    <script type="module" crossorigin src="/assets/index-Dudzpz_E.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CH5AQn7H.css">
+    <script type="module" crossorigin src="/assets/index-CJy1OZ53.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Czzr5p_k.css">
   </head>
   <body>
     <div id="root"></div>
   </body>
 </html>
-

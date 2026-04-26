@@ -1,8 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   --color-brand: #0f172a;
 }
 
@@ -28,11 +27,51 @@
     --app-accent: #f8fafc;
     --modal-bg: rgba(15, 23, 42, 0.98);
   }
-  body { @apply bg-[var(--bg-surface)] text-[var(--text-primary)] antialiased; }
+  html,
+  body,
+  #root {
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--bg-surface);
+  }
+
+  body {
+    @apply bg-[var(--bg-surface)] text-[var(--text-primary)] antialiased;
+    text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
 }
 
 @layer components {
-  .workbench-page { @apply space-y-3 max-w-7xl mx-auto; }
+  .app-shell {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 100svh;
+    width: 100vw;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .app-header {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+
+  .app-content {
+    min-height: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .workbench-page {
+    @apply space-y-3 max-w-7xl mx-auto;
+    width: min(100%, 80rem);
+    min-width: 0;
+  }
 
   .workbench-hero {
     background: var(--bg-main);
@@ -55,6 +94,7 @@
 
   .workbench-hero-copy {
     @apply min-w-0 max-w-3xl;
+    overflow-wrap: anywhere;
   }
 
   .workbench-hero p:not(.workbench-kicker) {
@@ -107,6 +147,8 @@
     background: var(--bg-main);
     border: 1px solid var(--border-color);
     @apply rounded-2xl shadow-sm transition-all;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .glass-modal {
@@ -118,25 +160,38 @@
 
   .workbench-primary-button {
     @apply inline-flex items-center gap-2 rounded-xl bg-[var(--app-accent)] px-5 py-2 text-xs font-black text-[var(--bg-main)] transition-all active:scale-95;
+    min-width: 0;
+    white-space: nowrap;
   }
 
   .workbench-toolbar-button {
     @apply inline-flex items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-main)] px-4 py-2 text-xs font-bold text-[var(--text-primary)] hover:bg-slate-50 transition-all;
+    min-width: 0;
+    white-space: nowrap;
   }
 
   .workbench-input, .workbench-select {
     @apply w-full rounded-xl border border-[var(--border-color)] bg-[var(--bg-main)] px-4 py-2.5 text-sm outline-none transition-all focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/40;
+    min-width: 0;
+    max-width: 100%;
   }
 
   /* 统一表单容器 */
   .workbench-form-item {
     @apply flex flex-col items-stretch gap-1.5;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .workbench-label {
     @apply block w-full text-[10px] font-black uppercase tracking-widest text-slate-400;
     line-height: 1.2;
     min-height: 0.75rem;
+    overflow-wrap: anywhere;
+  }
+
+  .workbench-page :where(p, span, h1, h2, h3, h4, label) {
+    min-width: 0;
   }
 
   .settings-field-grid {
@@ -146,6 +201,76 @@
   .settings-field-grid > .workbench-form-item,
   .settings-channel .workbench-form-item {
     min-width: 0;
+  }
+
+  .settings-page .workbench-form-item {
+    gap: 0.65rem;
+  }
+
+  .settings-page .workbench-label {
+    display: flex;
+    min-height: 1rem;
+    align-items: flex-end;
+    padding-left: 1rem;
+    line-height: 1;
+  }
+
+  .settings-page .workbench-form-item:has(.pl-9) > .workbench-label {
+    padding-left: 2.25rem;
+  }
+
+  .settings-page .workbench-form-item:has(.pl-10) > .workbench-label {
+    padding-left: 2.5rem;
+  }
+
+  .settings-page .workbench-input,
+  .settings-page .workbench-select {
+    min-height: 3.25rem;
+  }
+
+  .settings-page .workbench-form-item > .flex {
+    min-height: 3.25rem;
+    align-items: stretch;
+  }
+
+  .settings-page .workbench-form-item > .flex > .workbench-toolbar-button {
+    min-height: 3.25rem;
+  }
+
+  .settings-auto-grid {
+    align-items: start;
+  }
+
+  .settings-auto-grid > .workbench-form-item {
+    display: grid;
+    grid-template-rows: 1rem 3.25rem;
+    gap: 0.65rem;
+  }
+
+  .settings-auto-grid .workbench-label {
+    min-height: 1rem;
+  }
+
+  .settings-auto-grid .workbench-input,
+  .settings-auto-grid .workbench-select,
+  .settings-auto-grid .workbench-toolbar-button,
+  .settings-auto-folder-control {
+    height: 3.25rem;
+  }
+
+  .settings-auto-folder-control {
+    display: flex;
+    min-width: 0;
+    align-items: stretch;
+    gap: 0.75rem;
+    flex-wrap: nowrap;
+  }
+
+  .settings-auto-folder-control .workbench-toolbar-button {
+    aspect-ratio: 1 / 1;
+    padding-left: 0;
+    padding-right: 0;
+    justify-content: center;
   }
 
   .settings-channel-grid {
@@ -167,3 +292,116 @@
 
 .custom-scrollbar::-webkit-scrollbar { width: 4px; }
 .custom-scrollbar::-webkit-scrollbar-thumb { @apply bg-slate-200 rounded-full dark:bg-slate-800; }
+
+@media (max-width: 767px) {
+  .app-header {
+    min-height: calc(56px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .workbench-page {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .workbench-hero {
+    border-radius: 1rem;
+    padding: 0.9rem 1rem;
+    transition-property: background-color, border-color, color, box-shadow, opacity, transform !important;
+  }
+
+  .workbench-hero > .flex {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .workbench-hero-copy {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .workbench-hero h1 {
+    font-size: 1.25rem;
+    line-height: 1.15;
+  }
+
+  .workbench-hero-stats {
+    width: 100%;
+    justify-content: space-around;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .workbench-panel {
+    border-radius: 1rem;
+    transition-property: background-color, border-color, color, box-shadow, opacity, transform !important;
+  }
+
+  .workbench-panel.p-5,
+  .workbench-panel.p-6,
+  .workbench-panel.p-8 {
+    padding: 1rem !important;
+  }
+
+  .workbench-input,
+  .workbench-select,
+  textarea.workbench-input {
+    font-size: 16px !important;
+  }
+
+  .workbench-form-item > .flex {
+    flex-wrap: wrap;
+  }
+
+  .workbench-form-item > .flex > .relative,
+  .workbench-form-item > .flex > .workbench-input,
+  .workbench-form-item > .flex > .workbench-select,
+  .workbench-form-item > .flex > input,
+  .workbench-form-item > .flex > select {
+    min-width: 0;
+  }
+
+  .workbench-primary-button,
+  .workbench-toolbar-button {
+    justify-content: center;
+    padding-left: 0.875rem;
+    padding-right: 0.875rem;
+  }
+
+  .glass-modal {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (max-width: 639px) {
+  .grid.grid-cols-2,
+  .grid.grid-cols-3,
+  .grid.grid-cols-4,
+  .grid.grid-cols-5 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@supports (-webkit-touch-callout: none) {
+  .app-content,
+  .app-header,
+  .workbench-panel,
+  .workbench-hero {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

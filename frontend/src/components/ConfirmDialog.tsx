@@ -51,11 +51,11 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       {isOpen && (
         <div className="fixed inset-0 z-[9998] pointer-events-none">
           <motion.div
-            initial={{ opacity: 0, y: -18, scale: 0.96, filter: 'blur(10px)' }}
-            animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
-            exit={{ opacity: 0, y: -18, scale: 0.96, filter: 'blur(10px)' }}
+            initial={{ opacity: 0, y: -18, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -18, scale: 0.96 }}
             transition={{ type: 'spring', damping: 24, stiffness: 320 }}
-            className={`pointer-events-auto fixed left-1/2 top-7 w-[min(92vw,560px)] -translate-x-1/2 rounded-[28px] border px-5 py-4 shadow-[0_22px_70px_-28px_rgba(15,23,42,0.55)] backdrop-blur-2xl ${config.border} ${config.bg}`}
+            className={`pointer-events-auto fixed left-1/2 top-[calc(env(safe-area-inset-top)+0.75rem)] w-[min(92vw,560px)] -translate-x-1/2 rounded-[24px] border px-4 py-4 shadow-[0_22px_70px_-28px_rgba(15,23,42,0.55)] backdrop-blur-2xl sm:top-7 sm:rounded-[28px] sm:px-5 ${config.border} ${config.bg}`}
           >
             <div className="flex items-start gap-4">
               <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${config.iconWrap}`}>

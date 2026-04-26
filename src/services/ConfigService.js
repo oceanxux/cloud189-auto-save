@@ -129,7 +129,8 @@ class ConfigService {
           movie: '电影',
           variety: '综艺',
           documentary: '纪录片'
-        }
+        },
+        paused: false
       },
       openai: {
         enable: false,

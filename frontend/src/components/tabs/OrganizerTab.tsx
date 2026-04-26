@@ -34,6 +34,8 @@ const OrganizerTab: React.FC<OrganizerTabProps> = ({ onShowToast }) => {
   const [tasks, setTasks] = useState<OrganizerTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [paused, setPaused] = useState(false);
+  const [toggling, setToggling] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -54,6 +56,43 @@ const OrganizerTab: React.FC<OrganizerTabProps> = ({ onShowToast }) => {
     fetchTasks();
   }, [fetchTasks]);
 
+  useEffect(() => {
+    const fetchControl = async () => {
+      try {
+        const response = await fetch('/api/organizer/control');
+        const data = await response.json();
+        if (data.success) {
+          setPaused(!!data.data?.paused);
+        }
+      } catch (error) {
+        console.error('获取整理控制状态失败:', error);
+      }
+    };
+    fetchControl();
+  }, []);
+
+  const handleTogglePause = async () => {
+    setToggling(true);
+    try {
+      const response = await fetch('/api/organizer/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paused: !paused })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setPaused(!!data.data?.paused);
+        onShowToast?.(data.data?.paused ? '整理已暂停' : '整理已恢复', 'success');
+      } else {
+        onShowToast?.('切换失败: ' + data.error, 'error');
+      }
+    } catch (error) {
+      onShowToast?.('切换失败', 'error');
+    } finally {
+      setToggling(false);
+    }
+  };
+
   const handleRunTask = async (taskId: number) => {
     try {
       const response = await fetch(`/api/organizer/tasks/${taskId}/run`, { method: 'POST' });
@@ -66,6 +105,25 @@ const OrganizerTab: React.FC<OrganizerTabProps> = ({ onShowToast }) => {
       }
     } catch (error) {
       onShowToast?.('执行失败', 'error');
+    }
+  };
+
+  const handleToggleTaskOrganizer = async (task: OrganizerTask) => {
+    try {
+      const response = await fetch(`/api/tasks/${task.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enableOrganizer: !task.enableOrganizer })
+      });
+      const data = await response.json();
+      if (data.success) {
+        onShowToast?.(!task.enableOrganizer ? '已恢复该任务整理器（需手动触发或等待定时执行）' : '已暂停该任务整理器', 'success');
+        fetchTasks();
+      } else {
+        onShowToast?.('切换失败: ' + data.error, 'error');
+      }
+    } catch (error) {
+      onShowToast?.('切换失败', 'error');
     }
   };
 
@@ -98,7 +156,10 @@ const OrganizerTab: React.FC<OrganizerTabProps> = ({ onShowToast }) => {
           <RefreshCw size={20} className="text-[var(--app-accent)]" />
           整理任务列表
         </h2>
-        <div className="flex items-center gap-3">
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center md:w-auto md:gap-3">
+          <button onClick={handleTogglePause} disabled={toggling} className={`px-4 py-2 rounded-2xl text-xs font-black border transition-all ${paused ? 'bg-amber-500/10 text-amber-600 border-amber-300' : 'bg-emerald-500/10 text-emerald-600 border-emerald-300'} disabled:opacity-40`}>
+            {toggling ? '切换中...' : paused ? '恢复整理' : '暂停整理'}
+          </button>
           <div className="relative group w-full md:w-64">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-[var(--app-accent)] transition-colors" size={16} />
             <input type="text" placeholder="搜索任务..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onKeyDown={e => e.key === 'Enter' && fetchTasks()} className="workbench-input pl-11 py-2" />
@@ -127,7 +188,12 @@ const OrganizerTab: React.FC<OrganizerTabProps> = ({ onShowToast }) => {
                 <tr><td colSpan={6} className="px-6 py-20 text-center font-bold text-slate-300 italic">暂无整理任务数据</td></tr>
               ) : tasks.map(task => (
                 <tr key={task.id} className="hover:bg-slate-50/30 dark:hover:bg-slate-800/30 transition-colors">
-                  <td className="px-6 py-4"><button onClick={() => handleRunTask(task.id)} className="workbench-primary-button py-2 px-4 text-xs">触发整理</button></td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => handleRunTask(task.id)} className="workbench-primary-button py-2 px-4 text-xs">触发整理</button>
+                      <button onClick={() => handleToggleTaskOrganizer(task)} className={`py-2 px-4 text-xs font-black rounded-xl border transition-all ${task.enableOrganizer ? 'text-amber-600 border-amber-300 bg-amber-500/10 hover:bg-amber-500/15' : 'text-emerald-600 border-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/15'}`}>{task.enableOrganizer ? '暂停整理' : '恢复整理'}</button>
+                    </div>
+                  </td>
                   <td className="px-6 py-4 font-bold text-[var(--text-primary)]">{getDisplayTaskName(task)}</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
@@ -136,7 +202,7 @@ const OrganizerTab: React.FC<OrganizerTabProps> = ({ onShowToast }) => {
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    {task.lastOrganizeError ? <span className="px-2 py-1 bg-red-500/10 text-red-500 rounded-lg text-[10px] font-bold">整理失败</span> : (task.lastOrganizedAt ? <span className="px-2 py-1 bg-emerald-500/10 text-emerald-500 rounded-lg text-[10px] font-bold">整理完成</span> : <span className="px-2 py-1 bg-slate-200 text-slate-500 rounded-lg text-[10px] font-bold">待命</span>)}
+                    {!task.enableOrganizer ? <span className="px-2 py-1 bg-amber-500/10 text-amber-600 rounded-lg text-[10px] font-bold">已暂停</span> : task.lastOrganizeError ? <span className="px-2 py-1 bg-red-500/10 text-red-500 rounded-lg text-[10px] font-bold">整理失败</span> : (task.lastOrganizedAt ? <span className="px-2 py-1 bg-emerald-500/10 text-emerald-500 rounded-lg text-[10px] font-bold">整理完成</span> : <span className="px-2 py-1 bg-slate-200 text-slate-500 rounded-lg text-[10px] font-bold">待命</span>)}
                   </td>
                   <td className="px-6 py-4 font-medium text-slate-400">{formatDateTime(task.lastOrganizedAt)}</td>
                   <td className="px-6 py-4 max-w-[200px] truncate text-xs text-red-500" title={task.lastOrganizeError || ''}>{task.lastOrganizeError || '-'}</td>

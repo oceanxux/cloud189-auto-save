@@ -71,6 +71,13 @@ class OrganizerService {
             const folderCache = new Map();
             const messages = [];
             for (const file of mediaFiles) {
+                if (this._isPaused()) {
+                    await this.taskRepo.update(task.id, {
+                        lastOrganizeError: '整理已手动暂停'
+                    });
+                    logTaskEvent(`任务[${task.resourceName}]整理过程中检测到手动暂停，已中止后续处理`, 'warn', 'organizer');
+                    return { success: false, message: '整理已手动暂停' };
+                }
                 const aiFile = fileMap.get(String(file.id));
                 if (!aiFile) {
                     console.log(`[Organizer] [跳过] 文件未在映射中: ${file.name}`);
@@ -136,6 +143,10 @@ class OrganizerService {
             console.error(`[Organizer] !!! 任务 ${task.id} 整理过程发生严重异常:`, globalErr);
             throw globalErr;
         }
+    }
+
+    _isPaused() {
+        return !!ConfigService.getConfigValue('organizer.paused', false);
     }
 
     async organizeLooseGroup(params = {}) {

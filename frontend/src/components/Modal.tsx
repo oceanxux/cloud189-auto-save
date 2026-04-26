@@ -22,7 +22,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer,
   return createPortal(
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[3000] overflow-y-auto p-4 sm:p-10 flex items-center justify-center">
+        <div className="fixed inset-0 z-[3000] flex items-end justify-center overflow-y-auto p-3 sm:items-center sm:p-10">
           {/* Backdrop with enhanced blur */}
           <motion.div 
             initial={{ opacity: 0 }}
@@ -34,21 +34,21 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer,
 
           {/* Modal Content */}
           <motion.div 
-            initial={{ opacity: 0, scale: 0.9, y: 30, filter: 'blur(15px)' }}
-            animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
-            exit={{ opacity: 0, scale: 0.9, y: 30, filter: 'blur(15px)' }}
+            initial={{ opacity: 0, scale: 0.96, y: 24 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 24 }}
             transition={{ type: 'spring', damping: 28, stiffness: 300, mass: 0.8 }}
-            className={`relative flex flex-col w-full max-w-2xl max-h-[90vh] overflow-hidden rounded-[32px] 
+            className={`relative flex w-full max-w-2xl flex-col overflow-hidden rounded-[24px] sm:rounded-[32px]
               ${isPlain
                 ? 'bg-white dark:bg-slate-900 shadow-[0_18px_60px_-18px_rgba(15,23,42,0.28)] border-0 backdrop-blur-none'
                 : 'bg-white/80 dark:bg-slate-900/80 shadow-[0_32px_128px_-16px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 backdrop-blur-3xl'}
-              transition-all ${className}`}
+              max-h-[calc(100dvh-1.5rem)] transition-all sm:max-h-[90vh] ${className}`}
           >
             {/* Glossy Overlay for Header */}
             {!isPlain && <div className="absolute top-0 inset-x-0 h-40 bg-gradient-to-b from-white/40 dark:from-white/5 to-transparent pointer-events-none" />}
 
             {/* Header */}
-            <div className={`relative flex items-center justify-between ${isPlain ? 'px-7 py-5 border-b border-[var(--border-color)]' : 'px-10 py-8'}`}>
+            <div className={`relative flex items-center justify-between gap-4 ${isPlain ? 'px-5 py-4 sm:px-7 sm:py-5 border-b border-[var(--border-color)]' : 'px-5 py-5 sm:px-10 sm:py-8'}`}>
               <div className="flex flex-col gap-1">
                 {!isPlain && (
                   <div className="flex items-center gap-2">
@@ -60,7 +60,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer,
               </div>
               <button 
                 onClick={onClose} 
-                className="group relative flex h-12 w-12 items-center justify-center rounded-2xl 
+                className="group relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl sm:h-12 sm:w-12
                   bg-slate-100/50 dark:bg-slate-800/50 hover:bg-red-500 hover:text-white
                   transition-all duration-300 active:scale-90 overflow-hidden"
               >
@@ -69,7 +69,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer,
             </div>
 
             {/* Content with subtle scroll indicator */}
-            <div className={`relative flex-1 overflow-y-auto custom-scrollbar-hidden scroll-smooth ${isPlain ? 'px-7 pb-7 pt-5' : 'px-10 pb-10 pt-2'}`}>
+            <div className={`relative flex-1 overflow-y-auto custom-scrollbar-hidden scroll-smooth ${isPlain ? 'px-5 pb-6 pt-4 sm:px-7 sm:pb-7 sm:pt-5' : 'px-5 pb-6 pt-1 sm:px-10 sm:pb-10 sm:pt-2'}`}>
               <div className="text-[var(--text-primary)]">
                 {children}
               </div>
@@ -77,11 +77,11 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer,
 
             {/* Footer with high contrast layout */}
             {footer != null ? (
-              <div className="relative border-t border-slate-200/40 dark:border-white/5 bg-slate-50/30 dark:bg-black/10 px-10 py-6">
+              <div className="relative border-t border-slate-200/40 dark:border-white/5 bg-slate-50/30 dark:bg-black/10 px-5 py-4 sm:px-10 sm:py-6">
                 {footer}
               </div>
             ) : !hideDefaultFooter ? (
-              <div className="relative border-t border-slate-200/40 dark:border-white/5 bg-slate-50/30 dark:bg-black/10 px-10 py-6 flex flex-col sm:flex-row justify-end gap-4">
+              <div className="relative border-t border-slate-200/40 dark:border-white/5 bg-slate-50/30 dark:bg-black/10 px-5 py-4 sm:px-10 sm:py-6 flex flex-col sm:flex-row justify-end gap-4">
                 <button 
                   onClick={onClose} 
                   className="px-6 py-3 rounded-2xl text-xs font-black text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"

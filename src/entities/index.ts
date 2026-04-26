@@ -621,4 +621,4 @@ export class TmdbCache {
     updatedAt!: Date;
 }
 
-export default { Account, Task, TaskProcessedFile, CommonFolder, Subscription, SubscriptionResource, StrmConfig, WorkflowRun, SystemLog, TmdbCache };
+export default { Account, Task, TaskProcessedFile, CommonFolder, Subscription, SubscriptionResource, StrmConfig, WorkflowRun, TmdbCache };

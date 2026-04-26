@@ -1109,6 +1109,25 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
+    app.get('/api/organizer/control', async (req, res) => {
+        try {
+            res.json({ success: true, data: { paused: !!ConfigService.getConfigValue('organizer.paused', false) } });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
+    app.post('/api/organizer/control', async (req, res) => {
+        try {
+            const paused = !!req.body?.paused;
+            ConfigService.setConfigValue('organizer.paused', paused);
+            await logTaskEvent(`整理器全局状态已${paused ? '暂停' : '恢复'}`, paused ? 'warn' : 'info', 'organizer');
+            res.json({ success: true, data: { paused } });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
     app.post('/api/auto-series', async (req, res) => {
         try {
             console.log('[API] POST /api/auto-series body:', req.body);

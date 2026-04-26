@@ -1888,7 +1888,7 @@ class TaskService {
         return false;
     }
 
-    async checkTaskStatus(cloud189, taskId, count = 0, batchTaskDto) {
+    async checkTaskStatus(cloud189, taskId, count = 0, batchTaskDto, lastTaskStatus = null, minusOneCount = 0) {
         const maxAttempts = 180;
         const pollIntervalMs = 1000;
         if (count > maxAttempts) {
@@ -1902,10 +1902,23 @@ class TaskService {
             return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
         }
         const taskStatus = Number(task.taskStatus);
-        logTaskEvent(`任务编号: ${task.taskId}, 任务状态: ${task.taskStatus}`, 'info', 'transfer')
-        if (taskStatus === -1 || taskStatus === 3 || taskStatus === 1) {
+        if (lastTaskStatus !== taskStatus || count % 10 === 0) {
+            logTaskEvent(`任务编号: ${task.taskId}, 任务状态: ${task.taskStatus}`, 'info', 'transfer');
+        }
+        // -1 在云端通常是失败/异常终态，不应继续高频轮询
+        if (taskStatus === -1) {
+            const nextMinusOneCount = minusOneCount + 1;
+            if (nextMinusOneCount >= 3) {
+                logTaskEvent(`任务编号: ${task.taskId} 连续 ${nextMinusOneCount} 次返回状态(-1)，停止轮询并校验目标目录结果`, 'warn', 'transfer');
+                return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
+            }
+            logTaskEvent(`任务编号: ${task.taskId} 返回状态(-1)，第 ${nextMinusOneCount}/3 次，继续短暂重试`, 'warn', 'transfer');
             await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
-            return await this.checkTaskStatus(cloud189, taskId, count + 1, batchTaskDto)
+            return await this.checkTaskStatus(cloud189, taskId, count + 1, batchTaskDto, taskStatus, nextMinusOneCount);
+        }
+        if (taskStatus === 3 || taskStatus === 1) {
+            await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+            return await this.checkTaskStatus(cloud189, taskId, count + 1, batchTaskDto, taskStatus, 0)
         }
         if (taskStatus === 4) {
             // 如果failedCount > 0 说明有失败或者被和谐的文件, 需要查一次文件列表
@@ -1943,7 +1956,7 @@ class TaskService {
             }
             await cloud189.manageBatchTask(taskId, conflictTaskInfo.targetFolderId, taskInfos, batchTaskDto);
             await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
-            return await this.checkTaskStatus(cloud189, taskId, count + 1, batchTaskDto)
+            return await this.checkTaskStatus(cloud189, taskId, count + 1, batchTaskDto, taskStatus, 0)
         }
         return await this._checkBatchTaskFilesExist(cloud189, batchTaskDto);
     }

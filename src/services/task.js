@@ -184,6 +184,41 @@ class TaskService {
         return path.join(...validParts);
     }
 
+    async _ensureTaskNotExists(taskDto, shareInfo) {
+        const normalizedTargetFolderId = String(taskDto.targetFolderId || '').trim();
+        const normalizedShareId = String(shareInfo?.shareId || '').trim();
+        const rootShareFolderId = String(shareInfo?.fileId || '').trim();
+        const selectedFolders = Array.isArray(taskDto.selectedFolders)
+            ? taskDto.selectedFolders.map(item => String(item || '').trim()).filter(Boolean)
+            : [];
+        const rootSelected = this.checkFolderInList(taskDto, '-1') || selectedFolders.length === 0;
+
+        const existingTasks = await this.taskRepo.find({
+            where: {
+                accountId: taskDto.accountId,
+                targetFolderId: normalizedTargetFolderId,
+                shareId: normalizedShareId
+            }
+        });
+
+        if (!existingTasks.length) {
+            return;
+        }
+
+        const hasRootTask = existingTasks.some(task => String(task.shareFolderId || task.shareFileId || '').trim() === rootShareFolderId);
+        if (rootSelected && hasRootTask) {
+            throw new Error('任务已存在，需删除后重新订阅');
+        }
+
+        if (selectedFolders.length > 0) {
+            const existingFolderIds = new Set(existingTasks.map(task => String(task.shareFolderId || '').trim()).filter(Boolean));
+            const duplicatedFolder = selectedFolders.find(folderId => existingFolderIds.has(folderId));
+            if (duplicatedFolder) {
+                throw new Error('任务已存在，需删除后重新订阅');
+            }
+        }
+    }
+
     _buildTaskTitleContext(task) {
         const rawTitle = String(task?.resourceName || task?.shareFolderName || task?.realFolderName || '').replace(/\(根\)$/g, '').trim();
         const parsed = parseMediaTitle(rawTitle);
@@ -440,6 +475,7 @@ class TaskService {
         const shareCode = cloud189Utils.parseShareCode(taskDto.shareLink);
         const shareInfo = await this.getShareInfo(cloud189, shareCode);
         await logTaskEvent(`分享信息解析完成: shareId=${shareInfo.shareId || ''}, fileId=${shareInfo.fileId || ''}, fileName=${shareInfo.fileName || ''}, isFolder=${!!shareInfo.isFolder}, shareMode=${shareInfo.shareMode}`, 'info', 'task');
+        await this._ensureTaskNotExists(taskDto, shareInfo);
         // 如果分享链接是加密链接, 且没有提供访问码, 则抛出错误
         if (shareInfo.shareMode == 1 ) {
             if (!taskDto.accessCode) {

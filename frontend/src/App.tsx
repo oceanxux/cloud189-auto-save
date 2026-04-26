@@ -268,21 +268,19 @@ function App() {
         </header>
 
         <div className="flex-1 overflow-y-auto px-5 pb-20 pt-4 md:px-6 custom-scrollbar z-0">
-          <AnimatePresence mode="wait">
-            <motion.div key={activeTab} initial={{ opacity: 0, y: 10, filter: 'blur(4px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }} transition={{ duration: 0.3 }}>
-              {activeTab === 'account' && <AccountTab onShowToast={showToast} onShowConfirm={showConfirm} onShowPrompt={showPrompt} />}
-              {activeTab === 'fileManager' && <FileManagerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
-              {activeTab === 'task' && <TaskTab key={`task-${taskRefreshKey}`} onCreateTask={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} onShowConfirm={showConfirm} />}
-              {activeTab === 'autoSeries' && <AutoSeriesTab onShowToast={showToast} onShowConfirm={showConfirm} />}
-              {activeTab === 'tmdb' && <TMDBTab onShowToast={showToast} />}
-              {activeTab === 'cas' && <CasTab onShowToast={showToast} onShowConfirm={showConfirm} />}
-              {activeTab === 'organizer' && <OrganizerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
-              {activeTab === 'subscription' && <SubscriptionTab onTransfer={() => setIsCreateTaskOpen(true)} onShowToast={showToast} onShowConfirm={showConfirm} />}
-              {activeTab === 'strmConfig' && <StrmConfigTab onShowToast={showToast} onShowConfirm={showConfirm} />}
-              {activeTab === 'media' && <MediaTab onShowToast={showToast} />}
-              {activeTab === 'settings' && <SettingsTab onShowToast={showToast} />}
-            </motion.div>
-          </AnimatePresence>
+          <div>
+            {activeTab === 'account' && <AccountTab onShowToast={showToast} onShowConfirm={showConfirm} onShowPrompt={showPrompt} />}
+            {activeTab === 'fileManager' && <FileManagerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'task' && <TaskTab key={`task-${taskRefreshKey}`} onCreateTask={(data) => { setCreateTaskData(data); setIsCreateTaskOpen(true); }} onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'autoSeries' && <AutoSeriesTab onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'tmdb' && <TMDBTab onShowToast={showToast} />}
+            {activeTab === 'cas' && <CasTab onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'organizer' && <OrganizerTab onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'subscription' && <SubscriptionTab onTransfer={() => setIsCreateTaskOpen(true)} onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'strmConfig' && <StrmConfigTab onShowToast={showToast} onShowConfirm={showConfirm} />}
+            {activeTab === 'media' && <MediaTab onShowToast={showToast} />}
+            {activeTab === 'settings' && <SettingsTab onShowToast={showToast} />}
+          </div>
         </div>
         <FloatingActions onAction={handleFloatingAction} />
       </main>

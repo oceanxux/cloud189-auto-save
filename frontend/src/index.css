@@ -134,9 +134,34 @@
   }
 
   .workbench-label {
-    @apply block w-full pl-1 text-[10px] font-black uppercase tracking-widest text-slate-400;
+    @apply block w-full text-[10px] font-black uppercase tracking-widest text-slate-400;
     line-height: 1.2;
     min-height: 0.75rem;
+  }
+
+  .settings-field-grid {
+    @apply grid grid-cols-1 gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-4;
+  }
+
+  .settings-field-grid > .workbench-form-item,
+  .settings-channel .workbench-form-item {
+    min-width: 0;
+  }
+
+  .settings-channel-grid {
+    @apply grid grid-cols-1 gap-x-10 gap-y-8 xl:grid-cols-2;
+  }
+
+  .settings-channel {
+    @apply grid content-start gap-4;
+  }
+
+  .settings-channel-heading {
+    @apply flex min-h-10 items-center gap-4;
+  }
+
+  .settings-input-pair {
+    @apply grid grid-cols-1 gap-4 md:grid-cols-2;
   }
 }
 

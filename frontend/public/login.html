@@ -3,30 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>登录 - 天翼云盘自动转存系统</title>
+    <title>Cloud189 Sync - Login</title>
     <style>
         :root {
-            --bg: #f8fafc;
-            --card: #ffffff;
-            --border: #dbe3f0;
-            --text: #0f172a;
-            --muted: #475569;
-            --primary: #0b57d0;
-            --primary-hover: #0948ad;
+            --page-bg: #f8fafc;
+            --card-bg: rgba(255, 255, 255, 0.94);
+            --card-border: #e5e7eb;
+            --text-primary: #0f172a;
+            --text-secondary: #64748b;
+            --text-muted: #8aa0bf;
+            --input-bg: #ffffff;
+            --input-border: #dbe5f3;
+            --input-icon: #b6c4d9;
+            --focus-border: #8db8ff;
+            --focus-ring: rgba(96, 165, 250, 0.16);
+            --button-start: #6da3ff;
+            --button-end: #1d6cf2;
+            --button-shadow: rgba(37, 99, 235, 0.26);
             --danger: #dc2626;
+            --brand: #2563eb;
         }
 
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #0f172a;
-                --card: #1e293b;
-                --border: #334155;
-                --text: #f8fafc;
-                --muted: #94a3b8;
-            }
+        * {
+            box-sizing: border-box;
         }
 
-        * { box-sizing: border-box; }
+        html,
+        body {
+            min-height: 100%;
+        }
+
         body {
             margin: 0;
             min-height: 100vh;
@@ -34,122 +40,412 @@
             align-items: center;
             justify-content: center;
             padding: 24px;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            transition: background-color 0.3s, color 0.3s;
+            overflow: auto;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+            color: var(--text-primary);
+            background: linear-gradient(135deg, var(--page-bg) 0%, #f6f9fe 48%, #eef5ff 100%);
         }
-        .card {
+
+        .login-shell {
+            position: relative;
             width: 100%;
-            max-width: 420px;
-            padding: 40px;
-            border-radius: 28px;
-            background: var(--card);
-            border: 1px solid var(--border);
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+            max-width: 590px;
         }
-        .eyebrow {
-            margin: 0 0 12px;
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.1em;
-            color: var(--primary);
-            text-transform: uppercase;
+
+        .login-card {
+            position: relative;
+            min-height: 620px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            padding: 56px 74px 40px;
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            background: var(--card-bg);
+            box-shadow: 0 26px 70px rgba(30, 64, 175, 0.12), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+            backdrop-filter: blur(12px);
         }
-        h1 {
-            margin: 0 0 8px;
-            font-size: 32px;
-            font-weight: 600;
-            color: var(--text);
+
+        .login-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 0 auto;
+            height: 150px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0));
+            pointer-events: none;
         }
-        p {
-            margin: 0 0 32px;
-            color: var(--muted);
-            line-height: 1.6;
-            font-size: 15px;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-        }
-        input {
+
+        .form-content {
+            position: relative;
+            z-index: 1;
             width: 100%;
-            height: 52px;
-            padding: 0 16px;
-            margin-bottom: 20px;
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            font-size: 16px;
-            background: var(--bg);
-            color: var(--text);
-            outline: none;
-            transition: all 0.2s;
+            max-width: 442px;
+            margin: 0 auto;
         }
-        input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 87, 208, 0.1);
-        }
-        button {
+
+        .form-header {
             width: 100%;
-            height: 52px;
-            border: 0;
-            border-radius: 16px;
-            background: var(--primary);
-            color: #ffffff;
-            font-size: 16px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.2s;
-            margin-top: 8px;
-        }
-        button:hover { 
-            background: var(--primary-hover);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(11, 87, 208, 0.2);
-        }
-        button:active {
-            transform: translateY(0);
-        }
-        button:disabled { 
-            opacity: 0.6; 
-            cursor: not-allowed; 
-            transform: none;
-        }
-        .error {
-            min-height: 20px;
-            margin-top: 16px;
-            color: var(--danger);
-            font-size: 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 34px;
             text-align: center;
-            font-weight: 500;
+        }
+
+        .brand-badge {
+            width: 76px;
+            height: 76px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 18px;
+            border: 1px solid #e2e8f0;
+            border-radius: 24px;
+            background: #ffffff;
+            box-shadow: 0 14px 32px rgba(37, 99, 235, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+        }
+
+        .cloud-logo {
+            width: 54px;
+            height: 44px;
+            display: block;
+        }
+
+        .eyebrow {
+            margin: 0;
+            font-size: 15px;
+            line-height: 1.2;
+            font-weight: 800;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--brand);
+        }
+
+        .login-form {
+            width: 100%;
+            display: grid;
+            gap: 18px;
+        }
+
+        .field {
+            width: 100%;
+            display: grid;
+            gap: 10px;
+        }
+
+        .field label {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            font-weight: 700;
+            color: #3f577b;
+        }
+
+        .label-icon {
+            width: 19px;
+            height: 19px;
+            color: var(--brand);
+        }
+
+        .input-shell {
+            width: 100%;
+            position: relative;
+        }
+
+        .input-icon {
+            position: absolute;
+            left: 18px;
+            top: 50%;
+            width: 19px;
+            height: 19px;
+            color: var(--input-icon);
+            transform: translateY(-50%);
+            pointer-events: none;
+            transition: color 0.2s ease;
+        }
+
+        .input-shell input {
+            width: 100%;
+            height: 58px;
+            border: 1px solid var(--input-border);
+            border-radius: 18px;
+            background: var(--input-bg);
+            color: var(--text-primary);
+            padding: 0 18px 0 52px;
+            font-size: 15px;
+            outline: none;
+            box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.02);
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+        }
+
+        .input-shell.has-action input {
+            padding-right: 54px;
+        }
+
+        .input-shell input::placeholder {
+            color: #a8b6cc;
+        }
+
+        .input-shell input:focus {
+            border-color: var(--focus-border);
+            box-shadow: 0 0 0 4px var(--focus-ring), inset 0 1px 2px rgba(15, 23, 42, 0.02);
+            background: #ffffff;
+        }
+
+        .input-shell:focus-within .input-icon {
+            color: var(--brand);
+        }
+
+        .visibility-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            width: 36px;
+            height: 36px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            border: 0;
+            border-radius: 12px;
+            background: transparent;
+            color: var(--input-icon);
+            cursor: pointer;
+            transform: translateY(-50%);
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+
+        .visibility-toggle:hover,
+        .visibility-toggle:focus-visible {
+            background: #f1f6ff;
+            color: var(--brand);
+            outline: none;
+        }
+
+        .visibility-toggle svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        .visibility-toggle .eye-off {
+            display: none;
+        }
+
+        .visibility-toggle.is-visible .eye {
+            display: none;
+        }
+
+        .visibility-toggle.is-visible .eye-off {
+            display: block;
+        }
+
+        .submit-button {
+            width: 100%;
+            height: 58px;
+            margin-top: 10px;
+            border: 0;
+            border-radius: 18px;
+            background: linear-gradient(135deg, var(--button-start) 0%, var(--button-end) 100%);
+            color: #ffffff;
+            font-family: inherit;
+            font-size: 17px;
+            font-weight: 800;
+            letter-spacing: 0;
+            cursor: pointer;
+            box-shadow: 0 16px 28px var(--button-shadow);
+            transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+        }
+
+        .submit-button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 20px 34px rgba(37, 99, 235, 0.3);
+            filter: saturate(1.04);
+        }
+
+        .submit-button:active {
+            transform: translateY(0);
+            box-shadow: 0 12px 20px rgba(37, 99, 235, 0.24);
+        }
+
+        .submit-button:disabled {
+            opacity: 0.72;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: 0 10px 20px rgba(37, 99, 235, 0.18);
+        }
+
+        .error-message {
+            min-height: 22px;
+            margin: -4px 2px 0;
+            color: var(--danger);
+            font-size: 13px;
+            line-height: 1.5;
+            text-align: center;
+        }
+
+        .security-note {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+            color: var(--text-muted);
+        }
+
+        .security-note svg {
+            flex: 0 0 auto;
+            width: 18px;
+            height: 18px;
+            color: #8ba7d8;
+        }
+
+        .security-note span {
+            font-size: 14px;
+            line-height: 1.4;
+            font-weight: 600;
+        }
+
+        @media (max-width: 640px) {
+            body {
+                align-items: flex-start;
+                padding: 18px;
+            }
+
+            .login-shell {
+                max-width: 100%;
+            }
+
+            .login-card {
+                min-height: auto;
+                padding: 34px 22px 28px;
+                border-radius: 22px;
+            }
+
+            .form-header {
+                margin-bottom: 28px;
+            }
+
+            .brand-badge {
+                width: 68px;
+                height: 68px;
+                border-radius: 22px;
+            }
         }
     </style>
 </head>
 <body>
-    <main class="card">
-        <div class="eyebrow">Cloud189 Auto Save</div>
-        <h1>登录</h1>
-        <p>输入系统账号后进入控制台。</p>
-        <form id="loginForm">
-            <label for="username">用户名</label>
-            <input id="username" name="username" type="text" autocomplete="username" required placeholder="请输入用户名" />
-            <label for="password">密码</label>
-            <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
-            <button id="submitButton" type="submit">登录</button>
-            <div id="errorMessage" class="error"></div>
-        </form>
+    <main class="login-shell">
+        <section class="login-card">
+            <div class="form-content">
+                <div class="form-header">
+                    <div class="brand-badge" aria-hidden="true">
+                        <svg class="cloud-logo" viewBox="0 0 72 58" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <defs>
+                                <linearGradient id="cloudLogoGradient" x1="12" y1="6" x2="58" y2="48" gradientUnits="userSpaceOnUse">
+                                    <stop stop-color="#5b8cff"></stop>
+                                    <stop offset="1" stop-color="#1d63dc"></stop>
+                                </linearGradient>
+                                <linearGradient id="syncLogoGradient" x1="24" y1="21" x2="50" y2="45" gradientUnits="userSpaceOnUse">
+                                    <stop stop-color="#ffffff"></stop>
+                                    <stop offset="1" stop-color="#dce9ff"></stop>
+                                </linearGradient>
+                            </defs>
+                            <path fill="url(#cloudLogoGradient)" d="M53.5 46.5H19.6C10 46.5 2.8 39.7 2.8 31.3c0-7.6 6.1-14 14.1-15C20.1 8.7 27.5 4 36 4c10.1 0 18.4 6.8 19.7 15.7 7.6 1.2 13.5 7.2 13.5 14.1 0 7.1-6.9 12.7-15.7 12.7Z"></path>
+                            <path fill="url(#syncLogoGradient)" d="M35.8 17.2a14.6 14.6 0 0 1 12.8 7.7l-4.8-.5-.4 4.2 10.5 1.1 1.1-10.5-4.2-.4-.4 3.8A18.8 18.8 0 0 0 20.8 22l3 3a14.4 14.4 0 0 1 12-7.8Zm-.1 26.9c-5.3 0-10.2-3-12.7-7.7l4.8.5.4-4.2-10.5-1.1-1.1 10.5 4.2.4.4-3.8a18.8 18.8 0 0 0 29.6.6l-3-3a14.3 14.3 0 0 1-12.1 7.8Z"></path>
+                            <text x="36" y="35" text-anchor="middle" fill="#1f65df" font-size="11" font-weight="800" font-family="Inter, Arial, sans-serif">189</text>
+                        </svg>
+                    </div>
+
+                    <p class="eyebrow">Cloud189 Sync</p>
+                </div>
+
+                <form id="loginForm" class="login-form">
+                    <div class="field">
+                        <label for="username">
+                            <svg class="label-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
+                                <path d="M4 20a8 8 0 0 1 16 0"></path>
+                            </svg>
+                            <span>用户名</span>
+                        </label>
+                        <div class="input-shell">
+                            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
+                                <path d="M4 20a8 8 0 0 1 16 0"></path>
+                            </svg>
+                            <input id="username" name="username" type="text" autocomplete="username" required placeholder="请输入用户名">
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="password">
+                            <svg class="label-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="4.75" y="10.25" width="14.5" height="9" rx="2.5"></rect>
+                                <path d="M8 10.25V8.5a4 4 0 0 1 8 0v1.75"></path>
+                            </svg>
+                            <span>密码</span>
+                        </label>
+                        <div class="input-shell has-action">
+                            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="4.75" y="10.25" width="14.5" height="9" rx="2.5"></rect>
+                                <path d="M8 10.25V8.5a4 4 0 0 1 8 0v1.75"></path>
+                                <path d="M12 14.25v1.75"></path>
+                            </svg>
+                            <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码">
+                            <button id="togglePassword" class="visibility-toggle" type="button" aria-label="显示密码">
+                                <svg class="eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M2.75 12s3.5-6.25 9.25-6.25S21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z"></path>
+                                    <path d="M12 14.75a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5Z"></path>
+                                </svg>
+                                <svg class="eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="m3 3 18 18"></path>
+                                    <path d="M10.6 10.6A2.75 2.75 0 0 0 13.4 13.4"></path>
+                                    <path d="M7.2 5.45A10.6 10.6 0 0 1 12 4.75c5.75 0 9.25 6.25 9.25 6.25a16.4 16.4 0 0 1-3.35 4.1"></path>
+                                    <path d="M14.45 18.02A10.8 10.8 0 0 1 12 18.25C6.25 18.25 2.75 12 2.75 12a16.9 16.9 0 0 1 4-4.62"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <button id="submitButton" class="submit-button" type="submit">登录</button>
+                    <div id="errorMessage" class="error-message" aria-live="polite"></div>
+                </form>
+
+                <div class="security-note">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 3.75 5.75 6v5.25c0 4.18 2.6 7.92 6.25 9 3.65-1.08 6.25-4.82 6.25-9V6L12 3.75Z"></path>
+                        <path d="m9.5 12.25 1.75 1.75 3.5-4"></path>
+                    </svg>
+                    <span>系统安全保护中</span>
+                </div>
+            </div>
+        </section>
     </main>
+
     <script>
         const form = document.getElementById('loginForm');
         const submitButton = document.getElementById('submitButton');
         const errorMessage = document.getElementById('errorMessage');
+        const passwordInput = document.getElementById('password');
+        const togglePassword = document.getElementById('togglePassword');
+
+        if (togglePassword && passwordInput) {
+            togglePassword.addEventListener('click', () => {
+                const shouldShow = passwordInput.type === 'password';
+                passwordInput.type = shouldShow ? 'text' : 'password';
+                togglePassword.classList.toggle('is-visible', shouldShow);
+                togglePassword.setAttribute('aria-label', shouldShow ? '隐藏密码' : '显示密码');
+            });
+        }
+
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             errorMessage.textContent = '';
             submitButton.disabled = true;
+            submitButton.textContent = '登录中...';
+
             try {
                 const response = await fetch('/api/auth/login', {
                     method: 'POST',
@@ -169,6 +465,7 @@
                 errorMessage.textContent = '登录请求失败';
             } finally {
                 submitButton.disabled = false;
+                submitButton.textContent = '登录';
             }
         });
     </script>

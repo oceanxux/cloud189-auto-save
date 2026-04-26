@@ -35,6 +35,31 @@ interface Props {
   onShowToast?: (message: string, type: ToastType) => void;
 }
 
+const SettingField: React.FC<{ label: string; className?: string; children: React.ReactNode }> = ({ label, className = '', children }) => (
+  <div className={`workbench-form-item ${className}`}>
+    <label className="workbench-label">{label}</label>
+    {children}
+  </div>
+);
+
+const ToggleHeading: React.FC<{
+  checked: boolean;
+  onToggle: () => void;
+  activeClass: string;
+  title: string;
+  caption: string;
+}> = ({ checked, onToggle, activeClass, title, caption }) => (
+  <div className="settings-channel-heading">
+    <div onClick={onToggle} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${checked ? activeClass : 'border-slate-300'}`}>
+      {checked && <Check size={14} strokeWidth={4} className="text-white" />}
+    </div>
+    <div>
+      <p className="text-xs font-black uppercase tracking-tighter">{title}</p>
+      <p className="text-[9px] font-bold text-slate-400">{caption}</p>
+    </div>
+  </div>
+);
+
 const initialSettings: SettingsData = {
   task: {
     taskExpireDays: 3, taskCheckCron: '0 19-23 * * *', cleanRecycle: false,
@@ -176,7 +201,7 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
                       onChange={(e) => updateSettings('system.logExpireDays', parseInt(e.target.value))} 
                       className="flex-1 accent-blue-500 h-1.5 bg-slate-200 rounded-lg cursor-pointer" 
                     />
-                    <span className="w-12 text-center text-[10px] font-black bg-blue-50 text-blue-600 py-1.5 rounded-xl border border-blue-100">{settings.system.logExpireDays || 7}天</span>
+                    <span className="w-14 min-w-14 whitespace-nowrap text-center text-[10px] font-black bg-blue-50 text-blue-600 py-1.5 rounded-xl border border-blue-100">{settings.system.logExpireDays || 7}天</span>
                   </div>
                </div>
                <div className="workbench-form-item">
@@ -245,35 +270,31 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
 
           <div className="pt-8 border-t border-[var(--border-color)] space-y-6">
             <h4 className="text-sm font-black uppercase tracking-widest flex items-center gap-2"><PlayCircle size={18} className="text-blue-500" /> 自动化追剧默认全局配置</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-              <div className="workbench-form-item">
-                <label className="workbench-label">执行账号</label>
+            <div className="settings-field-grid">
+              <SettingField label="执行账号">
                 <select value={settings.task.autoCreate.accountId} onChange={(e) => updateSettings('task.autoCreate.accountId', e.target.value)} className="workbench-select font-bold">
                   <option value="">请选择默认账号...</option>
                   {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.alias || acc.username}</option>)}
                 </select>
-              </div>
-              <div className="workbench-form-item">
-                <label className="workbench-label">默认模式</label>
+              </SettingField>
+              <SettingField label="默认模式">
                 <select value={settings.task.autoCreate.mode} onChange={(e) => updateSettings('task.autoCreate.mode', e.target.value)} className="workbench-select font-bold">
                   <option value="lazy">懒转存 (Lazy)</option>
                   <option value="normal">常规模式 (Normal)</option>
                 </select>
-              </div>
-              <div className="workbench-form-item">
-                <label className="workbench-label">默认存入路径</label>
+              </SettingField>
+              <SettingField label="默认存入路径">
                 <div className="flex gap-2">
                   <input type="text" value={settings.task.autoCreate.targetFolder || '根目录'} readOnly className="flex-1 workbench-input font-bold opacity-60 text-xs" />
                   <button onClick={() => { setFolderSelectorMode('target'); setIsFolderSelectorOpen(true); }} disabled={!settings.task.autoCreate.accountId} className="workbench-toolbar-button px-3 shadow-none shrink-0"><Folder size={18} /></button>
                 </div>
-              </div>
-              <div className="workbench-form-item">
-                <label className="workbench-label">默认归档路径</label>
+              </SettingField>
+              <SettingField label="默认归档路径">
                 <div className="flex gap-2">
                   <input type="text" value={settings.task.autoCreate.organizerTargetFolderName || '默认继承'} readOnly className="flex-1 workbench-input font-bold opacity-60 text-xs" />
                   <button onClick={() => { setFolderSelectorMode('organizer'); setIsFolderSelectorOpen(true); }} disabled={!settings.task.autoCreate.accountId} className="workbench-toolbar-button px-3 shadow-none shrink-0"><Folder size={18} /></button>
                 </div>
-              </div>
+              </SettingField>
             </div>
           </div>
         </div>
@@ -282,47 +303,81 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
       <section className="space-y-4">
         <h3 className="workbench-section-title px-2"><Bell size={20} className="text-amber-500" /> 通知与推送</h3>
         <div className="workbench-panel p-8 space-y-8">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div onClick={() => updateSettings('wecom.enable', !settings.wecom.enable)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${settings.wecom.enable ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300'}`}>{settings.wecom.enable && <Check size={14} strokeWidth={4} className="text-white" />}</div>
-                <div><p className="text-xs font-black uppercase tracking-tighter">企业微信机器人</p><p className="text-[9px] font-bold text-slate-400">Webhook 推送</p></div>
-              </div>
-              <input type="text" value={settings.wecom.webhook} onChange={(e) => updateSettings('wecom.webhook', e.target.value)} className="workbench-input font-mono text-xs" placeholder="企业微信 Webhook" />
+          <div className="settings-channel-grid">
+            <div className="settings-channel">
+              <ToggleHeading
+                checked={settings.wecom.enable}
+                onToggle={() => updateSettings('wecom.enable', !settings.wecom.enable)}
+                activeClass="bg-emerald-500 border-emerald-500"
+                title="企业微信机器人"
+                caption="Webhook 推送"
+              />
+              <SettingField label="企业微信 Webhook">
+                <input type="text" value={settings.wecom.webhook} onChange={(e) => updateSettings('wecom.webhook', e.target.value)} className="workbench-input font-mono text-xs" placeholder="企业微信 Webhook" />
+              </SettingField>
             </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div onClick={() => updateSettings('telegram.enable', !settings.telegram.enable)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${settings.telegram.enable ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>{settings.telegram.enable && <Check size={14} strokeWidth={4} className="text-white" />}</div>
-                <div><p className="text-xs font-black uppercase tracking-tighter">Telegram 通知</p><p className="text-[9px] font-bold text-slate-400">Bot Token / Chat ID</p></div>
+            <div className="settings-channel">
+              <ToggleHeading
+                checked={settings.telegram.enable}
+                onToggle={() => updateSettings('telegram.enable', !settings.telegram.enable)}
+                activeClass="bg-blue-500 border-blue-500"
+                title="Telegram 通知"
+                caption="Bot Token / Chat ID"
+              />
+              <div className="settings-input-pair">
+                <SettingField label="Bot Token">
+                  <input type="text" value={settings.telegram.botToken} onChange={(e) => updateSettings('telegram.botToken', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Bot Token" />
+                </SettingField>
+                <SettingField label="Chat ID">
+                  <input type="text" value={settings.telegram.chatId} onChange={(e) => updateSettings('telegram.chatId', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Chat ID" />
+                </SettingField>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <input type="text" value={settings.telegram.botToken} onChange={(e) => updateSettings('telegram.botToken', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Bot Token" />
-                <input type="text" value={settings.telegram.chatId} onChange={(e) => updateSettings('telegram.chatId', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Chat ID" />
-              </div>
-              <input type="text" value={settings.telegram.proxyDomain} onChange={(e) => updateSettings('telegram.proxyDomain', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Telegram 反代域名（可选）" />
+              <SettingField label="Telegram 反代域名">
+                <input type="text" value={settings.telegram.proxyDomain} onChange={(e) => updateSettings('telegram.proxyDomain', e.target.value)} className="workbench-input font-mono text-xs" placeholder="可选" />
+              </SettingField>
             </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div onClick={() => updateSettings('bark.enable', !settings.bark.enable)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${settings.bark.enable ? 'bg-orange-500 border-orange-500' : 'border-slate-300'}`}>{settings.bark.enable && <Check size={14} strokeWidth={4} className="text-white" />}</div>
-                <div><p className="text-xs font-black uppercase tracking-tighter">Bark</p><p className="text-[9px] font-bold text-slate-400">iOS 推送</p></div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <input type="text" value={settings.bark.serverUrl} onChange={(e) => updateSettings('bark.serverUrl', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Server URL" />
-                <input type="text" value={settings.bark.key} onChange={(e) => updateSettings('bark.key', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Key" />
+            <div className="settings-channel">
+              <ToggleHeading
+                checked={settings.bark.enable}
+                onToggle={() => updateSettings('bark.enable', !settings.bark.enable)}
+                activeClass="bg-orange-500 border-orange-500"
+                title="Bark"
+                caption="iOS 推送"
+              />
+              <div className="settings-input-pair">
+                <SettingField label="Server URL">
+                  <input type="text" value={settings.bark.serverUrl} onChange={(e) => updateSettings('bark.serverUrl', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Server URL" />
+                </SettingField>
+                <SettingField label="Key">
+                  <input type="text" value={settings.bark.key} onChange={(e) => updateSettings('bark.key', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Key" />
+                </SettingField>
               </div>
             </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div onClick={() => updateSettings('pushplus.enable', !settings.pushplus.enable)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${settings.pushplus.enable ? 'bg-violet-500 border-violet-500' : 'border-slate-300'}`}>{settings.pushplus.enable && <Check size={14} strokeWidth={4} className="text-white" />}</div>
-                <div><p className="text-xs font-black uppercase tracking-tighter">PushPlus</p><p className="text-[9px] font-bold text-slate-400">Token / Topic / Webhook</p></div>
+            <div className="settings-channel">
+              <ToggleHeading
+                checked={settings.pushplus.enable}
+                onToggle={() => updateSettings('pushplus.enable', !settings.pushplus.enable)}
+                activeClass="bg-violet-500 border-violet-500"
+                title="PushPlus"
+                caption="Token / Topic / Webhook"
+              />
+              <div className="settings-input-pair">
+                <SettingField label="Token">
+                  <input type="text" value={settings.pushplus.token} onChange={(e) => updateSettings('pushplus.token', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Token" />
+                </SettingField>
+                <SettingField label="Topic">
+                  <input type="text" value={settings.pushplus.topic} onChange={(e) => updateSettings('pushplus.topic', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Topic" />
+                </SettingField>
+                <SettingField label="Channel">
+                  <input type="text" value={settings.pushplus.channel} onChange={(e) => updateSettings('pushplus.channel', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Channel" />
+                </SettingField>
+                <SettingField label="To">
+                  <input type="text" value={settings.pushplus.to} onChange={(e) => updateSettings('pushplus.to', e.target.value)} className="workbench-input font-mono text-xs" placeholder="To" />
+                </SettingField>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <input type="text" value={settings.pushplus.token} onChange={(e) => updateSettings('pushplus.token', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Token" />
-                <input type="text" value={settings.pushplus.topic} onChange={(e) => updateSettings('pushplus.topic', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Topic" />
-                <input type="text" value={settings.pushplus.channel} onChange={(e) => updateSettings('pushplus.channel', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Channel" />
-                <input type="text" value={settings.pushplus.to} onChange={(e) => updateSettings('pushplus.to', e.target.value)} className="workbench-input font-mono text-xs" placeholder="To" />
-              </div>
-              <input type="text" value={settings.pushplus.webhook} onChange={(e) => updateSettings('pushplus.webhook', e.target.value)} className="workbench-input font-mono text-xs" placeholder="Webhook（可选）" />
+              <SettingField label="Webhook">
+                <input type="text" value={settings.pushplus.webhook} onChange={(e) => updateSettings('pushplus.webhook', e.target.value)} className="workbench-input font-mono text-xs" placeholder="可选" />
+              </SettingField>
             </div>
           </div>
         </div>
@@ -331,11 +386,19 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
       <section className="space-y-4">
         <h3 className="workbench-section-title px-2"><Globe size={20} className="text-sky-500" /> 网络代理与系统地址</h3>
         <div className="workbench-panel p-8 space-y-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            <div className="workbench-form-item"><label className="workbench-label">代理 Host</label><input type="text" value={settings.proxy.host} onChange={(e) => updateSettings('proxy.host', e.target.value)} className="workbench-input font-mono text-xs" /></div>
-            <div className="workbench-form-item"><label className="workbench-label">代理 Port</label><input type="number" value={settings.proxy.port || ''} onChange={(e) => updateSettings('proxy.port', parseInt(e.target.value) || 0)} className="workbench-input font-bold" /></div>
-            <div className="workbench-form-item"><label className="workbench-label">代理用户名</label><input type="text" value={settings.proxy.username} onChange={(e) => updateSettings('proxy.username', e.target.value)} className="workbench-input" /></div>
-            <div className="workbench-form-item"><label className="workbench-label">代理密码</label><input type="password" value={settings.proxy.password} onChange={(e) => updateSettings('proxy.password', e.target.value)} className="workbench-input" /></div>
+          <div className="settings-field-grid">
+            <SettingField label="代理 Host">
+              <input type="text" value={settings.proxy.host} onChange={(e) => updateSettings('proxy.host', e.target.value)} className="workbench-input font-mono text-xs" />
+            </SettingField>
+            <SettingField label="代理 Port">
+              <input type="number" value={settings.proxy.port || ''} onChange={(e) => updateSettings('proxy.port', parseInt(e.target.value) || 0)} className="workbench-input font-bold" />
+            </SettingField>
+            <SettingField label="代理用户名">
+              <input type="text" value={settings.proxy.username} onChange={(e) => updateSettings('proxy.username', e.target.value)} className="workbench-input" />
+            </SettingField>
+            <SettingField label="代理密码">
+              <input type="password" value={settings.proxy.password} onChange={(e) => updateSettings('proxy.password', e.target.value)} className="workbench-input" />
+            </SettingField>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             {(['telegram', 'tmdb', 'openai', 'cloud189', 'customPush'] as const).map((key) => (
@@ -345,9 +408,13 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 border-t border-[var(--border-color)] pt-8">
-            <div className="workbench-form-item"><label className="workbench-label">系统外部访问地址</label><input type="text" value={settings.system.baseUrl} onChange={(e) => updateSettings('system.baseUrl', e.target.value)} className="workbench-input font-mono text-xs" placeholder="https://your-domain" /></div>
-            <div className="workbench-form-item"><label className="workbench-label">流媒体代理密钥</label><input type="text" value={settings.system.streamProxySecret} onChange={(e) => updateSettings('system.streamProxySecret', e.target.value)} className="workbench-input font-mono text-xs" /></div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5 border-t border-[var(--border-color)] pt-8">
+            <SettingField label="系统外部访问地址">
+              <input type="text" value={settings.system.baseUrl} onChange={(e) => updateSettings('system.baseUrl', e.target.value)} className="workbench-input font-mono text-xs" placeholder="https://your-domain" />
+            </SettingField>
+            <SettingField label="流媒体代理密钥">
+              <input type="text" value={settings.system.streamProxySecret} onChange={(e) => updateSettings('system.streamProxySecret', e.target.value)} className="workbench-input font-mono text-xs" />
+            </SettingField>
           </div>
         </div>
       </section>

@@ -56,6 +56,8 @@ class TelegramBotService {
         this.cloudSaverSearchMap = new Map();
 
         this.tmdbService = new TMDBService();
+        this.cloudSaverSearchResults = [];
+        this.cloudSaverSearchKeyword = '';
 
         // 批量重命名状态机
         // step: null | 'folder' | 'tmdb' | 'confirm'
@@ -125,6 +127,7 @@ class TelegramBotService {
             { command: 'fs', description: '添加常用目录' },
             { command: 'rename', description: '批量剧集重命名' },
             { command: 'ai', description: 'AI 工作流助手' },
+            { command: 'reboot', description: '重启整个程序' },
             { command: 'cancel', description: '取消当前操作' }
         ]);
         // 从数据库中加载默认的账号
@@ -188,6 +191,7 @@ class TelegramBotService {
                 '/series 剧名 [年份] - 自动追剧(正常任务)\n' +
                 '/lazy_series 剧名 [年份] - 自动追剧(懒转存STRM)\n' +
                 '/ai 指令 - 通过 AI 工作流执行整理/查询\n' +
+                '/reboot - 重启整个程序\n' +
                 '/cancel - 取消当前操作\n\n' +
                 '📥 创建任务：\n' +
                 '直接发送天翼云盘分享链接即可创建任务\n' +
@@ -542,6 +546,9 @@ class TelegramBotService {
                 await this.bot.sendMessage(chatId, '未开启CloudSaver, 请先在网页端配置CloudSaver');
                 return;
             }
+            this.cloudSaverSearchResults = [];
+            this.cloudSaverSearchKeyword = '';
+            this.cloudSaverSearchMap = new Map();
             this.isSearchMode = true;
             // 设置3分钟超时
             this._resetSearchModeTimeout(chatId);
@@ -578,6 +585,23 @@ class TelegramBotService {
             }
         });
 
+        this.bot.onText(/^\/reboot$/, async (msg) => {
+            const chatId = msg.chat.id;
+            if (!this._checkChatId(chatId)) return;
+            if (!this._checkUserId(chatId)) return;
+            const message = await this._safeSendMessage(chatId, '收到重启指令，正在准备重启程序...');
+            setTimeout(async () => {
+                try {
+                    if (this.bot && message?.message_id) {
+                        await this._safeEditMessageText(chatId, message.message_id, '程序即将退出，等待守护进程自动拉起新实例...');
+                    }
+                } catch (error) {
+                } finally {
+                    process.exit(0);
+                }
+            }, 1500);
+        });
+
         this.bot.onText(/\/cancel/, async (msg) => {
             const chatId = msg.chat.id;
             if (!this._checkChatId(chatId)) return
@@ -585,6 +609,9 @@ class TelegramBotService {
             this.currentShareLink = null;
             this.currentAccessCode = null;
             this.isSearchMode = false;  // 退出搜索模式
+            this.cloudSaverSearchResults = [];
+            this.cloudSaverSearchKeyword = '';
+            this.cloudSaverSearchMap = new Map();
             this.isSubscriptionMode = false;
             this.subscriptionSearchResults = [];
             this._resetRenameState();  // 退出重命名模式
@@ -650,6 +677,12 @@ class TelegramBotService {
                         break;
                     case 'subsc':
                         await this.createTaskFromSubscriptionSearch(chatId, data.k, messageId);
+                        break;
+                    case 'noop':
+                        await this.bot.answerCallbackQuery(callbackQuery.id, { text: '请输入编号开始转存', show_alert: false });
+                        break;
+                    case 'csp':
+                        await this.showCloudSaverSearchResults(chatId, Number(data.p || 1), messageId);
                         break;
                     case 'silent':
                         await this.toggleSilentMode(chatId, data.v, messageId);
@@ -1469,29 +1502,133 @@ class TelegramBotService {
             const message = await this.bot.sendMessage(chatId, '正在搜索...');
             const result = await this.cloudSaverSdk.search(keyword);
             if (result.length <= 0) {
-                await this.bot.editMessageText('未找到相关资源', {
-                    chat_id: chatId,
-                    message_id: message.message_id
-                });
+                await this._safeEditMessageText(chatId, message.message_id, '未找到相关资源');
                 return
             }
-            // 保存结果到this.cloudSaverSearchMap
-            result.forEach((item, index) => {
-                this.cloudSaverSearchMap.set(index + 1, item.cloudLinks[0].link);
-            });
-            const results = `💡 以下资源来自 CloudSaver\n` +
-                `📝 共找到 ${result.length} 个结果,输入编号可转存\n` +
-                result.map((item, index) =>
-                    `${index + 1}. 🎬 <a href="${item.cloudLinks[0].link}">${item.title}</a>`
-                ).join('\n\n');
-            await this.bot.editMessageText(`搜索结果：\n\n${results}`, {
-                chat_id: chatId,
-                message_id: message.message_id,
-                parse_mode: 'HTML'
-            });
+            this.cloudSaverSearchResults = Array.isArray(result) ? result : [];
+            this.cloudSaverSearchKeyword = keyword;
+            this.cloudSaverSearchMap = new Map();
+            await this.showCloudSaverSearchResults(chatId, 1, message.message_id);
         } catch (error) {
-            await this.bot.sendMessage(chatId, `搜索失败: ${error.message}`);
+            await this._safeSendMessage(chatId, `搜索失败: ${error.message}`);
         }
+    }
+
+    async showCloudSaverSearchResults(chatId, page = 1, messageId = null) {
+        const pageSize = 8;
+        const results = Array.isArray(this.cloudSaverSearchResults) ? this.cloudSaverSearchResults : [];
+        const total = results.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const currentPage = Math.min(Math.max(Number(page) || 1, 1), totalPages);
+        const start = (currentPage - 1) * pageSize;
+        const items = results.slice(start, start + pageSize);
+
+        this.cloudSaverSearchMap = new Map();
+        items.forEach((item, index) => {
+            this.cloudSaverSearchMap.set(start + index + 1, item.cloudLinks?.[0]?.link);
+        });
+
+        const lines = [
+            'CloudSaver 搜索结果',
+            `关键词: ${this.cloudSaverSearchKeyword || '-'}`,
+            `第 ${currentPage}/${totalPages} 页，共 ${total} 个结果`,
+            '输入显示编号可转存'
+        ];
+
+        items.forEach((item, index) => {
+            const title = this._truncateText(String(item.title || '未命名资源'), 180);
+            lines.push(`${start + index + 1}. ${title}`);
+        });
+
+        const keyboard = items.map((item, index) => [{
+            text: `${start + index + 1}. ${this._truncateText(String(item.title || '未命名资源'), 32)}`,
+            callback_data: JSON.stringify({ t: 'noop', i: start + index + 1 })
+        }]);
+
+        if (totalPages > 1) {
+            const pageButtons = [];
+            if (currentPage > 1) {
+                pageButtons.push({ text: '⬅️', callback_data: JSON.stringify({ t: 'csp', p: currentPage - 1 }) });
+            }
+            pageButtons.push({ text: `${currentPage}/${totalPages}`, callback_data: JSON.stringify({ t: 'csp', p: currentPage }) });
+            if (currentPage < totalPages) {
+                pageButtons.push({ text: '➡️', callback_data: JSON.stringify({ t: 'csp', p: currentPage + 1 }) });
+            }
+            keyboard.push(pageButtons);
+        }
+
+        const text = lines.join('\n\n');
+        if (messageId) {
+            await this._safeEditMessageText(chatId, messageId, text, { reply_markup: { inline_keyboard: keyboard } });
+            return;
+        }
+        await this._safeSendMessage(chatId, text, { reply_markup: { inline_keyboard: keyboard } });
+    }
+
+    _escapeHtml(text = '') {
+        return String(text || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    _truncateText(text = '', maxLength = 200) {
+        const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+        if (normalized.length <= maxLength) {
+            return normalized;
+        }
+        return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+    }
+
+    _splitMessage(text = '', maxLength = 3500) {
+        const normalized = String(text || '');
+        if (normalized.length <= maxLength) {
+            return [normalized];
+        }
+        const chunks = [];
+        let remaining = normalized;
+        while (remaining.length > maxLength) {
+            let splitIndex = remaining.lastIndexOf('\n', maxLength);
+            if (splitIndex < maxLength * 0.5) {
+                splitIndex = maxLength;
+            }
+            chunks.push(remaining.slice(0, splitIndex));
+            remaining = remaining.slice(splitIndex).replace(/^\n+/, '');
+        }
+        if (remaining) {
+            chunks.push(remaining);
+        }
+        return chunks;
+    }
+
+    async _safeSendMessage(chatId, text, options = {}) {
+        const chunks = this._splitMessage(text, options.parse_mode === 'HTML' ? 3000 : 3500);
+        let lastMessage = null;
+        for (let i = 0; i < chunks.length; i++) {
+            const chunkOptions = i === 0 ? options : { ...options };
+            lastMessage = await this.bot.sendMessage(chatId, chunks[i], chunkOptions);
+        }
+        return lastMessage;
+    }
+
+    async _safeEditMessageText(chatId, messageId, text, options = {}) {
+        const chunks = this._splitMessage(text, options.parse_mode === 'HTML' ? 3000 : 3500);
+        if (chunks.length === 1) {
+            return await this.bot.editMessageText(chunks[0], {
+                chat_id: chatId,
+                message_id: messageId,
+                ...options
+            });
+        }
+        await this.bot.editMessageText(chunks[0], {
+            chat_id: chatId,
+            message_id: messageId,
+            ...options
+        });
+        for (let i = 1; i < chunks.length; i++) {
+            await this.bot.sendMessage(chatId, chunks[i], options);
+        }
+        return null;
     }
 
     async handleAutoSeriesCommand(msg, input, mode = 'normal') {

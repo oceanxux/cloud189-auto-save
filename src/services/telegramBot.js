@@ -1,4 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
+const got = require('got');
 const { AppDataSource } = require('../database');
 const { Task, Account, CommonFolder, Subscription, SubscriptionResource } = require('../entities');
 const { TaskService } = require('./task');
@@ -8,12 +9,14 @@ const { TMDBService } = require('./tmdb');
 const { AutoSeriesService } = require('./autoSeries');
 const { OrganizerService } = require('./organizer');
 const ConfigService = require('./ConfigService');
+const AIService = require('./ai');
 const path = require('path');
 const { default: cloudSaverSDK } = require('../sdk/cloudsaver/sdk');
 const ProxyUtil = require('../utils/ProxyUtil');
 const cloud189Utils = require('../utils/Cloud189Utils');
 const { LazyShareStrmService } = require('./lazyShareStrm');
 const { SubscriptionService } = require('./subscription');
+const { logTaskEvent } = require('../utils/logUtils');
 
 class TelegramBotService {
     constructor(token, chatId, proxyDomain, workflowRunner = null) {
@@ -119,7 +122,6 @@ class TelegramBotService {
             { command: 'accounts', description: '账号列表' },
             { command: 'tasks', description: '任务列表' },
             { command: 'subs', description: '订阅资源列表' },
-            { command: 'subsearch', description: '搜索订阅资源' },
             { command: 'silent', description: '切换静默模式' },
             { command: 'execute_all', description: '执行所有任务' },
             { command: 'organize', description: '执行任务整理' },
@@ -217,8 +219,7 @@ class TelegramBotService {
                 '3. 点击搜索结果中的链接可复制\n' +
                 '4. 输入 /cancel 退出搜索模式\n\n' +
                 '📡 订阅资源：\n' +
-                '/subs - 查看订阅与分页资源\n' +
-                '/subsearch 关键词 - 在订阅资源里按名称搜索';
+                '/subs - 进入订阅资源模式（可浏览，也可直接输入关键词搜索）';
 
             await this.bot.sendMessage(msg.chat.id, helpText);
         });
@@ -291,6 +292,7 @@ class TelegramBotService {
                 if (!input) {
                     return;
                 }
+                await logTaskEvent(`Bot订阅资源搜索: ${input}`, 'info', 'subscription');
                 await this.searchSubscriptionResources(chatId, input);
                 return;
             }
@@ -334,20 +336,8 @@ class TelegramBotService {
             if (!this._checkChatId(chatId)) return
             if (!this._checkUserId(chatId)) return
             this.isSubscriptionMode = true;
-            await this.bot.sendMessage(chatId, '已进入订阅资源模式，可直接输入关键词搜索资源，或点击列表分页浏览。\n输入 /cancel 退出。');
+            await this.bot.sendMessage(chatId, '已进入订阅资源模式。\n现在直接输入关键词，将只搜索“订阅资源”，不会走 CloudSaver。\n也可以点击列表分页浏览。\n输入 /cancel 退出。');
             await this.showSubscriptions(chatId);
-        });
-
-        this.bot.onText(/\/subsearch(?:\s+(.+))?$/, async (msg, match) => {
-            const chatId = msg.chat.id;
-            if (!this._checkChatId(chatId)) return
-            if (!this._checkUserId(chatId)) return
-            const keyword = String(match?.[1] || '').trim();
-            if (!keyword) {
-                await this.bot.sendMessage(chatId, '用法: /subsearch 关键词');
-                return;
-            }
-            await this.searchSubscriptionResources(chatId, keyword);
         });
 
         this.bot.onText(/\/silent(?:\s+(on|off|status))?$/, async (msg, match) => {
@@ -568,6 +558,7 @@ class TelegramBotService {
             if (!this._checkChatId(chatId)) return;
             if (!this._checkUserId(chatId)) return;
             this.aiSessionEnabled = true;
+            await logTaskEvent(`Bot AI会话已开启: chatId=${chatId}`, 'info', 'ai');
             const commandText = String(match?.[1] || '').trim();
             if (!commandText) {
                 await this.bot.sendMessage(
@@ -581,6 +572,7 @@ class TelegramBotService {
             }
             const handled = await this._handleAiWorkflow(chatId, commandText);
             if (!handled) {
+                await logTaskEvent(`Bot AI会话未命中工作流: ${commandText}`, 'warn', 'ai');
                 await this.bot.sendMessage(chatId, '当前 AI 指令暂不支持。请改用“查询未刮削/未整理 + 整理/移动到默认整理根目录”这类表达。');
             }
         });
@@ -930,7 +922,7 @@ class TelegramBotService {
         }
 
         const message = subscriptions.length > 0
-            ? `订阅列表 (第${page}页)\n\n${subscriptions.map(item => `• ${item.name}`).join('\n')}`
+            ? `订阅列表\n\n第 ${page}/${totalPages} 页，共 ${total} 个订阅\n请直接点击下方按钮进入资源列表`
             : '📭 暂无订阅';
 
         if (messageId) {
@@ -970,8 +962,9 @@ class TelegramBotService {
         keyboard.push(pageButtons);
         keyboard.push([{ text: '📚 返回订阅列表', callback_data: JSON.stringify({ t: 'subp', p: 1 }) }]);
 
+        const totalPages = Math.max(1, Math.ceil(Number(result.total || 0) / 8));
         const message = this.subscriptionSelection.items.length > 0
-            ? `订阅资源 (第${page}页 / 共${result.total || 0}条)\n\n${this.subscriptionSelection.items.map((item, index) => `${index + 1}. ${item.title}`).join('\n')}`
+            ? `订阅资源\n\n第 ${page}/${totalPages} 页，共 ${result.total || 0} 条\n请直接点击下方按钮选择资源`
             : '当前页暂无资源';
 
         if (messageId) {
@@ -1010,7 +1003,7 @@ class TelegramBotService {
             text: `🎞 ${item.title}`,
             callback_data: JSON.stringify({ t: 'subsc', k: index })
         }]);
-        const message = `订阅资源搜索结果: ${keyword}\n\n${results.map((item, index) => `${index + 1}. [${item.subscriptionName}] ${item.title}`).join('\n')}`;
+        const message = `订阅资源搜索结果\n\n关键词: ${keyword}\n匹配 ${results.length} 条\n请直接点击下方按钮选择资源`;
         await this.bot.sendMessage(chatId, message, {
             reply_markup: { inline_keyboard: keyboard }
         });
@@ -1499,6 +1492,7 @@ class TelegramBotService {
         // 重置超时时间
         this._resetSearchModeTimeout(chatId);
         try {
+            await logTaskEvent(`Bot CloudSaver搜索: ${keyword}`, 'info', 'system');
             const message = await this.bot.sendMessage(chatId, '正在搜索...');
             const result = await this.cloudSaverSdk.search(keyword);
             if (result.length <= 0) {
@@ -1532,13 +1526,8 @@ class TelegramBotService {
             'CloudSaver 搜索结果',
             `关键词: ${this.cloudSaverSearchKeyword || '-'}`,
             `第 ${currentPage}/${totalPages} 页，共 ${total} 个结果`,
-            '输入显示编号可转存'
+            '请直接点击下方按钮选择资源'
         ];
-
-        items.forEach((item, index) => {
-            const title = this._truncateText(String(item.title || '未命名资源'), 180);
-            lines.push(`${start + index + 1}. ${title}`);
-        });
 
         const keyboard = items.map((item, index) => [{
             text: `${start + index + 1}. ${this._truncateText(String(item.title || '未命名资源'), 32)}`,
@@ -1725,49 +1714,110 @@ class TelegramBotService {
     }
 
     async _handleAiWorkflow(chatId, text) {
-        if (!this.workflowRunner) {
-            await this.bot.sendMessage(chatId, '当前未启用 AI 工作流引擎。');
-            return true;
-        }
-
         const normalized = String(text || '').trim();
         if (!normalized) {
             return false;
         }
+        await logTaskEvent(`Bot AI会话输入: ${normalized}`, 'info', 'ai');
 
         const wantsOrganize = /(整理|刮削|归档|重命名|移动)/u.test(normalized);
         const targetFolderName = /未整理/u.test(normalized) ? '未整理' : (/未刮削/u.test(normalized) ? '未刮削' : '');
-        if (!wantsOrganize || !targetFolderName) {
-            return false;
+        const canRunWorkflow = Boolean(this.workflowRunner && wantsOrganize && targetFolderName);
+        await logTaskEvent(`Bot AI意图判断: wantsOrganize=${wantsOrganize}, targetFolder=${targetFolderName || 'none'}, canRunWorkflow=${canRunWorkflow}`, 'info', 'ai');
+
+        if (canRunWorkflow) {
+            const mediaType = /电视剧|剧集|动漫|综艺/u.test(normalized)
+                ? 'tv'
+                : (/电影/u.test(normalized) ? 'movie' : 'all');
+
+            const runId = await this.workflowRunner.start('organize_dir', {
+                folderName: targetFolderName,
+                mediaType
+            }, {
+                source: 'bot',
+                chatId: String(chatId)
+            });
+            await logTaskEvent(`Bot AI工作流已启动: runId=${runId}, folder=${targetFolderName}, mediaType=${mediaType}`, 'info', 'ai');
+
+            const run = await this.workflowRunner.getRun(runId);
+            if (!run) {
+                await logTaskEvent(`Bot AI工作流启动后未找到运行实例: runId=${runId}`, 'error', 'ai');
+                await this.bot.sendMessage(chatId, 'AI 工作流启动失败。');
+                return true;
+            }
+            await logTaskEvent(`Bot AI工作流状态: runId=${runId}, status=${run.status}`, 'info', 'ai');
+
+            if (run.status === 'awaiting_confirm') {
+                return true;
+            }
+
+            if (['done', 'failed'].includes(String(run.status || ''))) {
+                return true;
+            }
+
+            await this.bot.sendMessage(chatId, '工作流已启动，请稍候。');
+            return true;
         }
 
-        const mediaType = /电视剧|剧集|动漫|综艺/u.test(normalized)
-            ? 'tv'
-            : (/电影/u.test(normalized) ? 'movie' : 'all');
+        try {
+            await logTaskEvent('Bot AI转交程序动作解析接口 /api/chat', 'info', 'ai');
+            const apiKey = String(ConfigService.getConfigValue('system.apiKey') || '').trim();
+            const response = await got.post('http://127.0.0.1:3000/api/chat', {
+                json: {
+                    message: normalized,
+                    history: []
+                },
+                headers: apiKey ? { 'x-api-key': apiKey } : undefined,
+                responseType: 'json',
+                timeout: {
+                    request: 180000
+                },
+                retry: { limit: 0 }
+            });
+            const reply = response.body?.data?.reply;
+            const action = response.body?.data?.action;
+            if (reply && typeof reply === 'string') {
+                await logTaskEvent(`Bot AI程序接口返回成功，回复长度=${reply.length}`, 'info', 'ai');
+                await this._safeSendMessage(chatId, reply);
+                if (action?.mode === 'workflow_confirm') {
+                    await logTaskEvent('Bot AI收到待确认工作流动作卡片', 'info', 'ai');
+                }
+                return true;
+            }
+        } catch (error) {
+            await logTaskEvent(`Bot AI程序接口调用失败: ${error.message}`, 'error', 'ai');
+        }
 
-        const runId = await this.workflowRunner.start('organize_dir', {
-            folderName: targetFolderName,
-            mediaType
-        }, {
-            source: 'bot',
-            chatId: String(chatId)
+        if (!AIService.isEnabled()) {
+            await logTaskEvent('Bot AI对话回退失败: AI服务未启用', 'warn', 'ai');
+            await this.bot.sendMessage(chatId, '当前 AI 对话已开启，但未命中可执行工作流，且 AI 接口未配置可用。\n请直接描述“查询未刮削/未整理 + 整理/移动”这类指令，或先配置 AI。');
+            return true;
+        }
+
+        await logTaskEvent('Bot AI进入对话回复模式', 'info', 'ai');
+
+        const reply = await AIService.chat([
+            {
+                role: 'system',
+                content: '你是天翼云盘自动转存机器人的对话助手。请用简洁中文回答，优先帮助用户理解当前程序能力、配置和操作方式。如果用户想让程序执行动作，但表达不够明确，请指出需要补充的信息。不要输出 markdown 表格。'
+            },
+            {
+                role: 'user',
+                content: normalized
+            }
+        ], {
+            temperature: 0.4,
+            max_tokens: 800
         });
 
-        const run = await this.workflowRunner.getRun(runId);
-        if (!run) {
-            await this.bot.sendMessage(chatId, 'AI 工作流启动失败。');
+        if (reply.success && String(reply.data || '').trim()) {
+            await logTaskEvent(`Bot AI对话成功，回复长度=${String(reply.data || '').trim().length}`, 'info', 'ai');
+            await this._safeSendMessage(chatId, String(reply.data).trim());
             return true;
         }
 
-        if (run.status === 'awaiting_confirm') {
-            return true;
-        }
-
-        if (['done', 'failed'].includes(String(run.status || ''))) {
-            return true;
-        }
-
-        await this.bot.sendMessage(chatId, '工作流已启动，请稍候。');
+        await logTaskEvent(`Bot AI对话失败: ${reply.error || 'empty response'}`, 'error', 'ai');
+        await this.bot.sendMessage(chatId, `AI 暂时没有返回结果${reply.error ? `：${reply.error}` : ''}`);
         return true;
     }
 

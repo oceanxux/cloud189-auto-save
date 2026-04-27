@@ -1,10 +1,39 @@
 const SEASON_EPISODE_PATTERNS = [
-    /(?:^|\s)S(\d{1,2})\s*E(\d{1,3})(?=\s|$)/i,
-    /(?:^|\s)(\d{1,2})x(\d{1,3})(?=\s|$)/i,
-    /(?:^|\s)S(\d{1,2})(?=\s|$)/i,
-    /(?:^|\s)Season\s*(\d{1,2})(?=\s|$)/i,
-    /(?:^|\s)第\s*(\d{1,2})\s*季(?=\s|$)/i
+    /(?:^|[\s._-])S(\d{1,2})\s*E(\d{1,3})(?=[\s._-]|$)/i,
+    /(?:^|[\s._-])(\d{1,2})x(\d{1,3})(?=[\s._-]|$)/i,
+    /(?:^|[\s._-])S(\d{1,2})(?=[\s._-]|$)/i,
+    /(?:^|[\s._-])Season\s*(\d{1,2})(?=[\s._-]|$)/i,
+    /(?:^|[\s._-])第\s*(\d{1,2})\s*季(?=[\s._-]|$)/i
 ];
+
+const CN_NUMBER_MAP = new Map([
+    ['零', 0], ['一', 1], ['二', 2], ['两', 2], ['三', 3], ['四', 4], ['五', 5],
+    ['六', 6], ['七', 7], ['八', 8], ['九', 9], ['十', 10]
+]);
+
+function parseChineseNumber(text = '') {
+    const normalized = String(text || '').trim();
+    if (!normalized) return null;
+    if (/^\d+$/.test(normalized)) return parseInt(normalized, 10);
+    if (normalized === '十') return 10;
+    if (normalized.startsWith('十')) {
+        const tail = CN_NUMBER_MAP.get(normalized.slice(1));
+        return tail != null ? 10 + tail : null;
+    }
+    if (normalized.endsWith('十')) {
+        const head = CN_NUMBER_MAP.get(normalized.slice(0, -1));
+        return head != null ? head * 10 : null;
+    }
+    const tenIndex = normalized.indexOf('十');
+    if (tenIndex > 0) {
+        const head = CN_NUMBER_MAP.get(normalized.slice(0, tenIndex));
+        const tail = CN_NUMBER_MAP.get(normalized.slice(tenIndex + 1));
+        if (head != null && tail != null) {
+            return head * 10 + tail;
+        }
+    }
+    return CN_NUMBER_MAP.get(normalized) ?? null;
+}
 
 const NOISE_PATTERNS = [
     /\b(?:2160|1080|720|480)p\b/ig,
@@ -44,6 +73,7 @@ function parseMediaTitle(source) {
     
     // 1. 先把所有点号、下划线转换为空格，方便后续匹配
     text = text.replace(/[._]/g, ' ');
+    const textForSeasonEpisode = text;
 
     // 2. 暴力截断：遇到常见的元数据起始符，直接砍掉后面所有内容
     // 增加对不带空格的 + 的处理
@@ -68,7 +98,7 @@ function parseMediaTitle(source) {
     const removedTokens = [];
 
     // 4. 提取年份 (通常是 4 位数字)
-    const yearMatch = text.match(/\b(19\d{2}|20\d{2})\b/);
+    const yearMatch = textForSeasonEpisode.match(/\b(19\d{2}|20\d{2})\b/);
     if (yearMatch) {
         year = parseInt(yearMatch[1]);
         // 提取完年份后，如果是作为后缀的年份，可以考虑截断
@@ -76,12 +106,23 @@ function parseMediaTitle(source) {
 
     // 5. 提取季度和集数
     for (const pattern of SEASON_EPISODE_PATTERNS) {
-        const match = text.match(pattern);
+        const match = textForSeasonEpisode.match(pattern);
         if (match) {
             if (match[1]) season = parseInt(match[1]);
             if (match[2]) episode = parseInt(match[2]);
             removedTokens.push(match[0]);
             break;
+        }
+    }
+
+    if (season == null) {
+        const chineseSeasonMatch = textForSeasonEpisode.match(/第\s*([零一二两三四五六七八九十百\d]{1,4})\s*季/i);
+        if (chineseSeasonMatch?.[1]) {
+            const parsedSeason = parseChineseNumber(chineseSeasonMatch[1]);
+            if (parsedSeason != null) {
+                season = parsedSeason;
+                removedTokens.push(chineseSeasonMatch[0]);
+            }
         }
     }
 
@@ -99,6 +140,8 @@ function parseMediaTitle(source) {
     text = text
         .replace(/(?:^|\s)S\d{1,2}\s*E\d{1,3}(?=\s|$)/ig, ' ')
         .replace(/(?:^|\s)S\d{1,2}(?=\s|$)/ig, ' ')
+        .replace(/(?:^|\s)Season\s*\d{1,2}(?=\s|$)/ig, ' ')
+        .replace(/第\s*(?:[零一二两三四五六七八九十百\d]{1,4})\s*季/ig, ' ')
         .replace(/\b(19\d{2}|20\d{2})\b/g, ' ')
         .replace(/[\s-+;|]+$/g, ' ');
 

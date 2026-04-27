@@ -46,6 +46,15 @@ const cases = [
             season: 1,
             episode: null
         }
+    },
+    {
+        input: '梦魇绝镇 (2022) 第三季',
+        expected: {
+            cleanTitle: '梦魇绝镇',
+            year: 2022,
+            season: 3,
+            episode: null
+        }
     }
 ];
 

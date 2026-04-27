@@ -220,10 +220,111 @@ class TaskService {
     }
 
     _buildTaskTitleContext(task) {
-        const rawTitle = String(task?.resourceName || task?.shareFolderName || task?.realFolderName || '').replace(/\(根\)$/g, '').trim();
-        const parsed = parseMediaTitle(rawTitle);
-        const year = parsed.year ? String(parsed.year) : ((rawTitle.match(/(19|20)\d{2}/) || [])[0] || '');
-        return { rawTitle, parsed, year };
+        const primaryTitle = String(task?.resourceName || task?.realFolderName || task?.shareFolderName || '').replace(/\(根\)$/g, '').trim();
+        const seasonHintTitle = String(task?.shareFolderName || task?.realFolderName || task?.resourceName || '').replace(/\(根\)$/g, '').trim();
+        const parsedPrimary = parseMediaTitle(primaryTitle);
+        const parsedSeasonHint = seasonHintTitle === primaryTitle ? parsedPrimary : parseMediaTitle(seasonHintTitle);
+        const mergedSeason = parsedPrimary.season || parsedSeasonHint.season || null;
+        const year = parsedPrimary.year
+            ? String(parsedPrimary.year)
+            : ((primaryTitle.match(/(19|20)\d{2}/) || [])[0] || (parsedSeasonHint.year ? String(parsedSeasonHint.year) : ''));
+        return {
+            rawTitle: primaryTitle,
+            parsed: {
+                ...parsedPrimary,
+                season: mergedSeason
+            },
+            year
+        };
+    }
+
+    _buildEpisodeIdentity(file, task = null) {
+        const restoredName = CasService.isCasFile(file?.name) ? CasService.getOriginalFileName(file.name) : file?.name;
+        const parsed = parseMediaTitle(restoredName || file?.restoredFileName || file?.sourceFileName || '');
+        const fallbackSeason = Number(task?.tmdbSeasonNumber || 0) || Number(parseMediaTitle(String(task?.shareFolderName || task?.realFolderName || task?.resourceName || '')).season || 0) || 1;
+        if (parsed?.episode != null) {
+            return {
+                key: `S${String(parsed.season || fallbackSeason).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}`,
+                season: Number(parsed.season || fallbackSeason),
+                episode: Number(parsed.episode),
+                parsedName: restoredName || file?.restoredFileName || file?.sourceFileName || file?.name || ''
+            };
+        }
+        return null;
+    }
+
+    _getQualityScoreByName(fileName = '') {
+        const normalized = String(fileName || '').toLowerCase();
+        const resolutionMatch = normalized.match(/\b(4320|2160|1080|720|480)p\b/);
+        const resolution = Number(resolutionMatch?.[1] || 0);
+        const sourceScore = /remux|blu[\s.-]?ray/.test(normalized)
+            ? 30
+            : (/web[\s.-]?dl|webrip/.test(normalized) ? 20 : 0);
+        const codecScore = /hevc|x265|h\s*265/.test(normalized) ? 5 : 0;
+        return resolution * 100 + sourceScore + codecScore;
+    }
+
+    _dedupeFilesByEpisode(files = [], task = null) {
+        const selectedByEpisode = new Map();
+        const duplicates = [];
+        const uniqueFiles = [];
+
+        for (const file of files || []) {
+            const identity = this._buildEpisodeIdentity(file, task);
+            if (!identity) {
+                uniqueFiles.push(file);
+                continue;
+            }
+            const score = this._getQualityScoreByName(identity.parsedName);
+            const current = selectedByEpisode.get(identity.key);
+            if (!current) {
+                selectedByEpisode.set(identity.key, { file, score, identity });
+                continue;
+            }
+            if (score > current.score) {
+                duplicates.push(current.file);
+                selectedByEpisode.set(identity.key, { file, score, identity });
+            } else {
+                duplicates.push(file);
+            }
+        }
+
+        uniqueFiles.push(...Array.from(selectedByEpisode.values()).map(item => item.file));
+        return { uniqueFiles, duplicates };
+    }
+
+    _countUniqueEpisodes(files = [], task = null) {
+        const episodeKeys = new Set();
+        let fallbackCount = 0;
+        for (const file of files || []) {
+            const identity = this._buildEpisodeIdentity(file, task);
+            if (identity?.key) {
+                episodeKeys.add(identity.key);
+            } else {
+                fallbackCount += 1;
+            }
+        }
+        return episodeKeys.size + fallbackCount;
+    }
+
+    _countMergedUniqueEpisodes(existingFiles = [], incomingFiles = [], task = null) {
+        const selectedByEpisode = new Map();
+        let fallbackCount = 0;
+
+        for (const file of [...(existingFiles || []), ...(incomingFiles || [])]) {
+            const identity = this._buildEpisodeIdentity(file, task);
+            if (!identity?.key) {
+                fallbackCount += 1;
+                continue;
+            }
+            const score = this._getQualityScoreByName(identity.parsedName || file?.name || file?.restoredFileName || file?.sourceFileName || '');
+            const current = selectedByEpisode.get(identity.key);
+            if (!current || score > current.score) {
+                selectedByEpisode.set(identity.key, { score });
+            }
+        }
+
+        return selectedByEpisode.size + fallbackCount;
     }
 
     async resolveTmdbSeasonInfo(task, { updateTask = false } = {}) {
@@ -906,14 +1007,21 @@ class TaskService {
 
     // 处理新文件
     async _handleNewFiles(task, newFiles, cloud189, mediaSuffixs) {
+        const deduped = this._dedupeFilesByEpisode(newFiles, task);
+        const effectiveNewFiles = deduped.uniqueFiles;
+        const duplicateFiles = deduped.duplicates;
         const taskInfoList = [];
         const fileNameList = [];
-        let fileCount = 0;
         const casService = new CasService();
         const normalFiles = [];
         const casFiles = [];
 
-        for (const file of newFiles) {
+        for (const duplicate of duplicateFiles) {
+            await this._saveProcessedFileRecord(task, duplicate, 'deduped');
+            logTaskEvent(`转存前去重: 标记重复版本 ${duplicate.name}，保留更高画质版本`, 'info', 'transfer');
+        }
+
+        for (const file of effectiveNewFiles) {
             if (task.enableSystemProxy) {
                 throw new Error('系统代理模式已移除');
             } else {
@@ -934,7 +1042,6 @@ class TaskService {
                 ? `${file.name} -> ${CasService.getOriginalFileName(file.name)}`
                 : file.name;
             fileNameList.push(`├─ ${displayName}`);
-            if (this._checkFileSuffix(file, true, mediaSuffixs)) fileCount++;
         }
         // 如果有多个文件，最后一个文件使用└─
         if (fileNameList.length > 0) {
@@ -943,7 +1050,7 @@ class TaskService {
         }
         if (taskInfoList.length > 0) {
             if (!task.enableSystemProxy) {
-                await this._saveProcessedFileRecords(task, newFiles, 'processing');
+                await this._saveProcessedFileRecords(task, effectiveNewFiles, 'processing');
                 const batchTaskDto = new BatchTaskDto({
                     taskInfos: JSON.stringify(taskInfoList),
                     type: 'SHARE_SAVE',
@@ -964,7 +1071,7 @@ class TaskService {
             fileNameList.splice(5, fileNameList.length - 10, '├─ ...');
         }
 
-        return { fileNameList, fileCount };
+        return { fileNameList, fileCount: this._countUniqueEpisodes(effectiveNewFiles, task), effectiveNewFiles };
     }
 
     async _restoreTransferredCasFiles(task, newFiles, cloud189, casService = new CasService()) {
@@ -1230,7 +1337,7 @@ class TaskService {
             }
 
             const folderFiles = await this.getAllFolderFiles(cloud189, task);
-            const { existingFiles, existingFileNames, existingMediaCount } = folderFiles.reduce((acc, file) => {
+            const { existingFiles, existingFileNames, existingMediaFiles } = folderFiles.reduce((acc, file) => {
                 if (!file.isFolder) {
                     acc.existingFiles.add(file.md5);
                     acc.existingFileNames.add(file.name);
@@ -1241,16 +1348,17 @@ class TaskService {
                         acc.existingFileNames.add(CasService.getOriginalFileName(file.name));
                     }
                     if ((task.totalEpisodes == null || task.totalEpisodes <= 0) || this._checkFileSuffix(file, true, mediaSuffixs)) {
-                        acc.existingMediaCount++;
+                        acc.existingMediaFiles.push(file);
                     }
                 }
                 return acc;
             }, { 
                 existingFiles: new Set(), 
                 existingFileNames: new Set(), 
-                existingMediaCount: 0 
+                existingMediaFiles: [] 
             });
             // 始终以目标目录中的现有媒体文件数回填进度，避免首次执行但无新增时进度不刷新。
+            const existingMediaCount = this._countUniqueEpisodes(existingMediaFiles, task);
             task.currentEpisodes = existingMediaCount;
             let aiFiltered = false;
             if (this._isAiAdvancedMode() && task.matchPattern && task.matchOperator && task.matchValue) {
@@ -1275,19 +1383,19 @@ class TaskService {
 
             // 处理新文件并保存到数据库和云盘
             if (newFiles.length > 0) {
-                const { fileNameList, fileCount } = await this._handleNewFiles(task, newFiles, cloud189, mediaSuffixs);
+                const { fileNameList, fileCount, effectiveNewFiles } = await this._handleNewFiles(task, newFiles, cloud189, mediaSuffixs);
                 const resourceName = task.shareFolderName? `${task.resourceName}/${task.shareFolderName}` : task.resourceName;
                 saveResults.push(`${resourceName}追更${fileCount}集: \n${fileNameList.join('\n')}`);
                 const firstExecution = !task.lastFileUpdateTime;
                 task.status = 'processing';
                 task.lastFileUpdateTime = new Date();
-                task.currentEpisodes = existingMediaCount + fileCount;
+                task.currentEpisodes = this._countMergedUniqueEpisodes(existingMediaFiles, effectiveNewFiles, task);
                 task.retryCount = 0;
                 process.nextTick(() => {
                     this.eventService.emit('taskComplete', new TaskCompleteEventDto({
                         task,
                         cloud189,
-                        fileList: newFiles,
+                        fileList: effectiveNewFiles,
                         overwriteStrm: false,
                         firstExecution: firstExecution
                     }));
@@ -1346,25 +1454,35 @@ class TaskService {
 
         const taskIds = taskList.map(task => task.id);
         const taskProcessedFileRepo = this._getTaskProcessedFileRepo();
-        const rawStats = await taskProcessedFileRepo
-            .createQueryBuilder('record')
-            .select('record.taskId', 'taskId')
-            .addSelect('COUNT(DISTINCT record.sourceFileId)', 'recordCount')
-            .addSelect('MAX(record.updatedAt)', 'lastUpdatedAt')
-            .where('record.taskId IN (:...taskIds)', { taskIds })
-            .andWhere('record.status IN (:...statuses)', { statuses: ['processing', 'done', 'completed', 'success'] })
-            .groupBy('record.taskId')
-            .getRawMany();
+        const records = await taskProcessedFileRepo.find({
+            select: {
+                taskId: true,
+                restoredFileName: true,
+                updatedAt: true
+            },
+            where: {
+                taskId: In(taskIds),
+                status: In(['processing', 'done', 'completed', 'success'])
+            }
+        });
 
-        const statsByTaskId = new Map(
-            rawStats.map(item => [
-                Number(item.taskId),
-                {
-                    recordCount: Number(item.recordCount) || 0,
-                    lastUpdatedAt: item.lastUpdatedAt ? new Date(item.lastUpdatedAt) : null
-                }
-            ])
-        );
+        const statsByTaskId = new Map();
+        for (const record of records) {
+            const taskId = Number(record.taskId);
+            if (!statsByTaskId.has(taskId)) {
+                statsByTaskId.set(taskId, {
+                    restoredFileNames: [],
+                    lastUpdatedAt: null
+                });
+            }
+            const stats = statsByTaskId.get(taskId);
+            if (record.restoredFileName) {
+                stats.restoredFileNames.push(record.restoredFileName);
+            }
+            if (record.updatedAt && (!stats.lastUpdatedAt || new Date(record.updatedAt) > stats.lastUpdatedAt)) {
+                stats.lastUpdatedAt = new Date(record.updatedAt);
+            }
+        }
 
         const pendingUpdates = [];
 
@@ -1374,7 +1492,8 @@ class TaskService {
 
             if (stats) {
                 const currentEpisodes = Number(task.currentEpisodes) || 0;
-                const nextEpisodes = Math.max(currentEpisodes, stats.recordCount);
+                const uniqueCount = this._countUniqueEpisodes(stats.restoredFileNames.map(name => ({ restoredFileName: name })), task);
+                const nextEpisodes = Math.max(currentEpisodes, uniqueCount);
 
                 if (nextEpisodes !== currentEpisodes) {
                     task.currentEpisodes = nextEpisodes;
@@ -2792,7 +2911,7 @@ class TaskService {
             let updatedCount = 0;
             for (const record of records) {
                 // 如果已经是成功状态，跳过
-                if (['done', 'completed', 'success'].includes(record.status)) continue;
+                if (['done', 'completed', 'success', 'deduped'].includes(record.status)) continue;
 
                 const recordMd5 = String(record.sourceMd5 || '').toUpperCase();
                 const sourceName = record.sourceFileName || '';

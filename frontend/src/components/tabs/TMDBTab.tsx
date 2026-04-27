@@ -100,6 +100,8 @@ const TMDBTab: React.FC<Props> = ({ onShowToast }) => {
           title,
           year,
           mode,
+          tmdbId: item.id,
+          mediaType: item.media_type || activeCategory,
           searchType: 'all',
           enable: true
         })

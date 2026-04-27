@@ -12,10 +12,12 @@ class AutoSeriesService {
         this.tmdbService = new TMDBService();
     }
 
-    async createByTitle({ title, keyword, year = '', mode = '', shareLink = '', resourceTitle = '' }) {
-        console.log('[AutoSeries] createByTitle received:', { title, keyword, year, mode });
+    async createByTitle({ title, keyword, year = '', mode = '', shareLink = '', resourceTitle = '', tmdbId = '', mediaType = '' }) {
+        console.log('[AutoSeries] createByTitle received:', { title, keyword, year, mode, tmdbId, mediaType });
         const normalizedTitle = String(title || keyword || '').trim();
         const normalizedYear = String(year || '').trim();
+        const normalizedTmdbId = String(tmdbId || '').trim();
+        const normalizedMediaType = String(mediaType || '').trim().toLowerCase();
 
         const autoCreateConfig = ConfigService.getConfigValue('task.autoCreate', {});
         const normalizedMode = this._normalizeMode(mode || autoCreateConfig.mode || 'lazy');
@@ -46,7 +48,12 @@ class AutoSeriesService {
             throw new Error('自动追剧默认账号不存在');
         }
 
-        const tmdbInfo = await this._resolveTmdb(normalizedTitle, normalizedYear);
+        const tmdbInfo = await this._resolveTmdb({
+            title: normalizedTitle,
+            year: normalizedYear,
+            tmdbId: normalizedTmdbId,
+            mediaType: normalizedMediaType
+        });
         const resource = manualShareLink
             ? { title: manualResourceTitle || normalizedTitle, cloudLinks: [{ link: manualShareLink }] }
             : await this._findBestResource(normalizedTitle, normalizedYear, tmdbInfo);
@@ -172,8 +179,21 @@ class AutoSeriesService {
         };
     }
 
-    async _resolveTmdb(title, year, currentEpisodes = 0) {
+    async _resolveTmdb(params = {}, currentEpisodes = 0) {
+        const title = typeof params === 'string' ? params : String(params.title || '').trim();
+        const year = typeof params === 'string' ? '' : String(params.year || '').trim();
+        const tmdbId = typeof params === 'string' ? '' : String(params.tmdbId || '').trim();
+        const mediaType = typeof params === 'string' ? '' : String(params.mediaType || '').trim().toLowerCase();
         try {
+            if (tmdbId) {
+                if (mediaType === 'movie') {
+                    return await this.tmdbService.getMovieDetails(tmdbId);
+                }
+                if (mediaType === 'tv') {
+                    return await this.tmdbService.getTVDetails(tmdbId);
+                }
+                return await this.tmdbService.getTVDetails(tmdbId) || await this.tmdbService.getMovieDetails(tmdbId);
+            }
             return await this.tmdbService.searchTV(title, year, currentEpisodes);
         } catch (error) {
             return null;
@@ -187,7 +207,7 @@ class AutoSeriesService {
             throw new Error(`剧名不能为空 (收到参数: ${JSON.stringify({ title, keyword })})`);
         }
 
-        const tmdbInfo = await this._resolveTmdb(normalizedTitle, normalizedYear);
+        const tmdbInfo = await this._resolveTmdb({ title: normalizedTitle, year: normalizedYear });
         const resources = await this._fetchResources(normalizedTitle, tmdbInfo);
         if (!resources.length) {
             return { tmdbInfo: this._pickTmdbBrief(tmdbInfo), resources: [] };
@@ -370,7 +390,7 @@ class AutoSeriesService {
             : parsedName.year;
         const tmdbInfo = tmdbContent?.id
             ? tmdbContent
-            : await this._resolveTmdb(title, year, Number(task.currentEpisodes || 0));
+            : await this._resolveTmdb({ title, year, tmdbId: task.tmdbId }, Number(task.currentEpisodes || 0));
 
         if (!title) {
             return { updated: false, skipped: true };

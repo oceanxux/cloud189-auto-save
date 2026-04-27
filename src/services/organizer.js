@@ -2,9 +2,11 @@ const path = require('path');
 const ConfigService = require('./ConfigService');
 const { Cloud189Service } = require('./cloud189');
 const { StrmService } = require('./strm');
+const { ScrapeService } = require('./ScrapeService');
 const { TMDBService } = require('./tmdb');
 const AIService = require('./ai');
 const { logTaskEvent } = require('../utils/logUtils');
+const { parseMediaTitle } = require('../utils/mediaTitleParser');
 
 class OrganizerService {
     constructor(taskService, taskRepo) {
@@ -58,6 +60,26 @@ class OrganizerService {
             const resourceInfo = await this._resolveResourceInfo(task, mediaFiles, tmdbInfo);
             console.log(`[Organizer] 资源结构就绪: ${resourceInfo.name}, 模式: ${resourceInfo.isFallback ? '保底' : '标准'}`);
 
+            const dedupeResult = this._dedupeEpisodeVariants(mediaFiles, resourceInfo);
+            const effectiveMediaFiles = dedupeResult.files;
+            if (dedupeResult.skippedMessages.length > 0) {
+                dedupeResult.skippedMessages.forEach(message => logTaskEvent(message, 'info', 'organizer'));
+            }
+            if (dedupeResult.duplicates.length > 0) {
+                for (const duplicate of dedupeResult.duplicates) {
+                    try {
+                        await cloud189.deleteFile(duplicate.id, duplicate.name);
+                        await taskProcessedFileRepo.update(
+                            { taskId: task.id, sourceFileId: String(duplicate.id) },
+                            { status: 'deleted', lastError: null, updatedAt: new Date() }
+                        );
+                        logTaskEvent(`剧集去重: 已删除低画质重复文件 ${duplicate.name}`, 'info', 'organizer');
+                    } catch (error) {
+                        logTaskEvent(`剧集去重: 删除重复文件失败 ${duplicate.name}: ${error.message}`, 'warn', 'organizer');
+                    }
+                }
+            }
+
             const libraryInfo = this._resolveLibraryInfo(resourceInfo);
             const organizerRootId = String(task.organizerTargetFolderId || task.targetFolderId).trim();
             console.log(`[Organizer] 6. 规划目标路径: 根ID(${organizerRootId}) -> 分类(${libraryInfo.categoryName}) -> 剧集(${libraryInfo.resourceFolderName})`);
@@ -70,7 +92,7 @@ class OrganizerService {
 
             const folderCache = new Map();
             const messages = [];
-            for (const file of mediaFiles) {
+            for (const file of effectiveMediaFiles) {
                 if (this._isPaused()) {
                     await this.taskRepo.update(task.id, {
                         lastOrganizeError: '整理已手动暂停'
@@ -137,8 +159,37 @@ class OrganizerService {
                 lastOrganizeError: null 
             });
 
+            if (options.triggerStrm) {
+                await this.taskService._createStrmFileByTask(task, !!options.force);
+            }
+
+            if (options.triggerStrm && task.enableTaskScraper) {
+                const strmPath = this.strmService.getStrmPath(task);
+                if (strmPath) {
+                    const scrapeService = new ScrapeService();
+                    const mediaDetails = await scrapeService.scrapeFromDirectory(strmPath, task.tmdbId || null);
+                    if (mediaDetails) {
+                        const taskUpdates = {
+                            tmdbContent: JSON.stringify(mediaDetails),
+                            lastOrganizeError: null
+                        };
+                        if (mediaDetails.tmdbId && String(task.tmdbId || '') !== String(mediaDetails.tmdbId)) {
+                            taskUpdates.tmdbId = mediaDetails.tmdbId;
+                            task.tmdbId = mediaDetails.tmdbId;
+                        }
+                        const resolvedTotalEpisodes = Number(mediaDetails.totalEpisodes || 0);
+                        if (resolvedTotalEpisodes > 0 && Number(task.totalEpisodes || 0) !== resolvedTotalEpisodes) {
+                            taskUpdates.totalEpisodes = resolvedTotalEpisodes;
+                            task.totalEpisodes = resolvedTotalEpisodes;
+                        }
+                        await this.taskRepo.update(task.id, taskUpdates);
+                        task.tmdbContent = taskUpdates.tmdbContent;
+                    }
+                }
+            }
+
             console.log(`[Organizer] <<< 任务 ${task.id} 整理全部达成`);
-            return { message: `${task.resourceName}整理完成`, taskId: task.id };
+            return { message: `${task.resourceName}整理完成`, taskId: task.id, files: effectiveMediaFiles };
         } catch (globalErr) {
             console.error(`[Organizer] !!! 任务 ${task.id} 整理过程发生严重异常:`, globalErr);
             throw globalErr;
@@ -158,6 +209,20 @@ class OrganizerService {
         const taskLike = { account, resourceName: path.posix.basename(sourceFolderPath) || '未命名', currentEpisodes: mediaFiles.length };
         const tmdbInfo = await this._resolveTmdbInfo(taskLike);
         const resourceInfo = await this._resolveResourceInfo(taskLike, mediaFiles, tmdbInfo);
+        const dedupeResult = this._dedupeEpisodeVariants(mediaFiles, resourceInfo);
+        if (dedupeResult.skippedMessages.length > 0) {
+            dedupeResult.skippedMessages.forEach(message => logTaskEvent(message, 'info', 'organizer'));
+        }
+        if (dedupeResult.duplicates.length > 0) {
+            for (const duplicate of dedupeResult.duplicates) {
+                try {
+                    await cloud189.deleteFile(duplicate.id, duplicate.name);
+                    logTaskEvent(`剧集去重: 已删除低画质重复文件 ${duplicate.name}`, 'info', 'organizer');
+                } catch (error) {
+                    logTaskEvent(`剧集去重: 删除重复文件失败 ${duplicate.name}: ${error.message}`, 'warn', 'organizer');
+                }
+            }
+        }
         const libraryInfo = this._resolveLibraryInfo(resourceInfo);
 
         const categoryId = await this._ensureFolderByName(cloud189, organizerRootId, libraryInfo.categoryName, new Map());
@@ -165,7 +230,7 @@ class OrganizerService {
         const fileMap = new Map((resourceInfo.episode || []).map(item => [String(item.id), item]));
 
         const folderCache = new Map();
-        for (const file of mediaFiles) {
+        for (const file of dedupeResult.files) {
             const aiFile = fileMap.get(String(file.id));
             if (!aiFile) continue;
 
@@ -196,7 +261,6 @@ class OrganizerService {
         const fileNames = mediaFiles.map(f => f.name);
         
         try {
-            const { parseMediaTitle } = require('../utils/mediaTitleParser');
             const parsedRoot = parseMediaTitle(resourceName);
             
             const name = tmdbInfo?.title || parsedRoot.cleanTitle || resourceName;
@@ -241,9 +305,16 @@ class OrganizerService {
                 console.warn(`[Organizer] AI 分析彻底失败: ${aiError.message}。将进入原始名称归档模式。`);
                 return {
                     name, year: Number(year), type, season: String(seasonNum || 1).padStart(2, '0'), isFallback: true,
-                    episode: mediaFiles.map(f => ({
-                        id: String(f.id), name, season: String(seasonNum || 1).padStart(2, '0'), episode: '', extension: path.extname(f.name)
-                    }))
+                    episode: mediaFiles.map(f => {
+                        const parsedFile = parseMediaTitle(f.name);
+                        return {
+                            id: String(f.id),
+                            name,
+                            season: String(parsedFile.season || seasonNum || 1).padStart(2, '0'),
+                            episode: parsedFile.episode !== null ? String(parsedFile.episode).padStart(2, '0') : '',
+                            extension: path.extname(f.name)
+                        };
+                    })
                 };
             }
         } catch (e) {
@@ -255,6 +326,85 @@ class OrganizerService {
     _resolveLibraryInfo(info) {
         const map = { tv: ConfigService.getConfigValue('organizer.categories.tv', '电视剧'), movie: ConfigService.getConfigValue('organizer.categories.movie', '电影') };
         return { categoryName: map[info.type] || map.tv, resourceFolderName: `${info.name} (${info.year || '0000'})` };
+    }
+
+    _dedupeEpisodeVariants(mediaFiles = [], resourceInfo = {}) {
+        if (resourceInfo?.type !== 'tv' || !Array.isArray(resourceInfo?.episode) || resourceInfo.episode.length === 0) {
+            return { files: mediaFiles, skippedMessages: [], duplicates: [] };
+        }
+
+        const resourceEpisodeById = new Map((resourceInfo.episode || []).map(item => [String(item.id), item]));
+        const selectedByEpisode = new Map();
+        const skippedMessages = [];
+        const duplicateIds = new Set();
+
+        for (const file of mediaFiles) {
+            const episodeInfo = resourceEpisodeById.get(String(file.id));
+            const parsedFile = parseMediaTitle(file.name);
+            const season = String(parsedFile?.season || episodeInfo?.season || resourceInfo?.season || '').padStart(2, '0');
+            const episode = String(parsedFile?.episode || episodeInfo?.episode || '').padStart(2, '0');
+            if (!season || !episode) {
+                continue;
+            }
+
+            const key = `${season}E${episode}`;
+            const candidate = {
+                file,
+                score: this._getQualityScore(file.name),
+                resolution: this._extractResolutionLabel(file.name)
+            };
+            const current = selectedByEpisode.get(key);
+            if (!current || candidate.score > current.score) {
+                if (current) {
+                    skippedMessages.push(`剧集去重: 保留 ${file.name} (${candidate.resolution})，跳过 ${current.file.name} (${current.resolution})`);
+                    duplicateIds.add(String(current.file.id));
+                    duplicateIds.delete(String(file.id));
+                }
+                selectedByEpisode.set(key, candidate);
+            } else if (candidate.score < current.score) {
+                skippedMessages.push(`剧集去重: 保留 ${current.file.name} (${current.resolution})，跳过 ${file.name} (${candidate.resolution})`);
+                duplicateIds.add(String(file.id));
+            }
+        }
+
+        console.log(`[Organizer] 去重扫描完成: 媒体文件 ${mediaFiles.length} 个, 命中重复 ${duplicateIds.size} 个`);
+
+        if (selectedByEpisode.size === 0) {
+            return { files: mediaFiles, skippedMessages, duplicates: [] };
+        }
+
+        const selectedIds = new Set(Array.from(selectedByEpisode.values()).map(item => String(item.file.id)));
+        const dedupedFiles = mediaFiles.filter(file => {
+            const parsedFile = parseMediaTitle(file.name);
+            const mappedEpisode = resourceEpisodeById.get(String(file.id));
+            const resolvedSeason = parsedFile?.season || mappedEpisode?.season || resourceInfo?.season;
+            const resolvedEpisode = parsedFile?.episode || mappedEpisode?.episode;
+            if (!resolvedSeason || !resolvedEpisode) {
+                return true;
+            }
+            return selectedIds.has(String(file.id));
+        });
+
+        const duplicates = mediaFiles.filter(file => duplicateIds.has(String(file.id)) && !selectedIds.has(String(file.id)));
+
+        return { files: dedupedFiles, skippedMessages, duplicates };
+    }
+
+    _getQualityScore(fileName = '') {
+        const normalized = String(fileName || '').toLowerCase();
+        const resolutionMatch = normalized.match(/\b(4320|2160|1080|720|480)p\b/);
+        const resolution = Number(resolutionMatch?.[1] || 0);
+        const sourceScore = /remux|blu[\s.-]?ray/.test(normalized)
+            ? 30
+            : (/web[\s.-]?dl|webrip/.test(normalized) ? 20 : 0);
+        const codecScore = /hevc|x265|h\s*265/.test(normalized) ? 5 : 0;
+        return resolution * 100 + sourceScore + codecScore;
+    }
+
+    _extractResolutionLabel(fileName = '') {
+        const normalized = String(fileName || '').toLowerCase();
+        const match = normalized.match(/\b(4320|2160|1080|720|480)p\b/);
+        return match ? `${match[1]}P` : '未知画质';
     }
 
     async _ensureFolderByName(cloud189, parentId, name, cache) {

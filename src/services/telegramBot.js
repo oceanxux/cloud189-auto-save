@@ -1188,6 +1188,7 @@ class TelegramBotService {
                 tgbot: true,
                 overwriteFolder: data?.o,
                 accessCode: this.currentAccessCode,
+                enableTaskScraper: true,
                 enableOrganizer: true
             };
             const tasks = await this.taskService.createTask(taskDto);

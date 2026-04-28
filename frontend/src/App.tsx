@@ -237,7 +237,7 @@ function App() {
 
       {/* 主体内容 */}
       <main className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg-surface)]">
-        <header className="app-header sticky top-0 z-30 flex min-h-[56px] shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--border-color)] bg-[var(--bg-main)]/95 px-3 backdrop-blur-md transition-colors duration-200 md:bg-[var(--bg-main)]/80 md:px-5 md:backdrop-blur-xl">
+        <header className="app-header sticky top-0 z-30 flex min-h-[56px] shrink-0 items-center gap-2 overflow-visible border-b border-[var(--border-color)] bg-[var(--bg-main)]/95 px-3 backdrop-blur-md transition-colors duration-200 md:bg-[var(--bg-main)]/80 md:px-5 md:backdrop-blur-xl">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <button onClick={() => setIsMobileMenuOpen(true)} className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-[var(--text-primary)] md:hidden"><Menu size={20} /></button>
             <div className="flex min-w-0 items-baseline gap-2">

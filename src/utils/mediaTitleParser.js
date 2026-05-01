@@ -64,15 +64,46 @@ const NOISE_PATTERNS = [
     /仅秒传/ig
 ];
 
+const TMDB_HINT_MATCHERS = [
+    /[\[{(]\s*tmdb(?:[-:_\s]*(movie|tv))?[-:_\s#]*(\d+)\s*[\]})]/i,
+    /\btmdb(?:[-:_\s]*(movie|tv))?[-:_\s#]*(\d+)\b/i
+];
+
+const TMDB_HINT_STRIP_PATTERNS = [
+    /[\[{(]\s*tmdb(?:[-:_\s]*(?:movie|tv))?[-:_\s#]*\d+\s*[\]})]/ig,
+    /\btmdb(?:[-:_\s]*(?:movie|tv))?[-:_\s#]*\d+\b/ig
+];
+
 function normalizeSpaces(text) {
     return text.replace(/[\s._]+/g, ' ').trim();
 }
 
+function extractTmdbHint(source = '') {
+    const rawText = String(source || '');
+    for (const matcher of TMDB_HINT_MATCHERS) {
+        const match = rawText.match(matcher);
+        if (!match?.[2]) continue;
+        const mediaType = String(match[1] || '').trim().toLowerCase();
+        return {
+            tmdbId: match[2],
+            mediaType: mediaType === 'movie' || mediaType === 'tv' ? mediaType : ''
+        };
+    }
+    return {
+        tmdbId: '',
+        mediaType: ''
+    };
+}
+
 function parseMediaTitle(source) {
     let text = source || '';
+    const tmdbHint = extractTmdbHint(text);
     
     // 1. 先把所有点号、下划线转换为空格，方便后续匹配
     text = text.replace(/[._]/g, ' ');
+    for (const pattern of TMDB_HINT_STRIP_PATTERNS) {
+        text = text.replace(pattern, ' ');
+    }
     const textForSeasonEpisode = text;
 
     // 2. 暴力截断：遇到常见的元数据起始符，直接砍掉后面所有内容
@@ -153,9 +184,11 @@ function parseMediaTitle(source) {
         year,
         season,
         episode,
+        tmdbId: tmdbHint.tmdbId || '',
+        mediaType: tmdbHint.mediaType || '',
         aliases: [],
         removedTokens
     };
 }
 
-module.exports = { parseMediaTitle };
+module.exports = { parseMediaTitle, extractTmdbHint };

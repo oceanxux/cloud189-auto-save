@@ -20,7 +20,7 @@ const { LazyShareStrmService } = require('./lazyShareStrm');
 const { CasService } = require('./casService');
 const { AppDataSource } = require('../database');
 const { TaskProcessedFile } = require('../entities');
-const { parseMediaTitle } = require('../utils/mediaTitleParser');
+const { parseMediaTitle, extractTmdbHint } = require('../utils/mediaTitleParser');
 
 class TaskService {
     constructor(taskRepo, accountRepo, taskProcessedFileRepo) {
@@ -79,13 +79,172 @@ class TaskService {
         if (!task?.id) {
             return false;
         }
+        let changed = false;
         const totalEpisodes = this._getSeasonExpectedEpisodes(task);
         const currentEpisodes = Number(task.currentEpisodes || 0);
-        if (totalEpisodes > 0 && currentEpisodes >= totalEpisodes && task.status !== 'completed') {
-            task.status = 'completed';
-            return true;
+
+        if (totalEpisodes > 0 && currentEpisodes >= totalEpisodes) {
+            if (task.status !== 'completed') {
+                task.status = 'completed';
+                changed = true;
+            }
+            return changed;
         }
-        return false;
+
+        if (this._resolveTaskMediaType(task) === 'movie' && currentEpisodes > 0) {
+            const normalizedTotal = Math.max(Number(task.totalEpisodes || 0), 1);
+            if (Number(task.totalEpisodes || 0) !== normalizedTotal) {
+                task.totalEpisodes = normalizedTotal;
+                changed = true;
+            }
+            if (task.status !== 'completed') {
+                task.status = 'completed';
+                changed = true;
+            }
+            return changed;
+        }
+        return changed;
+    }
+
+    _buildLinkAbnormalMessage(detail = '') {
+        const normalizedDetail = String(detail || '').trim();
+        return normalizedDetail
+            ? `链接异常: ${normalizedDetail}`
+            : '链接异常: 当前分享链接无法获取资源，资源可能已失效或被和谐';
+    }
+
+    _isLinkAbnormalShareResponse(result) {
+        if (!result || result._requestFailed) {
+            return false;
+        }
+        const text = [
+            result.res_code,
+            result.res_msg,
+            result.res_message,
+            result.errorMsg,
+            result.message
+        ].filter(Boolean).join(' ');
+        if (!text) {
+            return false;
+        }
+        if (/FlowOverLimited|UserDayFlowOverLimited|InvalidSessionKey|check ip error|请求超时|timeout/i.test(text)) {
+            return false;
+        }
+        return /FileNotFound|ShareNotFound|ShareAuditFail|分享.*失效|分享.*不存在|资源.*失效|资源.*不存在|资源.*被和谐|链接.*失效|违规|删除|取消|not found|invalid share/i.test(text);
+    }
+
+    _resolveLinkAbnormalMessage(result) {
+        if (!this._isLinkAbnormalShareResponse(result)) {
+            return '';
+        }
+        const detail = result?.res_msg || result?.res_message || result?.errorMsg || result?.message || '';
+        return this._buildLinkAbnormalMessage(detail);
+    }
+
+    _isLinkAbnormalError(errorMessage = '') {
+        const text = String(errorMessage || '').trim();
+        if (!text) {
+            return false;
+        }
+        if (/FlowOverLimited|UserDayFlowOverLimited|InvalidSessionKey|check ip error|请求超时|timeout/i.test(text)) {
+            return false;
+        }
+        return /^链接异常[:：]/.test(text)
+            || /无效的分享链接|访问码无效|获取分享信息失败|分享.*失效|资源.*失效|资源.*被和谐|FileNotFound|ShareNotFound|not found/i.test(text);
+    }
+
+    _safeParseJson(rawValue) {
+        if (!rawValue) return null;
+        try {
+            return typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue;
+        } catch {
+            return null;
+        }
+    }
+
+    _normalizeTaskDisplayTitle(rawTitle = '') {
+        const parsed = parseMediaTitle(rawTitle);
+        if (!parsed?.cleanTitle) {
+            return String(rawTitle || '').trim();
+        }
+        return parsed.year ? `${parsed.cleanTitle} (${parsed.year})` : parsed.cleanTitle;
+    }
+
+    _collectTaskTitleSources(task = {}) {
+        return [
+            task.taskName,
+            task.resourceName,
+            task.shareFolderName,
+            task.realFolderName
+        ]
+            .map(value => String(value || '').replace(/\(根\)$/g, '').trim())
+            .filter(Boolean);
+    }
+
+    _resolveTaskMediaType(task = {}) {
+        const tmdbContent = this._safeParseJson(task.tmdbContent);
+        const titleSources = this._collectTaskTitleSources(task);
+        const explicitType = [
+            task.videoType,
+            tmdbContent?.type,
+            tmdbContent?.media_type,
+            ...titleSources.map(title => extractTmdbHint(title).mediaType)
+        ]
+            .map(value => String(value || '').trim().toLowerCase())
+            .find(value => value === 'movie' || value === 'tv');
+
+        if (explicitType) {
+            return explicitType;
+        }
+
+        const hasSeasonHint = titleSources.some(title => {
+            const parsed = parseMediaTitle(title);
+            return parsed?.season != null || parsed?.episode != null;
+        });
+
+        if (hasSeasonHint) {
+            return 'tv';
+        }
+
+        if (Number(task.tmdbSeasonNumber || 0) > 0 || Number(task.tmdbSeasonEpisodes || 0) > 0 || Number(task.totalEpisodes || 0) > 1) {
+            return 'tv';
+        }
+
+        if (task.isFolder === false) {
+            return 'movie';
+        }
+
+        return '';
+    }
+
+    _applyTitleMetadataHints(task, { normalizeResourceName = false } = {}) {
+        if (!task) {
+            return false;
+        }
+
+        let changed = false;
+        const titleSources = this._collectTaskTitleSources(task);
+
+        for (const title of titleSources) {
+            const hint = extractTmdbHint(title);
+            if (hint.tmdbId && String(task.tmdbId || '').trim() !== hint.tmdbId) {
+                task.tmdbId = hint.tmdbId;
+                changed = true;
+            }
+            if (hint.mediaType && String(task.videoType || '').trim().toLowerCase() !== hint.mediaType) {
+                task.videoType = hint.mediaType;
+                changed = true;
+            }
+            if (normalizeResourceName && title === String(task.resourceName || '').trim() && hint.tmdbId) {
+                const normalizedTitle = this._normalizeTaskDisplayTitle(title);
+                if (normalizedTitle && normalizedTitle !== task.resourceName) {
+                    task.resourceName = normalizedTitle;
+                    changed = true;
+                }
+            }
+        }
+
+        return changed;
     }
 
     async refreshTaskCompletionState(task) {
@@ -153,6 +312,7 @@ class TaskService {
             shareId: shareInfo.shareId,
             shareMode: shareInfo.shareMode,
             accessCode: taskDto.accessCode,
+            videoType: taskDto.videoType || null,
             matchPattern: taskDto.matchPattern,
             matchOperator: taskDto.matchOperator,
             matchValue: taskDto.matchValue,
@@ -609,6 +769,16 @@ class TaskService {
         // 如果任务名称存在 且和shareInfo的name不一致
         if (taskDto.taskName && taskDto.taskName != shareInfo.fileName) {
             shareInfo.fileName = taskDto.taskName;
+        }
+        const titleHint = extractTmdbHint(shareInfo.fileName || taskDto.taskName || '');
+        if (titleHint.tmdbId && !taskDto.tmdbId) {
+            taskDto.tmdbId = titleHint.tmdbId;
+        }
+        if (titleHint.mediaType && !taskDto.videoType) {
+            taskDto.videoType = titleHint.mediaType;
+        }
+        if (titleHint.tmdbId) {
+            shareInfo.fileName = this._normalizeTaskDisplayTitle(shareInfo.fileName);
         }
         taskDto.isFolder = true
         await this.increaseShareFileAccessCount(cloud189, shareInfo.shareId)
@@ -1284,7 +1454,12 @@ class TaskService {
                     }
                 }
                 logTaskEvent("获取文件列表失败: " + JSON.stringify(shareDir), 'error', 'transfer');
-                throw new Error('获取文件列表失败');
+                const linkAbnormalMessage = this._resolveLinkAbnormalMessage(shareDir);
+                if (linkAbnormalMessage) {
+                    throw new Error(linkAbnormalMessage);
+                }
+                const errorMessage = shareDir?.res_msg || shareDir?.res_message || shareDir?.errorMsg || '';
+                throw new Error(errorMessage ? `获取文件列表失败: ${errorMessage}` : '获取文件列表失败');
             }
             let shareFiles = [...shareDir.fileListAO.fileList];
             const enableOnlySaveMedia = this._shouldOnlySaveMedia(task);
@@ -1488,7 +1663,7 @@ class TaskService {
 
         for (const task of taskList) {
             const stats = statsByTaskId.get(task.id);
-            let changed = this._alignTaskTotalEpisodesToSeason(task);
+            let changed = this._applyTitleMetadataHints(task, { normalizeResourceName: true }) || this._alignTaskTotalEpisodesToSeason(task);
 
             if (stats) {
                 const currentEpisodes = Number(task.currentEpisodes) || 0;
@@ -1511,6 +1686,9 @@ class TaskService {
             if (changed) {
                 pendingUpdates.push({
                     id: task.id,
+                    resourceName: task.resourceName,
+                    tmdbId: task.tmdbId,
+                    videoType: task.videoType,
                     totalEpisodes: task.totalEpisodes,
                     currentEpisodes: task.currentEpisodes,
                     lastFileUpdateTime: task.lastFileUpdateTime,
@@ -1605,7 +1783,7 @@ class TaskService {
             new StrmService().deleteDir(path.join(task.account.localStrmPrefix, folderName))
         }
         // 只允许更新特定字段
-        const allowedFields = ['resourceName', 'targetFolderId', 'targetFolderName', 'organizerTargetFolderId', 'organizerTargetFolderName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'tmdbSeasonNumber', 'tmdbSeasonName', 'tmdbSeasonEpisodes', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm', 'enableOrganizer'];
+        const allowedFields = ['resourceName', 'targetFolderId', 'targetFolderName', 'organizerTargetFolderId', 'organizerTargetFolderName', 'realFolderId', 'currentEpisodes', 'totalEpisodes', 'status','realFolderName', 'shareFolderName', 'shareFolderId', 'sourceRegex', 'targetRegex', 'matchPattern','matchOperator','matchValue','remark', 'taskGroup', 'tmdbId', 'tmdbSeasonNumber', 'tmdbSeasonName', 'tmdbSeasonEpisodes', 'videoType', 'enableCron', 'cronExpression', 'enableTaskScraper', 'enableLazyStrm', 'enableOrganizer'];
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
                 task[field] = updates[field];
@@ -1620,7 +1798,7 @@ class TaskService {
         }
         
         // 验证状态值
-        const validStatuses = ['pending', 'processing', 'completed', 'failed'];
+        const validStatuses = ['pending', 'processing', 'completed', 'failed', 'link_abnormal'];
         if (!validStatuses.includes(task.status)) {
             throw new Error('无效的状态值');
         }
@@ -2171,6 +2349,19 @@ class TaskService {
         }
         
         const errorMsg = error.message || String(error);
+
+        if (this._isLinkAbnormalError(errorMsg)) {
+            await this._syncTaskDetailRecordsWithActualFiles(task);
+            task.status = 'link_abnormal';
+            task.retryCount = 0;
+            task.nextRetryTime = null;
+            task.lastError = errorMsg;
+            logTaskEvent(`任务[${task.resourceName}]已标记为链接异常，不再自动重试`, 'warn', 'transfer');
+            await this.taskRepo.save(task);
+            const pushMsg = `⚠️ 任务链接异常: ${task.resourceName}\n原因: ${errorMsg}\n说明: 当前分享链接无法获取资源，可能已失效或被和谐。`;
+            this.messageUtil.sendMessage(pushMsg).catch(e => console.error('推送失败:', e));
+            return '';
+        }
 
         if (task.retryCount < maxRetries) {
             task.retryCount++;

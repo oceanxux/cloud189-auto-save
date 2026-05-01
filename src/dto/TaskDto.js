@@ -31,6 +31,7 @@ class CreateTaskDto {
         this.targetRegex = data?.targetRegex; // 目标正则 (自动重命名)
         this.taskName = data?.taskName; // 任务名称
         this.tmdbId = data?.tmdbId; // TMDB ID
+        this.videoType = data?.videoType; // 媒体类型
         this.enableTaskScraper = data?.enableTaskScraper; // 启用刮削
         this.enableLazyStrm = data?.enableLazyStrm; // 启用懒转存STRM
         this.enableOrganizer = data?.enableOrganizer; // 启用整理器

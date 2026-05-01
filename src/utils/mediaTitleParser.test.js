@@ -55,6 +55,16 @@ const cases = [
             season: 3,
             episode: null
         }
+    },
+    {
+        input: 'Reflections in the Lake (2026) {tmdb-1357815} 4K HQ 内嵌简中',
+        expected: {
+            cleanTitle: 'Reflections in the Lake',
+            year: 2026,
+            season: null,
+            episode: null,
+            tmdbId: '1357815'
+        }
     }
 ];
 
@@ -64,6 +74,9 @@ for (const item of cases) {
     assert.strictEqual(parsed.year, item.expected.year, `year mismatch: ${item.input}`);
     assert.strictEqual(parsed.season, item.expected.season, `season mismatch: ${item.input}`);
     assert.strictEqual(parsed.episode, item.expected.episode, `episode mismatch: ${item.input}`);
+    if (item.expected.tmdbId !== undefined) {
+        assert.strictEqual(parsed.tmdbId, item.expected.tmdbId, `tmdbId mismatch: ${item.input}`);
+    }
 }
 
 console.log(`mediaTitleParser tests passed: ${cases.length}`);

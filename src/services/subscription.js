@@ -1,5 +1,6 @@
 const cloud189Utils = require('../utils/Cloud189Utils');
 const { Cloud189Service } = require('./cloud189');
+const { MessageUtil } = require('./message');
 const { logTaskEvent } = require('../utils/logUtils');
 
 class SubscriptionService {
@@ -7,6 +8,7 @@ class SubscriptionService {
         this.subscriptionRepo = subscriptionRepo;
         this.resourceRepo = resourceRepo;
         this.accountRepo = accountRepo;
+        this.messageUtil = new MessageUtil();
     }
 
     async listSubscriptions() {
@@ -47,7 +49,7 @@ class SubscriptionService {
         });
         const savedSubscription = await this.subscriptionRepo.save(subscription);
         await logTaskEvent(`创建订阅成功: ${savedSubscription.name} (${savedSubscription.uuid})，开始同步远端资源`, 'info', 'subscription');
-        await this.syncSubscriptionResources(savedSubscription.id);
+        await this.syncSubscriptionResources(savedSubscription.id, { notifyUpdates: false });
         return await this.subscriptionRepo.findOneBy({ id: savedSubscription.id }) || savedSubscription;
     }
 
@@ -271,7 +273,7 @@ class SubscriptionService {
             verifyDetails: ''
         });
         const savedResource = await this.resourceRepo.save(resource);
-        await this.refreshSubscription(subscriptionId);
+        await this.refreshSubscription(subscriptionId, { notifyUpdates: false });
         const refreshedResource = await this.resourceRepo.findOneBy({ id: savedResource.id });
         return refreshedResource || savedResource;
     }
@@ -306,7 +308,7 @@ class SubscriptionService {
         }
 
         const savedResource = await this.resourceRepo.save(resource);
-        await this.refreshSubscription(resource.subscriptionId);
+        await this.refreshSubscription(resource.subscriptionId, { notifyUpdates: false });
         const refreshedResource = await this.resourceRepo.findOneBy({ id: savedResource.id });
         return refreshedResource || savedResource;
     }
@@ -321,10 +323,10 @@ class SubscriptionService {
         await this._refreshSubscriptionSummary(subscriptionId);
     }
 
-    async refreshSubscription(subscriptionId) {
+    async refreshSubscription(subscriptionId, options = {}) {
         const subscription = await this._ensureSubscription(subscriptionId);
         await logTaskEvent(`开始刷新订阅[${subscription.name}]，UUID=${subscription.uuid}`, 'info', 'subscription');
-        await this._syncRemoteResources(subscription);
+        const syncResult = await this._syncRemoteResources(subscription, options);
         const resources = await this.resourceRepo.find({
             where: { subscriptionId },
             order: { id: 'DESC' }
@@ -351,15 +353,20 @@ class SubscriptionService {
         subscription.invalidResourceCount = invalidResourceCount;
         subscription.availableAccountCount = allAvailableAccountIds.size;
         subscription.totalAccountCount = accounts.length;
+        const updateSummary = syncResult.updatedTitles?.length
+            ? `发现 ${syncResult.updatedTitles.length} 条资源更新`
+            : '';
         if (!resources.length) {
             subscription.lastRefreshStatus = 'success';
-            subscription.lastRefreshMessage = '暂无订阅资源，已更新账号状态';
+            subscription.lastRefreshMessage = updateSummary || '暂无订阅资源，已更新账号状态';
         } else if (invalidResourceCount > 0) {
             subscription.lastRefreshStatus = validResourceCount > 0 ? 'warning' : 'failed';
-            subscription.lastRefreshMessage = failedResources.slice(0, 3).join(' | ');
+            subscription.lastRefreshMessage = [updateSummary, failedResources.slice(0, 3).join(' | ')].filter(Boolean).join('；');
         } else {
             subscription.lastRefreshStatus = 'success';
-            subscription.lastRefreshMessage = `全部 ${validResourceCount} 个资源校验成功`;
+            subscription.lastRefreshMessage = updateSummary
+                ? `${updateSummary}，全部 ${validResourceCount} 个资源校验成功`
+                : `全部 ${validResourceCount} 个资源校验成功`;
         }
         await this.subscriptionRepo.save(subscription);
         await logTaskEvent(`订阅[${subscription.name}]校验完成: 可用 ${validResourceCount}，异常 ${invalidResourceCount}，账号覆盖 ${allAvailableAccountIds.size}/${accounts.length}`, invalidResourceCount > 0 ? 'warn' : 'info', 'subscription');
@@ -373,9 +380,9 @@ class SubscriptionService {
         };
     }
 
-    async syncSubscriptionResources(subscriptionId) {
+    async syncSubscriptionResources(subscriptionId, options = {}) {
         const subscription = await this._ensureSubscription(subscriptionId);
-        return await this._syncRemoteResources(subscription);
+        return await this._syncRemoteResources(subscription, options);
     }
 
     async browseResource(resourceId, folderId, keyword = '') {
@@ -446,13 +453,16 @@ class SubscriptionService {
         return subscription;
     }
 
-    async _syncRemoteResources(subscription) {
+    async _syncRemoteResources(subscription, options = {}) {
+        const notifyUpdates = options.notifyUpdates !== false;
         const account = await this._getAvailableAccount();
         const cloud189 = Cloud189Service.getInstance(account);
         const pageSize = 100;
         const remoteResources = [];
         let pageNum = 1;
         let totalCount = 0;
+        const importedTitles = [];
+        const updatedTitles = [];
 
         await logTaskEvent(`开始同步订阅资源: ${subscription.name} (${subscription.uuid})，使用账号 ${account.alias?.trim() || account.username}`, 'info', 'subscription');
 
@@ -498,13 +508,18 @@ class SubscriptionService {
             const shareLink = `https://cloud.189.cn/web/share?code=${encodeURIComponent(shareCode)}`;
             const current = existingMap.get(shareLink);
             if (current) {
-                current.title = item.name?.trim() || current.title;
+                const nextTitle = item.name?.trim() || current.title;
+                const previousTitle = String(current.title || '').trim() || String(current.shareFileName || '').trim();
+                current.title = nextTitle;
                 current.shareId = item.shareId ? String(item.shareId) : current.shareId;
                 current.shareMode = item.shareType ? String(item.shareType) : current.shareMode;
                 current.shareFileId = item.id ? String(item.id) : current.shareFileId;
                 current.shareFileName = item.name?.trim() || current.shareFileName;
                 current.isFolder = item.folder !== undefined ? !!item.folder : current.isFolder;
                 await this.resourceRepo.save(current);
+                if (nextTitle && previousTitle && nextTitle !== previousTitle) {
+                    updatedTitles.push(nextTitle);
+                }
                 continue;
             }
 
@@ -525,19 +540,49 @@ class SubscriptionService {
             });
             await this.resourceRepo.save(resource);
             importedCount += 1;
+            importedTitles.push(resource.title);
         }
 
+        const changedTitles = Array.from(new Set([...importedTitles, ...updatedTitles])).filter(Boolean);
         subscription.lastRefreshStatus = remoteResources.length ? 'unknown' : 'success';
         subscription.lastRefreshMessage = remoteResources.length
-            ? `已同步 ${remoteResources.length} 条订阅资源，等待校验`
+            ? (changedTitles.length
+                ? `发现 ${changedTitles.length} 条资源更新，等待校验`
+                : `已同步 ${remoteResources.length} 条订阅资源，等待校验`)
             : '未获取到订阅资源';
         await this.subscriptionRepo.save(subscription);
         await logTaskEvent(`订阅资源同步完成: ${subscription.name} 共拉取 ${remoteResources.length} 条，新增 ${importedCount} 条，本地已存在 ${remoteResources.length - importedCount} 条`, 'info', 'subscription');
 
+        if (notifyUpdates && changedTitles.length > 0) {
+            await this._sendSubscriptionUpdateNotification(subscription, changedTitles);
+        }
+
         return {
             totalCount: remoteResources.length,
-            importedCount
+            importedCount,
+            updatedTitles: changedTitles
         };
+    }
+
+    async _sendSubscriptionUpdateNotification(subscription, titles = []) {
+        const normalizedTitles = Array.from(new Set(
+            (Array.isArray(titles) ? titles : [])
+                .map(title => String(title || '').trim())
+                .filter(Boolean)
+        ));
+        if (normalizedTitles.length === 0) {
+            return;
+        }
+        const previewTitles = normalizedTitles.slice(0, 10);
+        const remainingCount = normalizedTitles.length - previewTitles.length;
+        const message = [
+            `📡 订阅资源更新: ${subscription.name}`,
+            `本次发现 ${normalizedTitles.length} 条资源更新：`,
+            ...previewTitles.map((title, index) => `${index + 1}. ${title}`),
+            remainingCount > 0 ? `另有 ${remainingCount} 条更新未展开` : '',
+            `UUID: ${subscription.uuid}`
+        ].filter(Boolean).join('\n');
+        await this.messageUtil.sendMessage(message);
     }
 
     async _getAvailableAccounts() {

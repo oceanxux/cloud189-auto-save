@@ -3541,6 +3541,53 @@ target.type 只能是：
         }
     });
 
+    app.get('/api/tmdb/:type/:id/poster', async (req, res) => {
+        try {
+            const { type, id } = req.params;
+            if (!id) {
+                throw new Error('TMDB ID 不能为空');
+            }
+            if (!['tv', 'movie'].includes(type)) {
+                throw new Error('无效的 TMDB 类型');
+            }
+
+            const preferredDetail = type === 'tv'
+                ? await tmdbService.getTVDetails(id)
+                : await tmdbService.getMovieDetails(id);
+            const fallbackDetail = type === 'tv'
+                ? await tmdbService.getMovieDetails(id)
+                : await tmdbService.getTVDetails(id);
+            const detail = preferredDetail || fallbackDetail;
+
+            if (!detail) {
+                throw new Error('获取 TMDB 海报详情失败');
+            }
+
+            const posterUrl = detail.posterPath
+                ? await tmdbService.cachePosterToPublic({
+                    type: detail.type || type,
+                    id: detail.id || id,
+                    posterPath: detail.posterPath
+                }, publicDir)
+                : '';
+
+            res.json({
+                success: true,
+                data: {
+                    posterUrl,
+                    mediaType: detail.type || type,
+                    title: detail.title || '',
+                    originalTitle: detail.originalTitle || '',
+                    releaseDate: detail.releaseDate || '',
+                    overview: detail.overview || '',
+                    voteAverage: Number(detail.voteAverage || 0)
+                }
+            });
+        } catch (error) {
+            res.json({ success: false, error: error.message });
+        }
+    });
+
     app.get('/api/tmdb/:type/:id', async (req, res) => {
         try {
             const { type, id } = req.params;

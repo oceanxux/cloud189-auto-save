@@ -1,3 +1,5 @@
+const fs = require('fs').promises;
+const path = require('path');
 const got = require('got');
 const ConfigService = require('./ConfigService');
 const ProxyUtil = require('../utils/ProxyUtil');
@@ -148,6 +150,126 @@ class TMDBService {
         if (Array.isArray(parsed.removedTokens) && parsed.removedTokens.length > 0) {
             this._logSearch(`移除Token：${parsed.removedTokens.join(', ')}`);
         }
+    }
+
+    _safeParseJson(rawValue) {
+        if (!rawValue) return null;
+        try {
+            return typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue;
+        } catch {
+            return null;
+        }
+    }
+
+    _normalizeMediaType(type) {
+        return String(type || '').toLowerCase() === 'movie' ? 'movie' : 'tv';
+    }
+
+    _resolveTaskMediaType(task = {}) {
+        const tmdbContent = this._safeParseJson(task.tmdbContent);
+        const candidates = [
+            tmdbContent?.type,
+            tmdbContent?.media_type,
+            task.videoType
+        ];
+        const explicitType = candidates
+            .map(item => String(item || '').trim().toLowerCase())
+            .find(item => item === 'movie' || item === 'tv');
+        if (explicitType) {
+            return explicitType;
+        }
+        return Number(task.tmdbSeasonNumber || 0) > 0 || Number(task.totalEpisodes || 0) > 1 ? 'tv' : 'movie';
+    }
+
+    _buildImageUrl(imagePath = '', size = 'w500') {
+        if (!imagePath) return '';
+        if (/^https?:\/\//i.test(imagePath)) return imagePath;
+        return `https://image.tmdb.org/t/p/${size}${imagePath}`;
+    }
+
+    _resolvePosterExtension(posterPath = '') {
+        const normalizedPath = String(posterPath || '').split('?')[0];
+        const ext = path.extname(normalizedPath).toLowerCase();
+        if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+            return ext;
+        }
+        return '.jpg';
+    }
+
+    async cachePosterToPublic({ type = 'movie', id, posterPath }, publicDir) {
+        const normalizedId = String(id || '').trim();
+        if (!normalizedId || !posterPath || !publicDir) {
+            return '';
+        }
+
+        const mediaType = this._normalizeMediaType(type);
+        const ext = this._resolvePosterExtension(posterPath);
+        const posterDir = path.join(publicDir, 'tmdb-cache', 'posters');
+        const fileName = `${mediaType}-${normalizedId}${ext}`;
+        const relativeUrl = `/tmdb-cache/posters/${fileName}`;
+        const filePath = path.join(posterDir, fileName);
+
+        await fs.mkdir(posterDir, { recursive: true });
+
+        try {
+            await fs.access(filePath);
+            return relativeUrl;
+        } catch {
+            // 文件不存在时再回源下载
+        }
+
+        try {
+            const proxy = ProxyUtil.getProxyAgent('tmdb');
+            const imageUrl = this._buildImageUrl(posterPath, 'w500');
+            const imageBuffer = await got(imageUrl, {
+                responseType: 'buffer',
+                agent: proxy,
+                timeout: {
+                    request: 15000
+                }
+            }).buffer();
+
+            await fs.writeFile(filePath, imageBuffer);
+            return relativeUrl;
+        } catch (error) {
+            console.error(`下载TMDB海报失败 [${normalizedId}]:`, error.message);
+            return '';
+        }
+    }
+
+    async getTaskPosterCache(task, publicDir) {
+        const tmdbId = String(task?.tmdbId || '').trim();
+        if (!tmdbId) {
+            return {
+                posterUrl: '',
+                mediaType: this._resolveTaskMediaType(task)
+            };
+        }
+
+        const preferredType = this._resolveTaskMediaType(task);
+        const fallbackType = preferredType === 'tv' ? 'movie' : 'tv';
+        const detail = preferredType === 'tv'
+            ? await this.getTVDetails(tmdbId) || await this.getMovieDetails(tmdbId)
+            : await this.getMovieDetails(tmdbId) || await this.getTVDetails(tmdbId);
+
+        const resolvedType = detail?.type || fallbackType;
+        const posterUrl = detail?.posterPath
+            ? await this.cachePosterToPublic({
+                type: resolvedType,
+                id: detail.id || tmdbId,
+                posterPath: detail.posterPath
+            }, publicDir)
+            : '';
+
+        return {
+            posterUrl,
+            mediaType: resolvedType,
+            title: detail?.title || '',
+            originalTitle: detail?.originalTitle || '',
+            releaseDate: detail?.releaseDate || '',
+            overview: detail?.overview || '',
+            voteAverage: Number(detail?.voteAverage || 0)
+        };
     }
 
     async _pickBestMatchDetail(type, results, searchTitle, searchYear, currentEpisodes = 0) {
@@ -318,7 +440,11 @@ class TMDBService {
                 number_of_episodes: response.number_of_episodes || 0,
                 seasons: response.seasons || [],
                 lastEpisodeToAir: response.last_episode_to_air,
-                status: response.status
+                status: response.status,
+                overview: response.overview || '',
+                voteAverage: Number(response.vote_average || 0),
+                posterPath: response.poster_path || '',
+                backdropPath: response.backdrop_path || ''
             };
         } catch (e) { return null; }
     }
@@ -353,7 +479,11 @@ class TMDBService {
                 originalTitle: response.original_title,
                 original_name: response.original_title,
                 releaseDate: response.release_date,
-                type: 'movie'
+                type: 'movie',
+                overview: response.overview || '',
+                voteAverage: Number(response.vote_average || 0),
+                posterPath: response.poster_path || '',
+                backdropPath: response.backdrop_path || ''
             };
         } catch (e) { return null; }
     }

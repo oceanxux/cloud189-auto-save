@@ -41,6 +41,7 @@ interface Subscription {
   invalidResourceCount?: number;
   lastRefreshStatus?: string;
   lastRefreshMessage?: string;
+  lastRefreshTime?: string;
 }
 
 interface Props {
@@ -228,6 +229,13 @@ const SubscriptionTab: React.FC<Props> = ({ onTransfer, onShowToast, onShowConfi
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1"><h3 className="text-sm font-black truncate">{sub.name}</h3><span className={`px-1.5 py-0.5 rounded text-[9px] font-black ${sub.enabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-200 text-slate-500'}`}>{sub.enabled ? '在线' : '停用'}</span></div>
                     <div className="text-[10px] font-bold text-slate-400">UUID: {sub.uuid} • 资源: {sub.resourceCount || 0} • 状态: {sub.lastRefreshStatus || 'unknown'}</div>
+                    <div className="mt-1 text-[11px] font-medium text-slate-500 line-clamp-2">
+                      {sub.lastRefreshMessage || '刷新后会在这里显示校验结果和 TG 更新摘要'}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-black text-slate-400">
+                      <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-emerald-600">可用 {sub.validResourceCount || 0}</span>
+                      <span className="rounded-full bg-rose-500/10 px-2 py-1 text-rose-600">异常 {sub.invalidResourceCount || 0}</span>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 justify-end">

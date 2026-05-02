@@ -17,7 +17,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const { setupCloudSaverRoutes, clearCloudSaverToken } = require('./sdk/cloudsaver');
 const { Like, Not, IsNull, In, Or } = require('typeorm');
-const cors = require('cors'); 
+const cors = require('cors');
 const { EmbyService } = require('./services/emby');
 const { EmbyPrewarmService } = require('./services/embyPrewarm');
 const { StrmService } = require('./services/strm');
@@ -349,13 +349,13 @@ app.use(session({
         ttl: 30 * 24 * 60 * 60,  // session过期时间，单位秒
         reapInterval: 3600,       // 清理过期session间隔，单位秒
         retries: 0,           // 设置重试次数为0
-        logFn: () => {},      // 禁用内部日志
+        logFn: () => { },      // 禁用内部日志
         reapAsync: true,      // 异步清理过期session
     }),
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: { 
+    cookie: {
         maxAge: 24 * 60 * 60 * 1000 * 30 // 30天
     }
 }));
@@ -402,7 +402,7 @@ app.get('/login', async (req, res) => {
 // 登录接口
 app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
-    if (username === ConfigService.getConfigValue('system.username') && 
+    if (username === ConfigService.getConfigValue('system.username') &&
         password === ConfigService.getConfigValue('system.password')) {
         req.session.authenticated = true;
         req.session.username = username;
@@ -460,8 +460,8 @@ app.post('/api/system/restart', authenticateSession, (req, res) => {
 app.use(express.static(publicDir));
 // 为所有路由添加认证（除了登录页和登录接口）
 app.use((req, res, next) => {
-    if (req.path === '/' || req.path === '/login' 
-        || req.path === '/api/auth/login' 
+    if (req.path === '/' || req.path === '/login'
+        || req.path === '/api/auth/login'
         || req.path.startsWith('/api/stream/')
         || req.path === '/emby-proxy'
         || req.path.startsWith('/emby-proxy/')
@@ -503,7 +503,7 @@ AppDataSource.initialize().then(async () => {
     strmConfigRepo = AppDataSource.getRepository(StrmConfig);
     taskProcessedFileRepo = AppDataSource.getRepository(TaskProcessedFile);
     workflowRunRepo = AppDataSource.getRepository(WorkflowRun);
-    
+
     taskService = new TaskService(taskRepo, accountRepo, taskProcessedFileRepo);
     organizerService = new OrganizerService(taskService, taskRepo);
     subscriptionService = new SubscriptionService(subscriptionRepo, subscriptionResourceRepo, accountRepo);
@@ -595,16 +595,16 @@ AppDataSource.initialize().then(async () => {
     app.use('/emby-proxy', async (req, res) => {
         await embyService.handleProxyRequest(req, res, { basePath: '/emby-proxy' });
     });
-    
+
     // 账号相关API
     app.get('/api/accounts', async (req, res) => {
         const accounts = await accountRepo.find();
         // 获取容量
         for (const account of accounts) {
-            
+
             account.capacity = {
-                cloudCapacityInfo: {usedSize:0,totalSize:0},
-                familyCapacityInfo: {usedSize:0,totalSize:0}
+                cloudCapacityInfo: { usedSize: 0, totalSize: 0 },
+                familyCapacityInfo: { usedSize: 0, totalSize: 0 }
             }
             // 如果账号名是s打头 则不获取容量
             if (!account.username.startsWith('n_')) {
@@ -713,12 +713,12 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
-     // 清空回收站
-     app.delete('/api/accounts/recycle', async (req, res) => {
+    // 清空回收站
+    app.delete('/api/accounts/recycle', async (req, res) => {
         try {
             taskService.clearRecycleBin(true, true);
             res.json({ success: true, data: "ok" });
-        }catch (error) {
+        } catch (error) {
             res.json({ success: false, error: error.message });
         }
     })
@@ -910,14 +910,14 @@ AppDataSource.initialize().then(async () => {
 
     // 删除任务文件
     app.delete('/api/tasks/files', async (req, res) => {
-        try{
+        try {
             const { taskId, files } = req.body;
             if (!files || files.length === 0) {
                 throw new Error('未选择要删除的文件');
             }
             await taskService.deleteFiles(taskId, files);
             res.json({ success: true, data: null });
-        }catch (error) {
+        } catch (error) {
             res.json({ success: false, error: error.message });
         }
     })
@@ -1008,7 +1008,7 @@ AppDataSource.initialize().then(async () => {
             });
             if (!task) throw new Error('任务不存在');
             logTaskEvent(`================================`);
-            const taskName = task.shareFolderName?(task.resourceName + '/' + task.shareFolderName): task.resourceName || '未知'
+            const taskName = task.shareFolderName ? (task.resourceName + '/' + task.shareFolderName) : task.resourceName || '未知'
             logTaskEvent(`任务[${taskName}]开始执行`);
             const result = await taskService.processTask(task);
             if (result) {
@@ -1221,17 +1221,17 @@ AppDataSource.initialize().then(async () => {
             const account = await accountRepo.findOneBy({ id: accountId });
             if (!account) throw new Error('账号不存在');
             const cloud189 = Cloud189Service.getInstance(account);
-            
+
             // 下载并解析CAS文件
             const casInfo = await casService.downloadAndParseCas(cloud189, casFileId);
             const restoreName = CasService.getOriginalFileName(casFileName, casInfo);
-            
+
             // 执行恢复
             const result = await casService.restoreFromCas(cloud189, folderId, casInfo, restoreName);
-            
+
             // 恢复后删除CAS文件（如果配置启用）
             await casService.deleteCasFileAfterRestore(cloud189, casFileId, casFileName, account.accountType === 'family');
-            
+
             res.json({ success: true, data: result });
         } catch (error) {
             res.json({ success: false, error: error.message });
@@ -1243,16 +1243,16 @@ AppDataSource.initialize().then(async () => {
         try {
             const { CasPlaybackService } = require('./services/casPlaybackService');
             const { accountId, casFileId, casFileName, folderId } = req.body;
-            
+
             const account = await accountRepo.findOneBy({ id: accountId });
             if (!account) throw new Error('账号不存在');
             const cloud189 = Cloud189Service.getInstance(account);
-            
+
             const playbackService = new CasPlaybackService();
             const result = await playbackService.restoreAndGetPlaybackUrl(
                 cloud189, casFileId, casFileName, folderId || '-11'
             );
-            
+
             res.json({ success: true, data: result });
         } catch (error) {
             res.json({ success: false, error: error.message });
@@ -1263,8 +1263,8 @@ AppDataSource.initialize().then(async () => {
     app.get('/api/cas/auto-restart-config', async (req, res) => {
         try {
             const config = ConfigService.getConfigValue('cas', {});
-            res.json({ 
-                success: true, 
+            res.json({
+                success: true,
                 data: {
                     enableAutoRestore: config.enableAutoRestore || false,
                     autoRestorePaths: config.autoRestorePaths || [],
@@ -1282,16 +1282,16 @@ AppDataSource.initialize().then(async () => {
 
     app.post('/api/cas/auto-restart-config', async (req, res) => {
         try {
-            const { 
-                enableAutoRestore, 
-                autoRestorePaths, 
+            const {
+                enableAutoRestore,
+                autoRestorePaths,
                 deleteCasAfterRestore,
                 deleteSourceAfterGenerate,
                 enableFamilyTransit,
                 familyTransitFirst,
                 scanInterval
             } = req.body;
-            
+
             ConfigService.setConfigValue('cas.enableAutoRestore', enableAutoRestore);
             ConfigService.setConfigValue('cas.autoRestorePaths', autoRestorePaths || []);
             ConfigService.setConfigValue('cas.deleteCasAfterRestore', deleteCasAfterRestore !== false);
@@ -1299,7 +1299,7 @@ AppDataSource.initialize().then(async () => {
             ConfigService.setConfigValue('cas.enableFamilyTransit', enableFamilyTransit !== false);
             ConfigService.setConfigValue('cas.familyTransitFirst', familyTransitFirst || false);
             ConfigService.setConfigValue('cas.scanInterval', scanInterval || 300);
-            
+
             // 重启监控服务
             const { casMonitorService } = require('./services/casMonitorService');
             if (enableAutoRestore) {
@@ -1307,7 +1307,7 @@ AppDataSource.initialize().then(async () => {
             } else {
                 casMonitorService.stop();
             }
-            
+
             res.json({ success: true, data: '配置已保存' });
         } catch (error) {
             res.json({ success: false, error: error.message });
@@ -1342,14 +1342,14 @@ AppDataSource.initialize().then(async () => {
         try {
             const { CasCleanupService } = require('./services/casCleanupService');
             const { accountId, folderId, options } = req.body;
-            
+
             const account = await accountRepo.findOneBy({ id: accountId });
             if (!account) throw new Error('账号不存在');
             const cloud189 = Cloud189Service.getInstance(account);
-            
+
             const cleanupService = new CasCleanupService();
             const result = await cleanupService.batchCleanupCasFiles(cloud189, folderId, options);
-            
+
             res.json({ success: true, data: result });
         } catch (error) {
             res.json({ success: false, error: error.message });
@@ -1362,17 +1362,17 @@ AppDataSource.initialize().then(async () => {
             const account = await accountRepo.findOneBy({ id: accountId });
             if (!account) throw new Error('账号不存在');
             const cloud189 = Cloud189Service.getInstance(account);
-            
+
             const result = await cloud189.listFiles(parentId || '-11');
             const file = (result?.fileListAO?.fileList || []).find(f => String(f.id) === String(fileId));
-            
+
             if (!file) throw new Error('未找到文件或文件信息不完整(需MD5)');
-            
+
             const casContent = CasService.generateCasContent(file, 'base64');
-            
+
             // 生成CAS后删除源文件（如果配置启用）
             await casService.deleteSourceFileAfterGenerate(cloud189, fileId, file.name || file.fileName, account.accountType === 'family');
-            
+
             res.json({ success: true, data: { casContent, fileName: (file.name || file.fileName) + '.cas' } });
         } catch (error) {
             res.json({ success: false, error: error.message });
@@ -1420,18 +1420,18 @@ AppDataSource.initialize().then(async () => {
             const account = await accountRepo.findOneBy({ id: Number(accountId) });
             if (!account) throw new Error('账号不存在');
             const cloud189 = Cloud189Service.getInstance(account);
-            
+
             const exportData = [];
-            
+
             // 递归扫描函数
             const scanFolder = async (fId) => {
                 logTaskEvent(`[CAS Export] 正在扫描目录: ${fId}`);
                 const result = await cloud189.listFiles(fId);
-                
+
                 const listAO = result?.fileListAO || {};
                 const files = Array.isArray(listAO.fileList) ? listAO.fileList : (Array.isArray(result?.fileList) ? result.fileList : []);
                 const folders = Array.isArray(listAO.folderList) ? listAO.folderList : (Array.isArray(result?.folderList) ? result.folderList : []);
-                
+
                 logTaskEvent(`[CAS Export] 目录 ${fId} 下找到 ${files.length} 个文件, ${folders.length} 个文件夹`);
 
                 for (const f of files) {
@@ -1439,14 +1439,14 @@ AppDataSource.initialize().then(async () => {
                         let md5 = f.md5 || f.fileMd5 || f.md5Sum;
                         let sliceMd5 = f.sliceMd5 || f.slice_md5 || f.slice_md5_hash;
                         let size = f.size || f.fileSize;
-                        
+
                         // 某些接口返回的字段名不同，做最后补救
                         if (!md5) md5 = f.fileMd5;
                         if (!size) size = f.fileSize;
 
                         const name = f.name || f.fileName || '';
                         const isMedia = ['.mp4', '.mkv', '.ts', '.iso', '.rmvb', '.avi', '.mp3', '.flac', '.mov', '.wmv'].some(ext => name.toLowerCase().endsWith(ext));
-                        
+
                         if (!md5 && isMedia) {
                             logTaskEvent(`[CAS Export] 列表无MD5，尝试获取详情: ${name}`);
                             const detail = await cloud189.getFileInfo(f.id || f.fileId);
@@ -1465,7 +1465,7 @@ AppDataSource.initialize().then(async () => {
                                 md5: md5,
                                 sliceMd5: sliceMd5 || md5
                             }, 'base64');
-                            
+
                             exportData.push({ name, content });
                         } else {
                             logTaskEvent(`[CAS Export] 跳过文件(无MD5): ${name}`);
@@ -1474,14 +1474,14 @@ AppDataSource.initialize().then(async () => {
                         logTaskEvent(`[CAS Export] 处理文件出错 ${f.name || f.fileName}: ${e.message}`);
                     }
                 }
-                
+
                 for (const subFolder of folders) {
                     await scanFolder(subFolder.id || subFolder.fileId);
                 }
             };
 
             await scanFolder(folderId || '-11');
-            
+
             res.json({ success: true, data: exportData });
         } catch (error) {
             console.error('递归导出存根失败:', error);
@@ -1498,12 +1498,12 @@ AppDataSource.initialize().then(async () => {
             const overwrite = req.body.overwrite || false;
             taskService.createStrmFileByTask(taskIds, overwrite);
             return res.json({ success: true, data: 'ok' });
-        }catch (error) {
+        } catch (error) {
             res.json({ success: false, error: error.message });
         }
     })
-     // 获取目录树
-     app.get('/api/folders/:accountId', async (req, res) => {
+    // 获取目录树
+    app.get('/api/folders/:accountId', async (req, res) => {
         try {
             const accountId = parseInt(req.params.accountId);
             const folderId = req.query.folderId || '-11';
@@ -1552,8 +1552,8 @@ AppDataSource.initialize().then(async () => {
             }
             if (folderId == -11) {
                 // 返回顶级目录
-                res.json({success: true, data: [{id: task.shareFileId, name: task.resourceName}]});
-                return 
+                res.json({ success: true, data: [{ id: task.shareFileId, name: task.resourceName }] });
+                return
             }
             const account = await accountRepo.findOneBy({ id: req.params.accountId });
             if (!account) {
@@ -1563,7 +1563,7 @@ AppDataSource.initialize().then(async () => {
             // 查询分享目录
             const shareDir = await cloud189.listShareDir(task.shareId, req.query.folderId, task.shareMode);
             if (!shareDir || !shareDir.fileListAO) {
-                res.json({ success: true, data: [] });    
+                res.json({ success: true, data: [] });
             }
             const folders = shareDir.fileListAO.folderList;
             folderCache.set(cacheKey, folders);
@@ -1573,8 +1573,8 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
-     // 获取目录下的文件
-     app.get('/api/folder/files', async (req, res) => {
+    // 获取目录下的文件
+    app.get('/api/folder/files', async (req, res) => {
         const { accountId, taskId } = req.query;
         const account = await accountRepo.findOneBy({ id: accountId });
         if (!account) {
@@ -1586,9 +1586,9 @@ AppDataSource.initialize().then(async () => {
         }
         const cloud189 = Cloud189Service.getInstance(account);
         try {
-            const fileList =  await taskService.getAllFolderFiles(cloud189, task);    
+            const fileList = await taskService.getAllFolderFiles(cloud189, task);
             res.json({ success: true, data: fileList });
-        }catch (error) {
+        } catch (error) {
             res.status(500).json({ success: false, error: error.message });
         }
     });
@@ -1606,7 +1606,7 @@ AppDataSource.initialize().then(async () => {
             }
             const cloud189 = Cloud189Service.getInstance(account);
             const result = await cloud189.listFiles(folderId);
-            
+
             const listAO = result?.fileListAO || {};
             const rawFolders = Array.isArray(listAO.folderList) ? listAO.folderList : (Array.isArray(result?.folderList) ? result.folderList : []);
             const rawFiles = Array.isArray(listAO.fileList) ? listAO.fileList : (Array.isArray(result?.fileList) ? result.fileList : []);
@@ -1795,7 +1795,7 @@ AppDataSource.initialize().then(async () => {
         }
     });
 
-        // 批量转换 .cas 存根
+    // 批量转换 .cas 存根
     app.post('/api/file-manager/batch-convert-cas', async (req, res) => {
         try {
             const { accountId, fileIds } = req.body || {};
@@ -1874,7 +1874,7 @@ AppDataSource.initialize().then(async () => {
     });
 
     app.post('/api/files/rename', async (req, res) => {
-        const {taskId, accountId, files, sourceRegex, targetRegex } = req.body;
+        const { taskId, accountId, files, sourceRegex, targetRegex } = req.body;
         if (files.length == 0) {
             throw new Error('未获取到需要修改的文件');
         }
@@ -1890,11 +1890,11 @@ AppDataSource.initialize().then(async () => {
         const folderName = task.realFolderName.substring(task.realFolderName.indexOf('/') + 1);
         const strmService = new StrmService();
         const strmEnabled = ConfigService.getConfigValue('strm.enable') && task.account.localStrmPrefix
-        if (strmEnabled && task.enableSystemProxy){
+        if (strmEnabled && task.enableSystemProxy) {
             throw new Error('系统代理模式已移除');
         }
-        const newFiles = files.map(file => ({id: file.fileId, name: file.destFileName}))
-        if(task.enableSystemProxy) {
+        const newFiles = files.map(file => ({ id: file.fileId, name: file.destFileName }))
+        if (task.enableSystemProxy) {
             throw new Error('系统代理模式已移除');
         }
         const cloud189 = Cloud189Service.getInstance(account);
@@ -1907,17 +1907,17 @@ AppDataSource.initialize().then(async () => {
             }
             if (renameResult.res_code != 0) {
                 result.push(`文件${file.destFileName} ${renameResult.res_msg}`)
-            }else{
-                if (strmEnabled){
+            } else {
+                if (strmEnabled) {
                     // 从realFolderName中获取文件夹名称 删除对应的本地文件
                     const oldFile = path.join(folderName, file.oldName);
                     await strmService.delete(path.join(task.account.localStrmPrefix, oldFile))
                 }
-                successFiles.push({id: file.fileId, name: file.destFileName})
+                successFiles.push({ id: file.fileId, name: file.destFileName })
             }
         }
         // 重新生成STRM文件
-        if (strmEnabled){
+        if (strmEnabled) {
             strmService.generate(task, successFiles, false, false)
         }
         if (sourceRegex && targetRegex) {
@@ -2059,24 +2059,24 @@ AppDataSource.initialize().then(async () => {
 
     // 系统设置
     app.get('/api/settings', async (req, res) => {
-        res.json({success: true, data: ConfigService.getConfig()})
+        res.json({ success: true, data: ConfigService.getConfig() })
     })
 
     app.post('/api/settings', async (req, res) => {
         const settings = req.body;
-        SchedulerService.handleScheduleTasks(settings,taskService);
+        SchedulerService.handleScheduleTasks(settings, taskService);
         ConfigService.setConfig(settings)
         await botManager.handleBotStatus(
-        settings.telegram?.botToken,
-        settings.telegram?.chatId,
-        settings.telegram?.enable,
-        settings.telegram?.proxyDomain
+            settings.telegram?.botToken,
+            settings.telegram?.chatId,
+            settings.telegram?.enable,
+            settings.telegram?.proxyDomain
         );
         // 修改配置, 重新实例化消息推送
         messageUtil.updateConfig()
         Cloud189Service.setProxy()
         await embyPrewarmService.reload();
-        res.json({success: true, data: null})
+        res.json({ success: true, data: null })
     })
 
 
@@ -2086,17 +2086,17 @@ AppDataSource.initialize().then(async () => {
             const settings = req.body;
             // 如果cloudSaver的配置变更 就清空cstoken.json
             if (settings.cloudSaver?.baseUrl != ConfigService.getConfigValue('cloudSaver.baseUrl')
-            || settings.cloudSaver?.username != ConfigService.getConfigValue('cloudSaver.username')
-            || settings.cloudSaver?.password != ConfigService.getConfigValue('cloudSaver.password')
-        ) {
+                || settings.cloudSaver?.username != ConfigService.getConfigValue('cloudSaver.username')
+                || settings.cloudSaver?.password != ConfigService.getConfigValue('cloudSaver.password')
+            ) {
                 clearCloudSaverToken();
             }
             ConfigService.setConfig(settings)
             await syncStandaloneEmbyProxyServer(embyService);
             await embyPrewarmService.reload();
-            res.json({success: true, data: null})
+            res.json({ success: true, data: null })
         } catch (error) {
-            res.json({success: false, error: error.message})
+            res.json({ success: false, error: error.message })
         }
     })
 
@@ -2146,21 +2146,21 @@ AppDataSource.initialize().then(async () => {
 
     // 解析分享链接
     app.post('/api/share/parse', async (req, res) => {
-        try{
+        try {
             const shareLink = req.body.shareLink;
             const accountId = req.body.accountId;
             const accessCode = req.body.accessCode;
             const shareFolders = await taskService.parseShareFolderByShareLink(shareLink, accountId, accessCode);
             logTaskEvent(`解析分享目录成功: accountId=${accountId}, folders=${shareFolders.length}, shareLink=${shareLink}`, 'info', 'task');
-            res.json({success: true, data: shareFolders})
-        }catch (error) {
+            res.json({ success: true, data: shareFolders })
+        } catch (error) {
             logTaskEvent(`解析分享目录失败: accountId=${req.body.accountId}, error=${error.message}`, 'error', 'task');
             res.status(500).json({ success: false, error: error.message });
         }
     })
     // 保存常用目录
     app.post('/api/saveFavorites', async (req, res) => {
-        try{
+        try {
             const favorites = req.body.favorites;
             const accountId = req.body.accountId;
             if (!accountId) {
@@ -2182,13 +2182,13 @@ AppDataSource.initialize().then(async () => {
             // 批量保存新的常用目录
             const result = await commonFolderRepo.save(commonFolders);
             res.json({ success: true, data: result });
-        }catch (error) {
+        } catch (error) {
             res.status(500).json({ success: false, error: error.message });
         }
     })
     // 获取常用目录
     app.get('/api/favorites/:accountId', async (req, res) => {
-        try{
+        try {
             const accountId = req.params.accountId;
             if (!accountId) {
                 throw new Error('账号ID不能为空');
@@ -2198,17 +2198,17 @@ AppDataSource.initialize().then(async () => {
                 order: { id: 'ASC' }
             });
             res.json({ success: true, data: favorites });
-        }catch (error) {
+        } catch (error) {
             res.status(500).json({ success: false, error: error.message });
         }
     })
-    
+
     // emby 回调
     app.post('/emby/notify', async (req, res) => {
         try {
             await embyService.handleWebhookNotification(req.body);
             res.status(200).send('OK');
-        }catch (error) {
+        } catch (error) {
             console.log(error);
             res.status(500).send('Error');
         }
@@ -2638,9 +2638,9 @@ AppDataSource.initialize().then(async () => {
             return {
                 mode: 'action',
                 action: 'search_tmdb_candidates',
-                target: { 
-                    keyword: keyword || (taskId ? "" : text), 
-                    taskId: taskId || undefined 
+                target: {
+                    keyword: keyword || (taskId ? "" : text),
+                    taskId: taskId || undefined
                 },
                 reply: `我来帮你搜索 "${keyword}" 的候选结果。`,
                 needsConfirmation: false
@@ -2652,12 +2652,12 @@ AppDataSource.initialize().then(async () => {
             const typeMap = { '电影': 'movie', 'movie': 'movie', '电视剧': 'tv', 'tv': 'tv' };
             const mediaType = typeMap[match[1]] || 'movie';
             const tmdbId = match[2];
-            
+
             return {
                 mode: 'action',
                 action: 'correct_ai_recognition',
-                target: { 
-                    type: 'task_id', 
+                target: {
+                    type: 'task_id',
                     value: String(taskId),
                     tmdbId: tmdbId,
                     mediaType: mediaType
@@ -2670,18 +2670,18 @@ AppDataSource.initialize().then(async () => {
         if (/识别(错|不对|有问题)|(不|没)识别对/.test(text) || (/它是|它是|正确的(?:剧名|名字)?是/.test(text) && taskId)) {
             let correction = text.replace(/.*(?:识别错|不对|有问题|不识别对|它是|正确的(?:剧名|名字)?是)/, '').replace(/[#\d]+/g, '').trim();
             const tmdbIdMatch = text.match(/tmdb\s*(?:id)?\s*:?\s*(\d+)/i) || text.match(/id\s*是\s*(\d+)/);
-            
+
             return {
                 mode: 'action',
                 action: 'correct_ai_recognition',
-                target: taskId ? { 
-                    type: 'task_id', 
+                target: taskId ? {
+                    type: 'task_id',
                     value: String(taskId),
                     correction: correction,
                     tmdbId: tmdbIdMatch ? tmdbIdMatch[1] : undefined
-                } : { 
-                    type: 'task_name', 
-                    value: text.replace(/帮我|请|修正|识别错|不对|有问题/g, '').trim() 
+                } : {
+                    type: 'task_name',
+                    value: text.replace(/帮我|请|修正|识别错|不对|有问题/g, '').trim()
                 },
                 reply: '我可以帮你修正 AI 的识别结果并重新执行刮削。',
                 needsConfirmation: false
@@ -3161,17 +3161,17 @@ target.type 只能是：
                         updates.tmdbContent = JSON.stringify({ id: tmdbId, type: mediaType });
                     }
                 }
-                
+
                 if (correction && correction !== String(task.id)) {
                     updates.resourceName = correction;
                 }
 
                 await taskRepo.update(task.id, updates);
-                
+
                 // 重新加载任务并执行整理器
                 const updatedTask = await taskService.getTaskById(task.id);
                 const result = await organizerService.organizeTaskById(updatedTask.id, { triggerStrm: true, force: true });
-                
+
                 const summary = `已修正任务 #${task.id} 的识别信息：\n${tmdbId ? `- 指定 TMDB ID: ${tmdbId} (${mediaType || '自动识别'})\n` : ''}${correction ? `- 指定剧名: ${correction}\n` : ''}\n程序已重新执行整理与刮削：\n${result?.message || '整理完成'}`;
                 messageUtil.sendMessage(summary);
                 return summary;
@@ -3180,11 +3180,11 @@ target.type 只能是：
                 const keyword = String(target?.keyword || '').trim();
                 const taskId = target?.taskId;
                 if (!keyword) throw new Error('请输入要搜索的剧名或电影名');
-                
+
                 const result = await tmdbService.search(keyword);
                 const movies = (result.movies || []).slice(0, 5);
                 const tvs = (result.tvShows || []).slice(0, 5);
-                
+
                 if (movies.length === 0 && tvs.length === 0) {
                     return `抱歉，在 TMDB 中未找到关于 "${keyword}" 的任何结果。请尝试缩简名称再次搜索。`;
                 }
@@ -3198,10 +3198,10 @@ target.type 只能是：
                     lines.push('\n📺 电视剧：');
                     tvs.forEach(t => lines.push(`- [电视剧] ${t.title} (${new Date(t.releaseDate).getFullYear() || '未知'}) | TMDB ID: ${t.id}`));
                 }
-                
+
                 const targetRef = taskId ? `#${taskId}` : '最新的';
                 lines.push(`\n您可以回复：\n"绑定${targetRef}任务为电影 ID xxx" 或\n"绑定${targetRef}任务为电视剧 ID xxx"\n来完成手动指定。`);
-                
+
                 return lines.join('\n');
             }
             case 'restart_container': {
@@ -3571,6 +3571,7 @@ target.type 只能是：
                 }, publicDir)
                 : '';
 
+            const classificationConfig = ConfigService.getConfigValue('mediaClassification');
             res.json({
                 success: true,
                 data: {
@@ -3580,7 +3581,11 @@ target.type 只能是：
                     originalTitle: detail.originalTitle || '',
                     releaseDate: detail.releaseDate || '',
                     overview: detail.overview || '',
-                    voteAverage: Number(detail.voteAverage || 0)
+                    voteAverage: Number(detail.voteAverage || 0),
+                    genreIds: detail.genreIds || [],
+                    originCountry: detail.originCountry || [],
+                    originalLanguage: detail.originalLanguage || '',
+                    subCategory: tmdbService.resolveSubCategory(detail, classificationConfig)
                 }
             });
         } catch (error) {
@@ -3633,19 +3638,19 @@ target.type 只能是：
     })
 
     app.post('/api/custom-push/test', async (req, res) => {
-        try{
+        try {
             const configTest = req.body
-            if (await new CustomPushService([]).testPush(configTest)){
+            if (await new CustomPushService([]).testPush(configTest)) {
                 res.json({ success: true, data: null });
-            }else{
+            } else {
                 res.json({ success: false, error: '推送测试失败' });
             }
 
-        }catch (error) {
+        } catch (error) {
             res.json({ success: false, error: error.message });
         }
     })
-    
+
     // 全局错误处理中间件
     app.use((err, req, res, next) => {
         console.error('捕获到全局异常:', err.message);

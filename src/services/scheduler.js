@@ -28,7 +28,7 @@ class SchedulerService {
                 });
             });
         }
-        
+
         // 2. 重试任务检查 默认每分钟执行一次
         this.saveDefaultTaskJob('重试任务检查', '*/1 * * * *', async () => {
             await taskService.processRetryTasks();
@@ -37,9 +37,9 @@ class SchedulerService {
         const enableAutoClearRecycle = ConfigService.getConfigValue('task.enableAutoClearRecycle');
         const enableAutoClearFamilyRecycle = ConfigService.getConfigValue('task.enableAutoClearFamilyRecycle');
         if (enableAutoClearRecycle || enableAutoClearFamilyRecycle) {
-            this.saveDefaultTaskJob('自动清空回收站',  ConfigService.getConfigValue('task.cleanRecycleCron'), async () => {
+            this.saveDefaultTaskJob('自动清空回收站', ConfigService.getConfigValue('task.cleanRecycleCron'), async () => {
                 await taskService.clearRecycleBin(enableAutoClearRecycle, enableAutoClearFamilyRecycle);
-            })   
+            })
         }
         // 4. 定时清理懒转存文件
         const enableAutoCleanLazyFiles = ConfigService.getConfigValue('task.enableAutoCleanLazyFiles');
@@ -56,6 +56,34 @@ class SchedulerService {
             const days = ConfigService.getConfigValue('system.logExpireDays', 7);
             await cleanOldLogs(days);
         });
+
+        // 6. 定时刷新订阅资源
+        const enableSubRefresh = ConfigService.getConfigValue('subscription.enableAutoRefresh', false);
+        if (enableSubRefresh) {
+            const subRefreshCron = ConfigService.getConfigValue('subscription.refreshCron', '0 */2 * * *');
+            this.saveDefaultTaskJob('订阅资源定时刷新', subRefreshCron, async () => {
+                try {
+                    const { SubscriptionService } = require('./subscription');
+                    const { getRepository } = require('typeorm');
+                    const subscriptionRepo = getRepository('Subscription');
+                    const resourceRepo = getRepository('SubscriptionResource');
+                    const accountRepo = getRepository('Account');
+                    const subscriptionService = new SubscriptionService(subscriptionRepo, resourceRepo, accountRepo);
+                    const notifyOnUpdate = ConfigService.getConfigValue('subscription.notifyOnUpdate', true);
+                    const subscriptions = await subscriptionRepo.find({ where: { enabled: true } });
+                    for (const sub of subscriptions) {
+                        try {
+                            await subscriptionService.refreshSubscription(sub.id, { notifyUpdates: notifyOnUpdate });
+                            logTaskEvent(`订阅[${sub.name}]定时刷新完成`, 'info', 'subscription');
+                        } catch (err) {
+                            logTaskEvent(`订阅[${sub.name}]定时刷新失败: ${err.message}`, 'error', 'subscription');
+                        }
+                    }
+                } catch (err) {
+                    logTaskEvent(`订阅定时刷新任务异常: ${err.message}`, 'error', 'subscription');
+                }
+            });
+        }
     }
 
     static async initStrmConfigJobs(strmConfigRepo, strmConfigService) {
@@ -69,7 +97,7 @@ class SchedulerService {
         if (this.taskJobs.has(task.id)) {
             this.taskJobs.get(task.id).stop();
         }
-        const taskName = task.shareFolderName?(task.resourceName + '/' + task.shareFolderName): task.resourceName || '未知'
+        const taskName = task.shareFolderName ? (task.resourceName + '/' + task.shareFolderName) : task.resourceName || '未知'
         // 校验表达式是否有效
         if (!cron.validate(task.cronExpression)) {
             logTaskEvent(`定时任务[${taskName}]表达式无效，跳过...`);
@@ -145,7 +173,7 @@ class SchedulerService {
     }
 
     // 处理默认定时任务配置
-    static handleScheduleTasks(settings,taskService) {
+    static handleScheduleTasks(settings, taskService) {
         // 如果定时任务和清空回收站任务与配置文件不一致, 则修改定时任务
         if (settings.task.taskCheckCron && settings.task.taskCheckCron != ConfigService.getConfigValue('task.taskCheckCron')) {
             let taskCheckCrons = settings.task.taskCheckCron.split('|');

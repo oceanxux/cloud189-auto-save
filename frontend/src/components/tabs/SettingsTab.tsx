@@ -24,7 +24,12 @@ interface SettingsData {
   bark: { enable: boolean; serverUrl: string; key: string; };
   pushplus: { enable: boolean; token: string; topic: string; channel: string; webhook: string; to: string; };
   customPush: any[];
-  system: { 
+  subscription: {
+    enableAutoRefresh: boolean;
+    refreshCron: string;
+    notifyOnUpdate: boolean;
+  };
+  system: {
     username: string; password: string; baseUrl: string; apiKey: string; streamProxySecret: string;
     logExpireDays: number;
     logCleanupCron: string;
@@ -77,6 +82,7 @@ const initialSettings: SettingsData = {
   bark: { enable: false, serverUrl: '', key: '' },
   pushplus: { enable: false, token: '', topic: '', channel: 'wechat', webhook: '', to: '' },
   customPush: [],
+  subscription: { enableAutoRefresh: false, refreshCron: '0 */2 * * *', notifyOnUpdate: true },
   system: { username: 'admin', password: 'admin', baseUrl: '', apiKey: '', streamProxySecret: '', logExpireDays: 7, logCleanupCron: '0 3 * * *' },
 };
 
@@ -234,7 +240,16 @@ const SettingsTab: React.FC<Props> = ({ onShowToast }) => {
             <div className="workbench-form-item"><label className="workbench-label">懒转存清理 Cron</label><input type="text" value={settings.task.lazyFileCleanupCron || '0 */6 * * *'} onChange={(e) => updateSettings('task.lazyFileCleanupCron', e.target.value)} className="workbench-input font-mono" /></div>
             <div className="workbench-form-item"><label className="workbench-label">懒转存保留小时</label><input type="number" min="1" value={settings.task.lazyFileRetentionHours || 24} onChange={(e) => updateSettings('task.lazyFileRetentionHours', parseInt(e.target.value))} className="workbench-input font-bold" /></div>
             <div className="workbench-form-item lg:col-span-2"><label className="workbench-label">媒体文件后缀</label><input type="text" value={settings.task.mediaSuffix || ''} onChange={(e) => updateSettings('task.mediaSuffix', e.target.value)} className="workbench-input font-mono text-xs" /></div>
-            <div className="flex items-center gap-4 pt-5 px-1">
+              {/* 订阅资源定时刷新 */}
+              <div className="flex items-center gap-4 pt-5 px-1 col-span-full">
+                 <div onClick={() => updateSettings('subscription.enableAutoRefresh', !settings.subscription?.enableAutoRefresh)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${settings.subscription?.enableAutoRefresh ? 'bg-violet-500 border-violet-500' : 'border-slate-300'}`}>{settings.subscription?.enableAutoRefresh && <Check size={14} strokeWidth={4} className="text-white" />}</div>
+                 <div><p className="text-xs font-black uppercase tracking-tighter">订阅资源定时刷新</p><p className="text-[9px] font-bold text-slate-400">定时检查订阅更新并 TG 推送</p></div>
+              </div>
+              <div className="workbench-form-item"><label className="workbench-label">订阅刷新 Cron</label><input type="text" value={settings.subscription?.refreshCron || '0 */2 * * *'} onChange={(e) => updateSettings('subscription.refreshCron', e.target.value)} className="workbench-input font-mono" /></div>
+              <div className="flex items-center gap-4 pt-5 px-1">
+                 <div onClick={() => updateSettings('subscription.notifyOnUpdate', !settings.subscription?.notifyOnUpdate)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${settings.subscription?.notifyOnUpdate ? 'bg-violet-500 border-violet-500' : 'border-slate-300'}`}>{settings.subscription?.notifyOnUpdate && <Check size={14} strokeWidth={4} className="text-white" />}</div>
+                 <div><p className="text-xs font-black uppercase tracking-tighter">发现新资源时推送通知</p><p className="text-[9px] font-bold text-slate-400">刷新后若有新资源则发送 TG 消息</p></div>
+              </div>            <div className="flex items-center gap-4 pt-5 px-1">
                <div onClick={() => updateSettings('task.cleanRecycle', !settings.task.cleanRecycle)} className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-all ${settings.task.cleanRecycle ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>{settings.task.cleanRecycle && <Check size={14} strokeWidth={4} className="text-white" />}</div>
                <div><p className="text-xs font-black uppercase tracking-tighter">自动清空个人回收站</p><p className="text-[9px] font-bold text-slate-400">清理释放存储空间</p></div>
             </div>

@@ -77,6 +77,10 @@ interface CachedTmdbMedia {
   releaseDate?: string;
   overview?: string;
   voteAverage?: number;
+  genreIds?: number[];
+  originCountry?: string[];
+  originalLanguage?: string;
+  subCategory?: string;
 }
 
 interface TaskTabProps {
@@ -203,9 +207,10 @@ const getTaskRemarkTag = (task: Task) => {
   return buildTmdbDisplayTitle(task.tmdbContent);
 };
 
-const getTaskGroupLabel = (task: Task, mediaType?: 'movie' | 'tv') => {
+const getTaskGroupLabel = (task: Task, mediaType?: 'movie' | 'tv', subCategory?: string) => {
   const group = String(task.taskGroup || '').trim();
   if (group) return group;
+  if (subCategory) return subCategory;
   return (mediaType || getTaskMediaType(task)) === 'tv' ? '电视剧' : '电影';
 };
 
@@ -238,6 +243,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
   const [openTaskMenuId, setOpenTaskMenuId] = useState<number | null>(null);
   const [openStatusMenuId, setOpenStatusMenuId] = useState<number | null>(null);
+  const [showToolbar, setShowToolbar] = useState(true);
   const taskMenuRef = useRef<HTMLDivElement>(null);
   const statusMenuRef = useRef<HTMLDivElement>(null);
 
@@ -627,7 +633,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
   ).entries()).map(([value, label]) => ({ value, label }));
 
   const groupOptions = Array.from(new Set(
-    tasks.map(task => getTaskGroupLabel(task, getTaskMediaAsset(task)?.mediaType))
+    tasks.map(task => getTaskGroupLabel(task, getTaskMediaAsset(task)?.mediaType, getTaskMediaAsset(task)?.subCategory))
   ))
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'zh-CN'))
@@ -642,7 +648,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
 
     const mediaAsset = getTaskMediaAsset(task);
     const mediaType = mediaAsset?.mediaType || getTaskMediaType(task);
-    const groupLabel = getTaskGroupLabel(task, mediaType);
+    const groupLabel = getTaskGroupLabel(task, mediaType, mediaAsset?.subCategory);
     const remarkTag = getTaskRemarkTag(task) || resolvedRemarkMap[String(task.id)] || '';
     const rawTaskName = String(task.resourceName || '').replace(/\(根\)$/g, '').trim();
     const searchTarget = [
@@ -651,7 +657,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
       task.account?.username,
       task.realFolderName,
       groupLabel,
-      mediaType === 'tv' ? '电视剧' : '电影',
+      mediaAsset?.subCategory || (mediaType === 'tv' ? '电视剧' : '电影'),
       task.lastError,
       task.lastOrganizeError
     ].join(' ').toLowerCase();
@@ -717,56 +723,60 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
         </div>
 
         <div className="space-y-4 p-4 sm:p-5">
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-            <button onClick={() => onCreateTask?.()} className="workbench-toolbar-button bg-[var(--bg-main)] px-5 py-2.5 text-sm font-bold">
-              <Plus size={16} />
-              创建任务
-            </button>
-            <button
-              onClick={() => handleOpenProcessedRecords(selectedTasks)}
-              disabled={selectedTasks.length === 0}
-              className="workbench-toolbar-button px-5 py-2.5 text-sm font-bold disabled:opacity-40"
-            >
-              <Database size={16} />
-              转存记录
-            </button>
-            <button
-              onClick={handleDeleteSelectedTasks}
-              disabled={selectedTaskIds.length === 0}
-              className="workbench-toolbar-button px-5 py-2.5 text-sm font-bold text-rose-600 disabled:opacity-40"
-            >
-              <Trash2 size={16} />
-              删除选中
-            </button>
-            <button
-              onClick={() => setSelectedTaskIds(prev => {
-                if (allVisibleSelected) {
-                  return prev.filter(id => !visibleTasks.some(task => task.id === id));
-                }
-                return Array.from(new Set([...prev, ...visibleTasks.map(task => task.id)]));
-              })}
-              className="workbench-toolbar-button px-5 py-2.5 text-sm font-bold"
-            >
-              <CheckCircle2 size={16} />
-              {allVisibleSelected ? '取消当前全选' : '全选当前'}
-            </button>
-            <button onClick={fetchTasks} className="workbench-toolbar-button px-4 py-2.5 text-sm font-bold">
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-              刷新
-            </button>
-          </div>
-
-          <div className="space-y-3">
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setShowMobileFilters(prev => !prev)}
-              className="flex w-full items-center justify-between rounded-2xl border border-[var(--border-color)] bg-[var(--bg-main)] px-4 py-3 text-sm font-bold text-[var(--text-primary)] md:hidden"
+              onClick={() => setShowToolbar(prev => !prev)}
+              className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+              title={showToolbar ? '收起工具栏' : '展开工具栏'}
             >
-              <span>筛选条件</span>
-              <ChevronDown size={16} className={`transition-transform ${showMobileFilters ? 'rotate-180' : ''}`} />
+              <ChevronDown size={16} className={`transition-transform ${showToolbar ? '' : '-rotate-90'}`} />
             </button>
+            {showToolbar && (
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => onCreateTask?.()} className="workbench-toolbar-button bg-[var(--bg-main)] px-5 py-2.5 text-sm font-bold">
+                  <Plus size={16} />
+                  创建任务
+                </button>
+                <button
+                  onClick={handleDeleteSelectedTasks}
+                  disabled={selectedTaskIds.length === 0}
+                  className="workbench-toolbar-button px-5 py-2.5 text-sm font-bold text-rose-600 disabled:opacity-40"
+                >
+                  <Trash2 size={16} />
+                  删除选中
+                </button>
+                <button
+                  onClick={() => handleOpenProcessedRecords(selectedTasks)}
+                  disabled={selectedTasks.length === 0}
+                  className="workbench-toolbar-button px-5 py-2.5 text-sm font-bold disabled:opacity-40"
+                >
+                  <Database size={16} />
+                  转存记录
+                </button>
+                <button
+                  onClick={() => setSelectedTaskIds(prev => {
+                    if (allVisibleSelected) {
+                      return prev.filter(id => !visibleTasks.some(task => task.id === id));
+                    }
+                    return Array.from(new Set([...prev, ...visibleTasks.map(task => task.id)]));
+                  })}
+                  className="workbench-toolbar-button px-5 py-2.5 text-sm font-bold"
+                >
+                  <CheckCircle2 size={16} />
+                  {allVisibleSelected ? '取消当前全选' : '全选当前'}
+                </button>
+                <button onClick={fetchTasks} className="workbench-toolbar-button px-4 py-2.5 text-sm font-bold">
+                  <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+                  刷新
+                </button>
+              </div>
+            )}
+          </div>
 
-            <div className={`${showMobileFilters ? 'grid' : 'hidden'} grid-cols-1 gap-3 md:grid lg:grid-cols-[1fr_1fr_1fr_1.35fr]`}>
+          <div className="hidden md:block">
+            
+            <div className="grid grid-cols-1 gap-3 md:grid lg:grid-cols-[1fr_1fr_1fr_1.35fr]">
               <select value={accountFilter} onChange={event => setAccountFilter(event.target.value)} className="workbench-select">
                 <option value="all">全部账号</option>
                 {accountOptions.map(option => (
@@ -840,7 +850,7 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3">
           {visibleTasks.map(task => {
             const mediaAsset = getTaskMediaAsset(task);
             const mediaType = mediaAsset?.mediaType || getTaskMediaType(task);
@@ -857,8 +867,8 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
             const posterUrl = String(mediaAsset?.posterUrl || '').trim();
             const overview = String(mediaAsset?.overview || parseTaskTmdbContent(task)?.overview || '').trim();
             const rating = Number(mediaAsset?.voteAverage || parseTaskTmdbContent(task)?.voteAverage || parseTaskTmdbContent(task)?.vote_average || 0);
-            const groupLabel = getTaskGroupLabel(task, mediaType);
-            const typeLabel = mediaType === 'tv' ? '电视剧' : '电影';
+            const groupLabel = getTaskGroupLabel(task, mediaType, mediaAsset?.subCategory);
+            const typeLabel = mediaAsset?.subCategory || (mediaType === 'tv' ? '电视剧' : '电影');
             const lastUpdated = formatDateTime(task.lastFileUpdateTime || task.updatedAt || task.createdAt);
             const isTaskLayerOpen = openTaskMenuId === task.id || openStatusMenuId === task.id;
             const isSelected = selectedTaskIds.includes(task.id);
@@ -873,31 +883,33 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
             return (
               <div
                 key={task.id}
-                className={`workbench-panel group relative p-3 sm:p-4 transition-all ${isTaskLayerOpen ? 'z-20 overflow-visible' : 'overflow-hidden'} ${isSelected ? 'ring-2 ring-blue-500/40' : ''}`}
+                className={`workbench-panel group relative transition-all ${isTaskLayerOpen ? 'z-20 overflow-visible' : 'overflow-hidden'} ${isSelected ? 'ring-2 ring-blue-500/40' : ''}`}
               >
                 <div className={`absolute inset-y-0 left-0 w-1 ${statusMeta.accentClass}`} />
 
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
+                {/* 顶栏: 移动端两行布局, 桌面端一行 */}
+                <div className="px-3 py-2.5 sm:px-4 sm:py-3">
+                  {/* 第一行: 选择框 + 状态 + 标题 + 操作按钮 */}
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => setSelectedTaskIds(prev => prev.includes(task.id) ? prev.filter(id => id !== task.id) : [...prev, task.id])}
-                      className={`flex h-6 w-6 items-center justify-center rounded-md border transition-all ${isSelected ? 'border-blue-500 bg-blue-500 text-white' : 'border-slate-200 text-transparent hover:border-blue-300'} `}
+                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all ${isSelected ? 'border-blue-500 bg-blue-500 text-white' : 'border-slate-200 text-transparent hover:border-blue-300'}`}
                     >
-                      <CheckCircle2 size={14} />
+                      <CheckCircle2 size={12} />
                     </button>
 
-                    <div ref={openStatusMenuId === task.id ? statusMenuRef : undefined} className="relative">
+                    <div ref={openStatusMenuId === task.id ? statusMenuRef : undefined} className="relative shrink-0">
                       <button
                         type="button"
                         onClick={() => {
                           setOpenTaskMenuId(null);
                           setOpenStatusMenuId(openStatusMenuId === task.id ? null : task.id);
                         }}
-                        className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${statusMeta.badgeClass}`}
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${statusMeta.badgeClass}`}
                       >
                         {statusMeta.label}
-                        <ChevronDown size={12} />
+                        <ChevronDown size={10} />
                       </button>
 
                       <AnimatePresence>
@@ -927,46 +939,91 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
                         )}
                       </AnimatePresence>
                     </div>
-                  </div>
 
-                  <div ref={openTaskMenuId === task.id ? taskMenuRef : undefined} className="relative">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpenStatusMenuId(null);
-                        setOpenTaskMenuId(openTaskMenuId === task.id ? null : task.id);
-                      }}
-                      className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
-                    >
-                      <MoreVertical size={16} />
-                    </button>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate text-sm font-black leading-snug text-[var(--text-primary)] sm:text-base" title={displayTaskName}>{displayTaskName}</h3>
+                    </div>
 
-                    <AnimatePresence>
-                      {openTaskMenuId === task.id && (
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.96, y: 4 }}
-                          animate={{ opacity: 1, scale: 1, y: 0 }}
-                          exit={{ opacity: 0, scale: 0.96, y: 4 }}
-                          className="absolute right-0 top-full z-[2100] mt-2 min-w-[136px] overflow-hidden rounded-2xl border border-[var(--border-color)] bg-[var(--bg-main)] shadow-2xl"
-                        >
-                          <button
-                            onClick={() => {
-                              setOpenTaskMenuId(null);
-                              handleOpenProcessedRecords([task]);
-                            }}
-                            className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-bold hover:bg-[var(--nav-hover-bg)]"
+                    <div className="flex shrink-0 items-center gap-1">
+                      <span className="hidden rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500 sm:inline-flex dark:bg-slate-800">{typeLabel}</span>
+                      {seasonTag && <span className="hidden rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-bold text-blue-600 sm:inline-flex">{seasonTag}</span>}
+
+                      <button onClick={() => handleRunTask(task.id)} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-950" title="执行任务">
+                        <PlayCircle size={16} />
+                      </button>
+
+                      <div ref={openTaskMenuId === task.id ? taskMenuRef : undefined} className="relative">
+                        <button
+                        type="button"
+                        onClick={() => {
+                          setOpenStatusMenuId(null);
+                          setOpenTaskMenuId(openTaskMenuId === task.id ? null : task.id);
+                        }}
+                        className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+                      >
+                        <MoreVertical size={16} />
+                      </button>
+
+                      <AnimatePresence>
+                        {openTaskMenuId === task.id && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 4 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 4 }}
+                            className="absolute right-0 top-full z-[2100] mt-2 min-w-[136px] overflow-hidden rounded-2xl border border-[var(--border-color)] bg-[var(--bg-main)] shadow-2xl"
                           >
-                            <Database size={14} />
-                            转存记录
-                          </button>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                            <button
+                              onClick={() => {
+                                setOpenTaskMenuId(null);
+                                handleSyncSeasonEpisodes(task);
+                              }}
+                              className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-bold hover:bg-[var(--nav-hover-bg)]"
+                            >
+                              <RotateCcw size={14} />
+                              识别季集
+                            </button>
+                            <button
+                              onClick={() => {
+                                setOpenTaskMenuId(null);
+                                handleOpenProcessedRecords([task]);
+                              }}
+                              className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-bold hover:bg-[var(--nav-hover-bg)]"
+                            >
+                              <Database size={14} />
+                              转存记录
+                            </button>
+                            <button
+                              onClick={() => {
+                                setOpenTaskMenuId(null);
+                                onCreateTask?.(task);
+                              }}
+                              className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-bold hover:bg-[var(--nav-hover-bg)]"
+                            >
+                              <Edit3 size={14} />
+                              修改任务
+                            </button>
+                            <div className="mx-3 my-1 h-px bg-[var(--border-color)]" />
+                            <button
+                              onClick={() => {
+                                setOpenTaskMenuId(null);
+                                handleDeleteTask(task.id);
+                              }}
+                              className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20"
+                            >
+                              <Trash2 size={14} />
+                              删除任务
+                            </button>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
                   </div>
                 </div>
+              </div>
 
-                <div className="flex flex-col gap-4 sm:flex-row">
-                  <div className="relative h-40 w-24 shrink-0 overflow-hidden rounded-2xl bg-slate-100 shadow-sm dark:bg-slate-800 sm:h-44 sm:w-28">
+                {/* 详情区: 始终显示 */}
+                <div className="flex gap-3 border-t border-[var(--border-color)] px-3 py-3 sm:gap-4 sm:px-4 sm:py-4">
+                  <div className="relative h-32 w-20 shrink-0 overflow-hidden rounded-xl bg-slate-100 shadow-sm dark:bg-slate-800 sm:h-36 sm:w-[5.5rem]">
                     {posterUrl ? (
                       <img
                         src={posterUrl}
@@ -978,124 +1035,64 @@ const TaskTab: React.FC<TaskTabProps> = ({ onCreateTask, onShowToast, onShowConf
                           const parent = e.currentTarget.parentElement;
                           if (parent) {
                             const fallback = parent.querySelector('[data-fallback]');
-                            if (fallback) fallback.style.display = 'flex';
+                            if (fallback) (fallback as HTMLElement).style.display = 'flex';
                           }
                         }}
                       />
                     ) : null}
-                    {!posterUrl || <div data-fallback className="hidden flex-col absolute inset-0 items-center justify-center bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900 text-white">
-                      {mediaType === 'tv' ? <Tv size={28} /> : <Film size={28} />}
-                      <span className="mt-2 px-3 text-center text-[11px] font-bold opacity-80">{displayTaskName.slice(0, 12) || 'TMDB'}</span>
-                    </div>}
+                    <div data-fallback className={`${posterUrl ? 'hidden' : 'flex'} h-full w-full flex-col items-center justify-center bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900 text-white`}>
+                      {mediaType === 'tv' ? <Tv size={24} /> : <Film size={24} />}
+                      <span className="mt-1.5 px-2 text-center text-[10px] font-bold opacity-80 line-clamp-2">{displayTaskName.slice(0, 8) || 'TMDB'}</span>
+                    </div>
 
                     {rating > 0 && (
-                      <div className="absolute right-2 top-2 rounded-xl bg-black/70 px-2 py-1 text-sm font-black text-amber-400 backdrop-blur">
+                      <div className="absolute right-1.5 top-1.5 rounded-lg bg-black/70 px-1.5 py-0.5 text-[11px] font-black text-amber-400 backdrop-blur">
                         {rating.toFixed(1)}
                       </div>
                     )}
 
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent px-3 pb-2 pt-6 text-white">
-                      <div className="flex items-center justify-between text-[11px] font-black">
-                        <span>{episodeCurrent}</span>
-                        <span>{episodeTotal || '?'}</span>
-                      </div>
-                      <div className="mt-1 h-1 rounded-full bg-white/20">
-                        <div className={`h-full rounded-full ${statusMeta.progressClass}`} style={{ width: `${progressPercent}%` }} />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="line-clamp-2 text-xl font-black leading-tight text-[var(--text-primary)] sm:text-[1.75rem]" title={displayTaskName}>{displayTaskName}</h3>
-                        {(secondaryTitle || yearLabel) && (
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500 sm:text-sm">
-                            {secondaryTitle && (
-                              <span className="inline-flex items-center gap-1 text-blue-500">
-                                <Link2 size={14} />
-                                {secondaryTitle}
-                              </span>
-                            )}
-                            {yearLabel && (
-                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-500 dark:bg-slate-800">
-                                {yearLabel}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-3 space-y-2 text-xs sm:mt-4 sm:text-sm">
-                      <p className="flex items-center gap-2 text-[var(--text-primary)]/80">
-                        <Folder size={15} className="text-slate-400" />
-                        <span className="font-medium">分组：</span>
-                        <span>{groupLabel}</span>
-                      </p>
-                      <p className="flex items-center gap-2 text-[var(--text-primary)]/80">
-                        <User size={15} className="text-slate-400" />
-                        <span className="font-medium">账号：</span>
-                        <span>{task.account.username}</span>
-                        <span className="text-slate-400">· {task.account.accountType === 'family' ? '家庭云' : '个人云'}</span>
-                      </p>
-                      <p className="flex items-center gap-2 text-[var(--text-primary)]/80">
-                        {mediaType === 'tv' ? <Tv size={15} className="text-slate-400" /> : <Film size={15} className="text-slate-400" />}
-                        <span className="font-medium">类型：</span>
-                        <span>{typeLabel}</span>
-                        {seasonTag && <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-bold text-blue-600">{seasonTag}</span>}
-                      </p>
-                      <p className="flex items-start gap-2 text-[var(--text-primary)]/80">
-                        <Clock3 size={15} className="mt-0.5 shrink-0 text-slate-400" />
-                        <span className="font-medium">更新：</span>
-                        <span>{lastUpdated}</span>
-                      </p>
-                      <p className="flex items-start gap-2 text-[var(--text-primary)]/80">
-                        <Folder size={15} className="mt-0.5 shrink-0 text-slate-400" />
-                        <span className="font-medium">目录：</span>
-                        <span className="break-all text-blue-500">{pathLabel}</span>
-                      </p>
-                    </div>
-
-                    {overview && (
-                      <p className="mt-4 line-clamp-2 text-sm leading-6 text-slate-500">{overview}</p>
-                    )}
-
-                    {errorText && (
-                      <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600 dark:border-rose-900/30 dark:bg-rose-950/20 sm:text-sm">
-                        <div className="flex items-start gap-2">
-                          <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                          <span className="line-clamp-2 font-medium">{errorText}</span>
+                    {episodeTotal > 0 && (
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-2 pb-1.5 pt-4 text-white">
+                        <div className="flex items-center justify-between text-[10px] font-black">
+                          <span>{episodeCurrent}</span>
+                          <span>{episodeTotal}</span>
+                        </div>
+                        <div className="mt-0.5 h-0.5 rounded-full bg-white/20">
+                          <div className={`h-full rounded-full ${statusMeta.progressClass}`} style={{ width: `${progressPercent}%` }} />
                         </div>
                       </div>
                     )}
+                  </div>
 
-                    <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      <button onClick={() => handleRunTask(task.id)} className="rounded-xl border border-[var(--border-color)] px-3 py-2 text-xs font-bold text-[var(--text-primary)] transition-all hover:bg-slate-50 dark:hover:bg-slate-800 sm:text-sm">
-                        <span className="inline-flex items-center gap-1.5">
-                          <PlayCircle size={15} />
-                          执行
-                        </span>
-                      </button>
-                      <button onClick={() => handleSyncSeasonEpisodes(task)} className="rounded-xl border border-[var(--border-color)] px-3 py-2 text-xs font-bold text-[var(--text-primary)] transition-all hover:bg-slate-50 dark:hover:bg-slate-800 sm:text-sm">
-                        <span className="inline-flex items-center gap-1.5">
-                          <RotateCcw size={15} />
-                          识别
-                        </span>
-                      </button>
-                      <button onClick={() => onCreateTask?.(task)} className="rounded-xl border border-[var(--border-color)] px-3 py-2 text-xs font-bold text-[var(--text-primary)] transition-all hover:bg-slate-50 dark:hover:bg-slate-800 sm:text-sm">
-                        <span className="inline-flex items-center gap-1.5">
-                          <Edit3 size={15} />
-                          修改
-                        </span>
-                      </button>
-                      <button onClick={() => handleDeleteTask(task.id)} className="rounded-xl border border-rose-200 px-3 py-2 text-xs font-bold text-rose-600 transition-all hover:bg-rose-50 dark:border-rose-900/30 dark:hover:bg-rose-950/20 sm:text-sm">
-                        <span className="inline-flex items-center gap-1.5">
-                          <Trash2 size={15} />
-                          删除
-                        </span>
-                      </button>
+                  <div className="min-w-0 flex-1">
+                    {secondaryTitle && (
+                      <p className="line-clamp-1 text-[11px] font-medium text-slate-400">{secondaryTitle}</p>
+                    )}
+
+                    <div className="mt-1.5 space-y-1 text-[11px] text-[var(--text-primary)]/70">
+                      <p className="flex items-center gap-1.5">
+                        <User size={12} className="shrink-0 text-slate-400" />
+                        <span>{task.account.username}</span>
+                        <span className="text-slate-400">{task.account.accountType === 'family' ? '家庭云' : '个人云'}</span>
+                      </p>
+                      <p className="flex items-center gap-1.5">
+                        <Folder size={12} className="shrink-0 text-slate-400" />
+                        <span className="truncate text-blue-500">{pathLabel}</span>
+                      </p>
+                      <p className="flex items-center gap-1.5">
+                        <Clock3 size={12} className="shrink-0 text-slate-400" />
+                        <span>{lastUpdated}</span>
+                      </p>
                     </div>
+
+                    {errorText && (
+                      <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] text-rose-600 dark:border-rose-900/30 dark:bg-rose-950/20">
+                        <div className="flex items-start gap-1.5">
+                          <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                          <span className="line-clamp-1 font-medium">{errorText}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

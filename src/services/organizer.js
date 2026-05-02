@@ -28,7 +28,7 @@ class OrganizerService {
             console.log('[Organizer] 整理器未启用，退出');
             return { success: false, message: '整理器未启用' };
         }
-        
+
         try {
             const { TaskProcessedFile } = require('../entities');
             const { AppDataSource: dataSource } = require('../database');
@@ -80,7 +80,7 @@ class OrganizerService {
                 }
             }
 
-            const libraryInfo = this._resolveLibraryInfo(resourceInfo);
+            const libraryInfo = this._resolveLibraryInfo(resourceInfo, tmdbInfo);
             const organizerRootId = String(task.organizerTargetFolderId || task.targetFolderId).trim();
             console.log(`[Organizer] 6. 规划目标路径: 根ID(${organizerRootId}) -> 分类(${libraryInfo.categoryName}) -> 剧集(${libraryInfo.resourceFolderName})`);
 
@@ -128,7 +128,7 @@ class OrganizerService {
                 console.log(`[Organizer] [移动] 正在搬运: ${file.name} -> 目标目录`);
                 try {
                     await this.taskService.moveCloudFile(cloud189, { id: file.id, name: file.name, isFolder: false }, targetFolderId);
-                    
+
                     // 移动成功后同步数据库记录
                     await taskProcessedFileRepo.update(
                         { taskId: task.id, sourceFileId: String(file.id) },
@@ -142,21 +142,21 @@ class OrganizerService {
 
             console.log(`[Organizer] 10. 正在清理目录树...`);
             await this._cleanupEmptyFolderTree(cloud189, task.realFolderId);
-            
+
             if (task.realRootFolderId && task.realRootFolderId !== task.realFolderId) {
                 console.log(`[Organizer] 正在额外检查清理任务根目录: ${task.realRootFolderId}`);
                 await this._cleanupEmptyFolderTree(cloud189, task.realRootFolderId);
             }
-            
+
             if (messages.length > 0) {
                 messages[messages.length - 1] = messages[messages.length - 1].replace(/^├─/, '└─');
                 logTaskEvent(`整理完成:\n${messages.join('\n')}`, 'info', 'organizer');
             }
 
             // 核心修复：更新最后整理时间，让前端不再显示“从未执行”
-            await this.taskRepo.update(task.id, { 
+            await this.taskRepo.update(task.id, {
                 lastOrganizedAt: new Date(),
-                lastOrganizeError: null 
+                lastOrganizeError: null
             });
 
             if (options.triggerStrm) {
@@ -223,7 +223,7 @@ class OrganizerService {
                 }
             }
         }
-        const libraryInfo = this._resolveLibraryInfo(resourceInfo);
+        const libraryInfo = this._resolveLibraryInfo(resourceInfo, tmdbInfo);
 
         const categoryId = await this._ensureFolderByName(cloud189, organizerRootId, libraryInfo.categoryName, new Map());
         const resourceId = await this._ensureFolderByName(cloud189, categoryId, libraryInfo.resourceFolderName, new Map());
@@ -259,10 +259,10 @@ class OrganizerService {
     async _resolveResourceInfo(task, mediaFiles, tmdbInfo) {
         const resourceName = task.realFolderName || task.resourceName;
         const fileNames = mediaFiles.map(f => f.name);
-        
+
         try {
             const parsedRoot = parseMediaTitle(resourceName);
-            
+
             const name = tmdbInfo?.title || parsedRoot.cleanTitle || resourceName;
             const year = tmdbInfo?.releaseDate ? new Date(tmdbInfo.releaseDate).getFullYear() : (parsedRoot.year || 0);
             const type = (tmdbInfo?.type || (mediaFiles.length > 1 ? 'tv' : 'movie'));
@@ -323,7 +323,16 @@ class OrganizerService {
         }
     }
 
-    _resolveLibraryInfo(info) {
+    _resolveLibraryInfo(info, tmdbInfo = null) {
+        // 优先使用 mediaClassification 配置的二级分类
+        const classificationConfig = ConfigService.getConfigValue('mediaClassification');
+        if (classificationConfig && tmdbInfo) {
+            const subCategory = this.tmdbService.resolveSubCategory(tmdbInfo, classificationConfig);
+            if (subCategory) {
+                return { categoryName: subCategory, resourceFolderName: `${info.name} (${info.year || '0000'})` };
+            }
+        }
+        // 回退到 organizer.categories 的基础分类
         const map = { tv: ConfigService.getConfigValue('organizer.categories.tv', '电视剧'), movie: ConfigService.getConfigValue('organizer.categories.movie', '电影') };
         return { categoryName: map[info.type] || map.tv, resourceFolderName: `${info.name} (${info.year || '0000'})` };
     }

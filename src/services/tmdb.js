@@ -112,7 +112,7 @@ class TMDBService {
         const parsed = parseMediaTitle(rawTitle);
         const fallbackTitle = String(rawTitle || '').trim();
         let cleanTitle = parsed.cleanTitle || fallbackTitle;
-        
+
         if (GENERIC_TITLES.has(cleanTitle.toLowerCase())) {
             cleanTitle = '';
         }
@@ -163,6 +163,55 @@ class TMDBService {
 
     _normalizeMediaType(type) {
         return String(type || '').toLowerCase() === 'movie' ? 'movie' : 'tv';
+    }
+
+    /**
+     * 根据 TMDB 详情和分类策略配置解析二级分类
+     * @param {object} tmdbDetail - TMDB 详情对象 (含 genreIds, originCountry, originalLanguage, type)
+     * @param {object} classificationConfig - 分类策略配置
+     * @returns {string} 二级分类名称, 未匹配返回空字符串
+     */
+    resolveSubCategory(tmdbDetail, classificationConfig) {
+        if (!tmdbDetail || !classificationConfig) return '';
+        const mediaType = tmdbDetail.type || this._normalizeMediaType(tmdbDetail.media_type);
+        const rules = classificationConfig[mediaType];
+        if (!rules || typeof rules !== 'object') return '';
+
+        const genreIds = Array.isArray(tmdbDetail.genreIds) ? tmdbDetail.genreIds : [];
+        const originCountry = Array.isArray(tmdbDetail.originCountry) ? tmdbDetail.originCountry : [];
+        const originalLanguage = String(tmdbDetail.originalLanguage || '').trim().toLowerCase();
+
+        for (const [categoryName, matchRules] of Object.entries(rules)) {
+            if (!matchRules || typeof matchRules !== 'object') continue;
+            const requiredKeys = Object.keys(matchRules).filter(k => matchRules[k]);
+            if (requiredKeys.length === 0) return categoryName; // 兜底分类 (无过滤条件)
+
+            let allMatched = true;
+            for (const [field, valueSpec] of Object.entries(matchRules)) {
+                if (!valueSpec) continue;
+                const matchValues = String(valueSpec).split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+                if (matchValues.length === 0) continue;
+
+                let targetValues = [];
+                if (field === 'genre_ids') {
+                    targetValues = genreIds.map(id => String(id));
+                } else if (field === 'origin_country') {
+                    targetValues = originCountry.map(c => String(c).toUpperCase());
+                } else if (field === 'original_language') {
+                    targetValues = [originalLanguage];
+                }
+
+                const hasMatch = matchValues.some(mv =>
+                    targetValues.some(tv => {
+                        if (field === 'genre_ids') return String(tv) === String(mv);
+                        return tv.toLowerCase() === mv;
+                    })
+                );
+                if (!hasMatch) { allMatched = false; break; }
+            }
+            if (allMatched) return categoryName;
+        }
+        return '';
     }
 
     _resolveTaskMediaType(task = {}) {
@@ -268,7 +317,11 @@ class TMDBService {
             originalTitle: detail?.originalTitle || '',
             releaseDate: detail?.releaseDate || '',
             overview: detail?.overview || '',
-            voteAverage: Number(detail?.voteAverage || 0)
+            voteAverage: Number(detail?.voteAverage || 0),
+            genreIds: detail?.genreIds || [],
+            originCountry: detail?.originCountry || [],
+            originalLanguage: detail?.originalLanguage || '',
+            subCategory: this.resolveSubCategory(detail, ConfigService.getConfigValue('mediaClassification'))
         };
     }
 
@@ -330,30 +383,30 @@ class TMDBService {
             throw error;
         }
     }
-    
+
     async search(title, year = '') {
         try {
             const cacheKey = `tmdb:search:${String(title).trim().toLowerCase()}:${String(year || '').trim()}`;
             const { movies, tvShows } = await this._withCache(cacheKey, 'search', async () => {
                 const response = await this._request('/search/multi', { query: title, year: year });
                 return {
-                    movies: response.results.filter(item => item.media_type === 'movie').map(item => ({ 
-                        id: item.id, 
-                        title: item.title, 
-                        release_date: item.release_date, 
+                    movies: response.results.filter(item => item.media_type === 'movie').map(item => ({
+                        id: item.id,
+                        title: item.title,
+                        release_date: item.release_date,
                         poster_path: item.poster_path,
                         vote_average: item.vote_average,
                         overview: item.overview,
-                        media_type: 'movie' 
+                        media_type: 'movie'
                     })),
-                    tvShows: response.results.filter(item => item.media_type === 'tv').map(item => ({ 
-                        id: item.id, 
-                        name: item.name, 
-                        first_air_date: item.first_air_date, 
+                    tvShows: response.results.filter(item => item.media_type === 'tv').map(item => ({
+                        id: item.id,
+                        name: item.name,
+                        first_air_date: item.first_air_date,
                         poster_path: item.poster_path,
                         vote_average: item.vote_average,
                         overview: item.overview,
-                        media_type: 'tv' 
+                        media_type: 'tv'
                     }))
                 };
             }, 86400);
@@ -444,7 +497,10 @@ class TMDBService {
                 overview: response.overview || '',
                 voteAverage: Number(response.vote_average || 0),
                 posterPath: response.poster_path || '',
-                backdropPath: response.backdrop_path || ''
+                backdropPath: response.backdrop_path || '',
+                genreIds: Array.isArray(response.genre_ids) ? response.genre_ids : (Array.isArray(response.genres) ? response.genres.map(g => g.id) : []),
+                originCountry: Array.isArray(response.origin_country) ? response.origin_country : [],
+                originalLanguage: response.original_language || ''
             };
         } catch (e) { return null; }
     }
@@ -483,7 +539,10 @@ class TMDBService {
                 overview: response.overview || '',
                 voteAverage: Number(response.vote_average || 0),
                 posterPath: response.poster_path || '',
-                backdropPath: response.backdrop_path || ''
+                backdropPath: response.backdrop_path || '',
+                genreIds: Array.isArray(response.genre_ids) ? response.genre_ids : (Array.isArray(response.genres) ? response.genres.map(g => g.id) : []),
+                originCountry: Array.isArray(response.production_countries) ? response.production_countries.map(c => c.iso_3166_1) : [],
+                originalLanguage: response.original_language || ''
             };
         } catch (e) { return null; }
     }

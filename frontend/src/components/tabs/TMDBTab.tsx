@@ -123,38 +123,38 @@ const TMDBTab: React.FC<Props> = ({ onShowToast }) => {
     const title = item.title || item.name;
     const date = item.release_date || item.first_air_date || '';
     const year = date.split('-')[0];
-    const posterUrl = item.poster_path 
-      ? `https://image.tmdb.org/t/p/w300${item.poster_path}`
-      : 'https://via.placeholder.com/300x450?text=No+Poster';
+    const posterUrl = item.poster_path
+      ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
+      : 'https://via.placeholder.com/500x300?text=No+Poster';
 
     return (
-      <motion.div 
+      <motion.div
         key={`${item.media_type}-${item.id}`}
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="group relative flex flex-col bg-[var(--bg-main)] rounded-2xl overflow-hidden border border-[var(--border-color)] transition-all hover:shadow-xl hover:border-[var(--app-accent)]"
+        className="group relative flex flex-row bg-[var(--bg-main)] rounded-2xl overflow-hidden border border-[var(--border-color)] transition-all hover:shadow-xl hover:border-[var(--app-accent)]"
       >
-        <div className="aspect-[2/3] relative overflow-hidden">
+        <div className="aspect-[16/9] w-2/5 relative overflow-hidden flex-shrink-0">
           <img src={posterUrl} alt={title} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-900/90 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4">
-            <p className="text-[10px] text-slate-300 line-clamp-3 mb-3">{item.overview}</p>
-            <button 
-              onClick={() => handleAutoFollow(item)}
-              disabled={processingId === item.id}
-              className="w-full py-2 bg-[var(--app-accent)] text-[var(--bg-main)] rounded-xl text-[10px] font-black flex items-center justify-center gap-2 hover:brightness-110 transition-all disabled:opacity-50"
-            >
-              {processingId === item.id ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} strokeWidth={3} />}
-              自动追剧
-            </button>
-          </div>
           <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-1 rounded-lg flex items-center gap-1">
             <Star size={10} className="text-yellow-400 fill-yellow-400" />
             <span className="text-[10px] font-black text-white">{(item.vote_average || 0).toFixed(1)}</span>
           </div>
         </div>
-        <div className="p-3">
-          <h3 className="text-xs font-black text-[var(--text-primary)] truncate">{title}</h3>
-          <p className="text-[10px] font-bold text-slate-400 mt-1">{year || '未知年份'} • {(item.media_type === 'movie' || activeCategory === 'movie') ? '电影' : '剧集'}</p>
+        <div className="flex-1 p-4 flex flex-col justify-between">
+          <div>
+            <h3 className="text-sm font-black text-[var(--text-primary)] truncate">{title}</h3>
+            <p className="text-xs font-bold text-slate-400 mt-1">{year || '未知年份'} • {(item.media_type === 'movie' || activeCategory === 'movie') ? '电影' : '剧集'}</p>
+            <p className="text-xs text-slate-300 line-clamp-2 mt-2">{item.overview}</p>
+          </div>
+          <button
+            onClick={() => handleAutoFollow(item)}
+            disabled={processingId === item.id}
+            className="mt-3 py-2 px-3 bg-[var(--app-accent)] text-[var(--bg-main)] rounded-lg text-xs font-black flex items-center justify-center gap-2 hover:brightness-110 transition-all disabled:opacity-50 w-fit"
+          >
+            {processingId === item.id ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} strokeWidth={3} />}
+            自动追剧
+          </button>
         </div>
       </motion.div>
     );
@@ -206,7 +206,7 @@ const TMDBTab: React.FC<Props> = ({ onShowToast }) => {
                 </div>
                 <button onClick={() => { setIsSearched(false); setSearchQuery(''); }} className="text-xs font-bold text-blue-500 hover:underline">返回流行</button>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">{searchResults.length > 0 ? searchResults.map(renderItem) : <div className="col-span-full py-20 text-center text-slate-400 font-bold italic">未找到相关影视资源</div>}</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{searchResults.length > 0 ? searchResults.map(renderItem) : <div className="col-span-full py-20 text-center text-slate-400 font-bold italic">未找到相关影视资源</div>}</div>
             </section>
           ) : (
             <>
@@ -215,14 +215,14 @@ const TMDBTab: React.FC<Props> = ({ onShowToast }) => {
                   <div className="w-8 h-8 rounded-xl bg-orange-500/10 flex items-center justify-center text-orange-500"><Flame size={18} /></div>
                   <h2 className="text-base font-black text-[var(--text-primary)]">本周流行</h2>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">{trending.slice(0, 12).map(renderItem)}</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{trending.slice(0, 12).map(renderItem)}</div>
               </section>
               <section>
                 <div className="flex items-center gap-2 mb-6">
                   <div className="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500"><Star size={18} /></div>
                   <h2 className="text-base font-black text-[var(--text-primary)]">最受关注</h2>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">{popular.slice(0, 18).map(renderItem)}</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{popular.slice(0, 18).map(renderItem)}</div>
               </section>
             </>
           )}
